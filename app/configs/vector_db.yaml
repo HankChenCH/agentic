@@ -1,0 +1,8 @@
+default: weaviate
+embedding: ollama-embedding # llm.yaml 里的 embedding task_type entry，向量由应用侧生成
+providers:
+  weaviate:
+    type: weaviate
+    host: ${WEAVIATE_HOST:127.0.0.1}
+    port: ${WEAVIATE_PORT:8080}
+    grpc_port: ${WEAVIATE_GRPC_PORT:50051} # weaviate-client v4 的 gRPC 通道

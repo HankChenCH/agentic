@@ -1,0 +1,13 @@
+default: rustfs
+providers:
+  local:
+    type: local
+    root: data/files # 本地磁盘根目录（相对工作目录，.gitignore 已忽略）
+  rustfs:
+    type: s3
+    bucket: ${RUSTFS_BUCKET:agentic} # 由 compose 的 rustfs-init 幂等创建
+    endpoint: ${RUSTFS_ENDPOINT:http://127.0.0.1:9000} # rustfs S3 API，与 docker-compose 对齐
+    access_key_id: ${RUSTFS_ACCESS_KEY:agentic}
+    secret_access_key: ${RUSTFS_SECRET_KEY:agentic-secret}
+    virtual_hosted_style_request: false # 本地 endpoint 需 path-style 寻址
+    allow_http: true # 本地明文 HTTP endpoint

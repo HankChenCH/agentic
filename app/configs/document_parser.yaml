@@ -1,0 +1,13 @@
+default: mineru-cloud
+providers:
+  mineru-cloud:
+    type: mineru_cloud
+    api_url: https://mineru.net
+    api_key: ${MINERU_API_KEY:} # 控制台申请的 Bearer token；留空时首次解析会 fail-fast
+    language: ch
+    enable_formula: true
+    enable_table: true
+    is_ocr: true # 扫描件兜底走 OCR；纯文本 PDF 云端会自动跳过
+    timeout: 60
+    poll_interval: 5
+    poll_timeout: 1800

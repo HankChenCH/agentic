@@ -1,0 +1,31 @@
+default: deepseek-flash
+providers:
+  deepseek-flash:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-flash
+  deepseek-pro:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-pro
+  # OpenAI 兼容中转/三方网关：api_url 填实际网关地址，model 按网关支持的模型调整
+  # openai-chat:
+  #   type: openai
+  #   task_type: chat
+  #   api_url: ${OPENAI_API_URL}
+  #   api_key: ${OPENAI_API_KEY}
+  #   model: gpt-4o-mini
+  # openai-embedding:
+  #   type: openai
+  #   task_type: embedding
+  #   api_url: ${OPENAI_API_URL}
+  #   api_key: ${OPENAI_API_KEY}
+  #   model: text-embedding-3-small
+  # 本地 Ollama：先 `ollama pull bge-m3`，api_url 按实际部署地址调整（无需 api_key）
+  ollama-embedding:
+    type: ollama
+    task_type: embedding
+    api_url: http://127.0.0.1:11434
+    model: bge-m3
