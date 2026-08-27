@@ -2,7 +2,7 @@
 
 纯单测：真实 ConversationRepository + 临时 SQLite（conftest 的 engine fixture），
 agent 工厂 / 记忆 / 日志全替身；threading.Thread 换成同步 InlineThread，
-保证断言时后置处理（_after_chat）已确定性完成。
+保证断言时收尾加工（TurnFinalizer.run）已确定性完成。
 """
 
 import json
@@ -19,6 +19,7 @@ from app.models.domain.agentic import (
 )
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.agentic_service import AgenticService
+from app.services.turn_finalizer import TurnFinalizer
 
 # 模拟不该泄漏给客户端的内部细节（连接串）
 SECRET = "connect timeout postgres://agentic:secret@10.0.0.1:5432/agentic"
@@ -94,8 +95,20 @@ class FakeAgent:
     def stream(self, context):
         return self._run
 
-    def invoke(self, context):
-        return "测试标题"
+
+class FakeTitleGenerator:
+    """标题生成替身：固定输出（或抛错），记录调用次数供断言。"""
+
+    def __init__(self, title="测试标题", error=None):
+        self.title = title
+        self.error = error
+        self.calls = 0
+
+    def generate(self, query, turn_messages):
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.title
 
 
 class FakeAgentFactory:
@@ -182,10 +195,17 @@ def make_service(engine, monkeypatch):
     monkeypatch.setattr("app.services.agentic_service.threading.Thread", InlineThread)
 
     def _make(agent_factory, conversation_repo=None):
+        repo = conversation_repo or ConversationRepository(engine=engine)
+        finalizer = TurnFinalizer(
+            title_generator=FakeTitleGenerator(),
+            conversation_repo=repo,
+            memory=FakeMemory(),
+            logger_factory=RecordingLoggerFactory(),
+        )
         return AgenticService(
             agent_factory=agent_factory,
-            conversation_repo=conversation_repo or ConversationRepository(engine=engine),
-            memory=FakeMemory(),
+            conversation_repo=repo,
+            turn_finalizer=finalizer,
             logger_factory=RecordingLoggerFactory(),
         )
 

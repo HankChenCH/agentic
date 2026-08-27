@@ -59,7 +59,7 @@ class BaseAgent(ABC):
     def invoke(self, ctx: AgentRunContext) -> str:
         """非流式单次调用：走完整智能体流程（含工具循环），返回最终 assistant 文本。
 
-        供内部一次性任务使用（如会话标题生成），不产出 ag-ui 事件。
+        供非流式单次调用场景使用，不产出 ag-ui 事件。
         """
         result = self._graph.invoke(
             input=self._input(ctx),

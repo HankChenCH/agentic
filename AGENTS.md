@@ -38,13 +38,15 @@ server/                          # this directory is its own git repo (the works
     │                            #   assembles sinks from logging.yaml), service.py (LoggerFactory @injectable singleton)
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
-    ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary/title)
+    ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary)
 ├── components/              # Self-contained capability components: components/memory (MemoryService facade,
 │                            #   memory_recall tool, own repositories/) and components/knowledge (retrieval:
 │                            #   KnowledgeVectorIndex vector adapter + KnowledgeRetrievalService + knowledge_list/
 │                            #   knowledge_search tools + collection.py shared schema) — components must NOT
 │                            #   import app.services/app.agents (agents→components→repositories/infra only)
-├── services/                # Business logic — AgenticService, AgUiTranslator / StorageTranslator;
+├── services/                # Business logic — AgenticService (chat 流编排), AgUiTranslator / StorageTranslator;
+│                            #   TurnFinalizer (chat 后台收尾加工：填标题→聚合 token→写记忆，各步独立容错)
+│                            #   + ConversationTitleGenerator (裸模型标题生成，不经智能体注册表);
 │                            #   knowledge/ sub-package (KB/document/ingestion/binding services + object adapter)
 ├── models/
 │   ├── schema/request/chat.py   # ChatRequest / ChatMessage (camelCase fields for ag-ui)

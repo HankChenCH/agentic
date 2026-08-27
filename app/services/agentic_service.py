@@ -13,9 +13,8 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
-from app.agents.builtin.title import TitleAgent
-from app.components.memory import MemoryService
 from app.services.translator import AgUiTranslator, StorageTranslator
+from app.services.turn_finalizer import TurnFinalizer
 from app.repositories.conversation_repository import ConversationRepository
 
 from app.models.domain.agentic import (
@@ -36,7 +35,7 @@ class AgenticService:
 
     conversation_repo: ConversationRepository
 
-    memory: MemoryService
+    turn_finalizer: TurnFinalizer
 
     logger_factory: LoggerFactory
 
@@ -146,9 +145,9 @@ class AgenticService:
         if len(storage_translator.messages) > 0:
             self.conversation_repo.store_conversation_messages(storage_translator.messages)
 
-        # 后置处理含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾
+        # 收尾加工含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾
         threading.Thread(
-            target=self._after_chat,
+            target=self.turn_finalizer.run,
             args=(conversation, turn, storage_translator.messages, query),
             daemon=True,
         ).start()
@@ -180,54 +179,6 @@ class AgenticService:
             self.conversation_repo.store_conversation_turn(turn)
         except Exception:
             self.logger.exception("轮次失败状态落库失败 turn_id=%s", turn.turn_id)
-
-
-    def _after_chat(self, conversation: AgenticConversation, turn: AgenticConversationTurn, turn_messages: list[AgenticConversationMessage], query: str):
-        """chat() 的后置处理：生成 conversation_title、聚合 token 用量、写入长期记忆。"""
-        # 整体兜底：会话可能在流结束后被删除，后台线程对已删行的回写会在
-        # daemon 线程里裸抛异常（threading 仅打印到 stderr），统一记日志吞掉。
-        try:
-            if conversation.conversation_title == "":
-                try:
-                    title = self._generate_conversation_title(query, turn_messages)
-                    if title:
-                        conversation.conversation_title = title
-                        self.conversation_repo.store_conversation(conversation)
-                except Exception:
-                    # 标题生成失败不影响 turn 落库；会话标题仍为空，下次 chat 会重试
-                    self.logger.exception("generate conversation_title failed")
-
-            turn.token_usage = {k: turn.token_usage.get(k, 0) + v for msg in turn_messages for k, v in msg.token_usage.items() if k in ["prompt_tokens", "completion_tokens", "total_tokens"]}
-            self.conversation_repo.store_conversation_turn(turn)
-
-            # 记忆写入：抽取失败不影响主链路（与标题生成同款容错策略）
-            try:
-                self.memory.remember(query=query, turn_messages=turn_messages, thread_id=conversation.thread_id, turn_id=turn.turn_id)
-            except Exception:
-                self.logger.exception("memory remember failed")
-        except Exception:
-            self.logger.exception("after chat post-processing failed")
-
-    def _generate_conversation_title(self, query: str, turn_messages: list[AgenticConversationMessage]) -> str:
-        """用标题智能体把本轮对话浓缩为一句话标题。"""
-        assistant_text = "\n".join(
-            part.get("text", "")
-            for msg in turn_messages
-            if msg.message_type == AgenticMessageType.MESSAGE
-            for part in msg.content
-            if part.get("type") == "text"
-        )
-        transcript = f"用户：{query}\n助手：{assistant_text}".strip()
-
-        agent = self.agent_factory.create(TitleAgent.agentic_id)
-        title = agent.invoke(AgentRunContext(
-            messages=[HumanMessage(transcript)],
-            thread_id=str(uuid4()),
-            run_id=str(uuid4()),
-            now=datetime.fromtimestamp(time()),
-        ))
-        # 模型偶尔输出引号包裹或多行，收敛成单行纯文本
-        return title.strip().splitlines()[0].strip().strip('"“”‘’「」《》').strip()[:50]
 
     def _load_history_messages(self, thread_id: UUID, exclude_turn_id: UUID) -> list[BaseMessage]:
         """从库如实组装多轮回放消息，排除当前轮次与未完成（非 COMPLETED）轮次。
