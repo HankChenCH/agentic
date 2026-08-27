@@ -11,12 +11,12 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.agents.base import AGENT_REGISTRY
 from app.core.logging import LoggerFactory
 from app.exceptions import KnowledgeAgentInvalidError, KnowledgeStatusError
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
+from .ports import AgentCatalog
 from .support import require_kb
 
 
@@ -25,6 +25,7 @@ from .support import require_kb
 class KnowledgeBindingService:
     kb_repo: KnowledgeBaseRepository
     binding_repo: KnowledgeBindingRepository
+    agent_catalog: AgentCatalog
     logger_factory: LoggerFactory
 
     def __post_init__(self):
@@ -50,11 +51,11 @@ class KnowledgeBindingService:
         self.binding_repo.replace_by_agent(agent_id, unique_ids)
         return kbs
 
-    @staticmethod
-    def _require_agent(agent_id: str) -> None:
-        # 按注册表现值校验，防止手滑绑出悬空 agent；会话侧未注册 id 回退默认
-        # agent 是 AgentFactory 既有语义，与绑定校验无关
-        if agent_id not in AGENT_REGISTRY:
+    def _require_agent(self, agent_id: str) -> None:
+        # 按目录现值校验，防止手滑绑出悬空 agent；会话侧未注册 id 回退默认
+        # agent 是 AgentFactory 既有语义，与绑定校验无关。目录协议在 ports.py，
+        # 实现由 agents 层回填（依赖倒置），领域层不感知 AGENT_REGISTRY。
+        if not self.agent_catalog.exists(agent_id):
             raise KnowledgeAgentInvalidError(
-                f"agent not registered: {agent_id}, registered: {sorted(AGENT_REGISTRY)}"
+                f"agent not registered: {agent_id}, registered: {self.agent_catalog.ids()}"
             )

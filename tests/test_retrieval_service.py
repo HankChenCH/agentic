@@ -7,7 +7,7 @@ import pytest
 from sqlmodel import Session
 
 from app.components.knowledge.service import KnowledgeRetrievalService
-from app.components.knowledge.vector_index import VectorHit
+from app.services.domain.knowledge.vector_index import VectorHit
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import (
     KnowledgeBase,

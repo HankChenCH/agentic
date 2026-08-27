@@ -6,6 +6,7 @@ import pytest
 from sqlmodel import Session
 
 import app.agents.factory  # noqa: F401 触发内置 agent 注册（builtin:demo）
+from app.agents.catalog import RegistryAgentCatalog
 from app.core.logging import LoggerFactory
 from app.exceptions import (
     KnowledgeAgentInvalidError,
@@ -32,6 +33,7 @@ def service(engine):
     return KnowledgeBindingService(
         kb_repo=KnowledgeBaseRepository(engine=engine),
         binding_repo=KnowledgeBindingRepository(engine=engine),
+        agent_catalog=RegistryAgentCatalog(),
         logger_factory=LoggerFactory(),
     )
 

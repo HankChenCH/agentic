@@ -13,7 +13,7 @@ from uuid import UUID
 from langchain_core.documents import Document
 from wireup import injectable
 
-from app.components.knowledge.collection import collection_schema, index_name
+from .collection import collection_schema, index_name
 from app.core.logging import LoggerFactory
 from app.infrastructures.vector import VectorStoreFactory
 from app.models.domain.knowledge import DocumentSegment

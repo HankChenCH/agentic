@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from wireup import injectable
 
-from app.components.knowledge import KnowledgeVectorIndex
+from .vector_index import KnowledgeVectorIndex
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.exceptions import KnowledgeNameDuplicatedError, KnowledgeStatusError

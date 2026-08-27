@@ -41,11 +41,11 @@ server/                          # this directory is its own git repo (the works
     ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary)
 ├── components/              # Self-contained capability components: components/memory (MemoryService facade,
 │                            #   memory_recall tool, own repositories/) and components/knowledge (retrieval:
-│                            #   KnowledgeVectorIndex vector adapter + KnowledgeRetrievalService + knowledge_list/
-│                            #   knowledge_search tools + collection.py shared schema) — components must NOT
-│                            #   import app.services/app.agents (agents→components→repositories/infra only)
+│                            #   KnowledgeRetrievalService + knowledge_list/knowledge_search tools) —
+│                            #   components may import domain/repositories/infra (单向)，严禁
+│                            #   app.services.orchestration / app.agents / app.api
 ├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
-│                            #   （AgenticService chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
+│                            #   （ChatOrchestrator chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
 │                            #   domain/: 领域服务，按聚合分包—— conversation/（title_generator 裸模型
 │                            #   标题生成）与 knowledge/（KB/document/ingestion/binding 服务 +
 │                            #   object_store/support 纯函数/document_chunker）
@@ -133,6 +133,27 @@ either side.
 
 Server layer rules:
 
+- **服务层两层制** → `services/` 分为 `orchestration/`（编排层：`ChatOrchestrator`
+  chat SSE 行程 + `TurnFinalizer` 收尾 + `translator/`）与 `domain/`（领域层：
+  按聚合分包 `conversation/`、`knowledge/`）。消费方按受众分流——用户侧行程
+  （POST /agentic/chat）走 orchestration；管理侧端点（会话增删查 / knowledge /
+  绑定）与 Celery 后台任务直接消费 domain。依赖箭头表（单向，严禁反向）：
+
+  ```
+  api ──► {orchestration | domain}          tasks ──► domain
+  orchestration ──► {domain, components, agents}
+  domain ──► {repositories, infrastructures}
+  components ──► {domain?, repositories, infrastructures}
+  agents ──► components
+  ```
+
+  补充约束：① domain 禁止 import orchestration/components/agents/api——领域需要的外部事实用端口倒置（如
+  `knowledge/ports.py` 的 `AgentCatalog`，实现在 agents 层 `catalog.py` 以 `as_type` 回填）；
+  ② 编排不触碰 repositories（持久化一律经领域服务门面，如 `ConversationService` 是
+  会话持久化规则的唯一归属）；③ 写入型组件工具必须过领域服务以遵守业务规则；
+  检索组件消费领域向量适配器走的就是合法的 components→domain 边；④ services 根
+  `__init__.py` 为 PEP 562 惰性再导出聚合面（急切导入会与 components 成环，见文件头注释）。
+  禁边由 `tests/test_layer_boundaries.py` AST 扫描强制（规则改动两处同步）。
 - **api** → only HTTP wiring; delegate to **services**. The endpoint wraps the
   service's generator with `ag_ui.encoder.EventEncoder` and returns a
   `StreamingResponse(media_type="text/event-stream")`. The encoder already emits
@@ -156,15 +177,17 @@ Server layer rules:
   environment comes from `app.yaml` `environment: ${AGENTIC_ENV:dev}` via
   `core.config.get_environment()` (dev/test/prod; invalid values fail fast
   with `ConfigError`).
-- **services** → business logic; `@injectable` + `@dataclass` with constructor
-  injection (see `AgenticService`). `AGUIEventTranslator` turns LangChain stream
+- **services** → 两层制见本节首条；实现风格统一为 `@injectable` + `@dataclass`
+  构造注入（编排层如 `ChatOrchestrator`，领域层如 `ConversationService`）。
+  `AGUIEventTranslator` turns LangChain stream
   chunks into ag-ui events; it is the only place that should know both shapes.
 - **knowledge domain split** → 管理侧在 `services/domain/knowledge/`（one service per
   aggregate root + pipeline: `KnowledgeBaseService` / `KnowledgeDocumentService` /
   `DocumentIngestionService` / `KnowledgeBindingService`），检索能力在
-  `components/knowledge/`（拓扑：agents→components 单向、services→components 合法
-  ——检索编排既要被 agent 工具消费又要碰 repositories/infra，放 components 才不成环）。
-  向量细节统一收敛在 `components/knowledge/KnowledgeVectorIndex`（每库一 collection
+  `components/knowledge/`（拓扑见「服务层两层制」箭头表——检索编排既要被 agent
+  工具消费又要碰 repositories/infra 与领域向量适配器，放 components 成环风险最小）。
+  向量细节统一收敛在领域侧 `services/domain/knowledge/vector_index.py`
+  （`KnowledgeVectorIndex`，components→domain 合法引用；每库一 collection
   `Knowledge_{kb_id.hex}` + 显式 schema（content 用 gse 分词，见 collection.py）+
   幂等 ensure + 批量写/删 + 整库 drop + search/search_many（alpha=1 纯向量、<1 混合，
   多库扇出融合只此一处）；`KnowledgeRetrievalService` 做绑定解析→enabled 收敛→
@@ -326,7 +349,7 @@ future RAG).
 - CORS is wide open (`allow_origins=["*"]`, credentials on).
 - SSE (`/agentic/chat`) is **outside** the global exception handlers: once the
   200/SSE headers are committed, in-stream errors can only surface as an ag-ui
-  `RunErrorEvent`. `AgenticService.chat` therefore yields `RunStarted` first,
+  `RunErrorEvent`. `ChatOrchestrator.chat` therefore yields `RunStarted` first,
   then wraps both setup (turn/message writes, agent creation, history load)
   and the streaming loop: any `Exception` logs the full stack (business errors
   as warning), marks the turn `FAILED` (best-effort store, secondary failures
@@ -336,7 +359,7 @@ future RAG).
   dev/test, 「服务内部错误」 in prod — see `_run_error_message`; keep the two
   in sync). Remaining known gap: client disconnects (`GeneratorExit`) never
   set `CANCELED`.
-- Multi-turn history is server-authoritative: `AgenticService.chat` rebuilds
+- Multi-turn history is server-authoritative: `ConversationService.replay_history`(由 `ChatOrchestrator.chat` 调用) rebuilds
   the LLM context from the DB (`ConversationRepository.list_replay_messages`,
   last ~20 COMPLETED turns — FAILED/CANCELED/stray RUNNING turns are skipped)
   plus the latest user message — the rest of the ag-ui `messages` payload is

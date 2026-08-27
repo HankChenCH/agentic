@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from sqlmodel import Session, select
+from types import SimpleNamespace
 
 from app.models.domain.agentic import (
     AgenticConversationMessage,
@@ -16,6 +17,7 @@ from app.models.domain.agentic import (
     AgenticMessageType,
 )
 from app.repositories.conversation_repository import ConversationRepository
+from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.orchestration.turn_finalizer import TurnFinalizer
 
 
@@ -95,9 +97,14 @@ class ExplodingStoreTurnRepo:
 
 def make_finalizer(repo, title_generator=None, memory=None):
     factory = RecordingLoggerFactory()
+    # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML（open_turn 才会读到）
+    conversations = ConversationService(
+        conversation_repo=repo,
+        app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
+    )
     finalizer = TurnFinalizer(
         title_generator=title_generator or FakeTitleGenerator(),
-        conversation_repo=repo,
+        conversations=conversations,
         memory=memory or FakeMemory(),
         logger_factory=factory,
     )

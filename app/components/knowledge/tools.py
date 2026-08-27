@@ -14,7 +14,7 @@ import json
 from uuid import UUID
 
 from app.components.knowledge.service import KnowledgeRetrievalService, RetrievalHit
-from app.components.knowledge.vector_index import DEFAULT_TOP_K
+from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K
 
 # 单来源 bbox 条数上限：控制工具结果体积（溯源展示取前若干块已够定位）
 _MAX_SOURCE_BBOXES = 12

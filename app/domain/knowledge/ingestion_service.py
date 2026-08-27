@@ -18,7 +18,7 @@ from app.exceptions import (
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentStatusError,
 )
-from app.components.knowledge import KnowledgeVectorIndex
+from .vector_index import KnowledgeVectorIndex
 from app.infrastructures.document_parser import DocumentParser
 from app.models.domain.knowledge import DocumentSegment, KnowledgeDocument, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository

@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 from wireup import injectable
 
-from app.components.knowledge import KnowledgeVectorIndex
+from .vector_index import KnowledgeVectorIndex
 from app.core.exceptions import InfrastructureError
 from app.core.logging import LoggerFactory
 from app.exceptions import (

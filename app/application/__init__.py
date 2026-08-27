@@ -4,13 +4,13 @@
 （持久化一律经领域服务）、api 与向上反向调用。
 """
 
-from .agentic_service import AgenticService
+from .chat_orchestrator import ChatOrchestrator
 from .turn_finalizer import TurnFinalizer
 from .translator import AgUiTranslator, StorageTranslator
 
 __all__ = [
     "AgUiTranslator",
-    "AgenticService",
+    "ChatOrchestrator",
     "StorageTranslator",
     "TurnFinalizer",
 ]

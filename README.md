@@ -171,8 +171,10 @@ server/
 
 ## 架构速览
 
-- **分层**:`api → services → components/repositories → infrastructures`,单向依赖;
-  api 只做 HTTP 装配,业务在 services,自包含能力(记忆、检索)在 components。
+- **分层**:`api → services{orchestration|domain} → components/repositories → infrastructures`,单向依赖;
+  api 只做 HTTP 装配;services 两层制——orchestration 编排用户侧行程(chat),domain 承载
+  领域服务(会话/知识库,管理侧端点与 Celery 任务直调);自包含能力(记忆、检索)在 components,
+  写入型组件工具须经领域服务;检索组件消费领域向量适配器,走合法的 components→domain 边。
 - **DI**:wireup。共享注册在 `app/core/container.py`,HTTP 与 Celery 两个入口各建
   各自的容器实例(FastAPI 集成要求 async 容器,Celery 集成要求 sync 容器)。
 - **LLM 栈**:LangChain `create_agent` + `stream_events(version="v3")`,默认聊天

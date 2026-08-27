@@ -11,7 +11,7 @@ from langchain_core.documents import Document
 
 from app.components.knowledge import build_knowledge_tools
 from app.components.knowledge.service import RetrievalHit
-from app.components.knowledge.vector_index import KnowledgeVectorIndex
+from app.services.domain.knowledge.vector_index import KnowledgeVectorIndex
 from app.infrastructures.document_parser import ParsedDocument
 from app.infrastructures.document_parser.mineru_cloud_provider import _normalize_blocks
 from app.models.domain.knowledge import DocumentSegment

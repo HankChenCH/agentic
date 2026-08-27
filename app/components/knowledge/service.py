@@ -12,7 +12,7 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.components.knowledge.vector_index import DEFAULT_TOP_K, KnowledgeVectorIndex, VectorHit
+from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K, KnowledgeVectorIndex, VectorHit
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
