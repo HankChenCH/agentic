@@ -15,7 +15,7 @@ from app.exceptions import (
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
-from app.services.knowledge.binding_service import KnowledgeBindingService
+from app.services.domain.knowledge.binding_service import KnowledgeBindingService
 
 
 def make_kb(engine, name, status=KnowledgeStatus.ENABLED) -> uuid4:

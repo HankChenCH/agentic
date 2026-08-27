@@ -7,7 +7,7 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
 )
-from app.services.conversation_title_generator import (
+from app.services.domain.conversation.title_generator import (
     ConversationTitleGenerator,
     generate_title,
 )

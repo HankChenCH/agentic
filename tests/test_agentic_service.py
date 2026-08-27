@@ -18,8 +18,8 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 from app.repositories.conversation_repository import ConversationRepository
-from app.services.agentic_service import AgenticService
-from app.services.turn_finalizer import TurnFinalizer
+from app.services.orchestration.agentic_service import AgenticService
+from app.services.orchestration.turn_finalizer import TurnFinalizer
 
 # 模拟不该泄漏给客户端的内部细节（连接串）
 SECRET = "connect timeout postgres://agentic:secret@10.0.0.1:5432/agentic"
@@ -31,7 +31,7 @@ def decode(frames):
 
 
 def set_environment(monkeypatch, environment):
-    monkeypatch.setattr("app.services.agentic_service.get_environment", lambda: environment)
+    monkeypatch.setattr("app.services.orchestration.agentic_service.get_environment", lambda: environment)
 
 
 def turn_status(engine, thread_id):
@@ -192,7 +192,7 @@ class InlineThread:
 
 @pytest.fixture()
 def make_service(engine, monkeypatch):
-    monkeypatch.setattr("app.services.agentic_service.threading.Thread", InlineThread)
+    monkeypatch.setattr("app.services.orchestration.agentic_service.threading.Thread", InlineThread)
 
     def _make(agent_factory, conversation_repo=None):
         repo = conversation_repo or ConversationRepository(engine=engine)

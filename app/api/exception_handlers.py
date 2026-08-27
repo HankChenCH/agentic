@@ -13,7 +13,7 @@
 
 SSE 端点（POST /agentic/chat）不受 HTTP 异常处理器管辖：响应头一旦发出，
 流内错误只能以 ag-ui RunErrorEvent 形式返回——脱敏策略与本文一致，实现见
-:meth:`app.services.agentic_service.AgenticService._run_error_message`
+:meth:`app.services.orchestration.agentic_service.AgenticService._run_error_message`
 （业务异常如实、其余 prod 统一「服务内部错误」）；两处需同步维护。
 """
 

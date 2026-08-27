@@ -23,7 +23,7 @@ class AppLogger(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """logger 名称（惯例为模块 ``__name__``，如 ``app.services.agentic_service``）。"""
+        """logger 名称（惯例为模块 ``__name__``，如 ``app.services.orchestration.agentic_service``）。"""
 
     @abstractmethod
     def debug(self, msg, *args, exc_info=None, **extra) -> None: ...

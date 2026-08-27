@@ -1,7 +1,7 @@
 """分块器：meta 的 bboxes 聚合（去重/封顶/跨页合并）。"""
 
 from app.infrastructures.document_parser import ParsedBlock, ParsedBlockType, ParsedDocument
-from app.services.document_chunker import _MAX_SEGMENT_BBOXES, chunk_document
+from app.services.domain.knowledge.document_chunker import _MAX_SEGMENT_BBOXES, chunk_document
 
 
 def text_block(text, page=0, bbox=None):

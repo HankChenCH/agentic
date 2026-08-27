@@ -6,7 +6,7 @@ from wireup import injectable
 from app.components.memory import MemoryService
 from app.core.logging import LoggerFactory
 from app.repositories.conversation_repository import ConversationRepository
-from app.services.conversation_title_generator import ConversationTitleGenerator
+from app.services.domain.conversation.title_generator import ConversationTitleGenerator
 
 from app.models.domain.agentic import (
     AgenticConversation,

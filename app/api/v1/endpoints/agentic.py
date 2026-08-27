@@ -9,7 +9,6 @@ from app.exceptions import ConversationNotFoundError
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.request.chat import ChatRequest
-from app.models.schema.request.summary import SummaryRequest
 from app.models.schema.response.biz_response import Response
 
 router = APIRouter(prefix="/agentic", tags=["Agentic"])

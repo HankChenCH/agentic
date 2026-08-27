@@ -21,8 +21,8 @@ from app.models.schema.request.knowledge import (
 )
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
-from app.services.knowledge.object_store import KnowledgeObjectStore
-from app.services.knowledge.support import (
+from .object_store import KnowledgeObjectStore
+from .support import (
     check_status_transition,
     page_envelope,
     require_kb,

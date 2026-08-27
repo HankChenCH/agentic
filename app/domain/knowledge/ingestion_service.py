@@ -23,9 +23,9 @@ from app.infrastructures.document_parser import DocumentParser
 from app.models.domain.knowledge import DocumentSegment, KnowledgeDocument, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
-from app.services.document_chunker import SegmentDraft, chunk_document
-from app.services.knowledge.object_store import KnowledgeObjectStore
-from app.services.knowledge.support import ERROR_MESSAGE_MAX, RETRY_ALLOWED, require_document, require_kb
+from .document_chunker import SegmentDraft, chunk_document
+from .object_store import KnowledgeObjectStore
+from .support import ERROR_MESSAGE_MAX, RETRY_ALLOWED, require_document, require_kb
 
 
 @injectable

@@ -22,8 +22,8 @@ from app.models.domain.knowledge import KnowledgeDocument, KnowledgeStatus
 from app.models.schema.request.knowledge import KnowledgeDocumentUpdateRequest
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
-from app.services.knowledge.object_store import KnowledgeObjectStore
-from app.services.knowledge.support import (
+from .object_store import KnowledgeObjectStore
+from .support import (
     ALLOWED_UPLOAD_SUFFIXES,
     MAX_UPLOAD_BYTES,
     check_status_transition,

@@ -17,7 +17,7 @@ from app.exceptions import KnowledgeAgentInvalidError, KnowledgeStatusError
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
-from app.services.knowledge.support import require_kb
+from .support import require_kb
 
 
 @injectable

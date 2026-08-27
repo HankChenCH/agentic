@@ -156,7 +156,7 @@ server/
 ├── app/
 │   ├── cmd/               # 入口:http(FastAPI,async 容器)、task_executor(Celery,sync 容器)
 │   ├── api/               # HTTP 装配 + 全局异常处理(AOP);v1/endpoints/ 按领域分模块
-│   ├── services/          # 业务逻辑(@injectable dataclass),knowledge/ 子包管摄取流水线
+│   ├── services/          # 业务逻辑两层制:orchestration/(chat 行程编排)与 domain/(conversation、knowledge 领域服务)
 │   ├── components/        # 自包含能力组件:memory(长期记忆)、knowledge(检索)
 │   ├── agents/            # BaseAgent 注册表 + AgentFactory + 内置 agent
 │   ├── tasks/             # Celery 任务(文档摄取)

@@ -18,8 +18,8 @@ from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_document_repository import (
     KnowledgeDocumentRepository,
 )
-from app.services.knowledge.document_service import KnowledgeDocumentService
-from app.services.knowledge.object_store import KnowledgeObjectStore
+from app.services.domain.knowledge.document_service import KnowledgeDocumentService
+from app.services.domain.knowledge.object_store import KnowledgeObjectStore
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body"
 

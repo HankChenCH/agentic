@@ -16,7 +16,7 @@ from app.models.domain.agentic import (
     AgenticMessageType,
 )
 from app.repositories.conversation_repository import ConversationRepository
-from app.services.turn_finalizer import TurnFinalizer
+from app.services.orchestration.turn_finalizer import TurnFinalizer
 
 
 class FakeTitleGenerator:

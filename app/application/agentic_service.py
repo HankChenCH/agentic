@@ -13,8 +13,8 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
-from app.services.translator import AgUiTranslator, StorageTranslator
-from app.services.turn_finalizer import TurnFinalizer
+from .translator import AgUiTranslator, StorageTranslator
+from .turn_finalizer import TurnFinalizer
 from app.repositories.conversation_repository import ConversationRepository
 
 from app.models.domain.agentic import (

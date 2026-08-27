@@ -44,10 +44,11 @@ server/                          # this directory is its own git repo (the works
 │                            #   KnowledgeVectorIndex vector adapter + KnowledgeRetrievalService + knowledge_list/
 │                            #   knowledge_search tools + collection.py shared schema) — components must NOT
 │                            #   import app.services/app.agents (agents→components→repositories/infra only)
-├── services/                # Business logic — AgenticService (chat 流编排), AgUiTranslator / StorageTranslator;
-│                            #   TurnFinalizer (chat 后台收尾加工：填标题→聚合 token→写记忆，各步独立容错)
-│                            #   + ConversationTitleGenerator (裸模型标题生成，不经智能体注册表);
-│                            #   knowledge/ sub-package (KB/document/ingestion/binding services + object adapter)
+├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
+│                            #   （AgenticService chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
+│                            #   domain/: 领域服务，按聚合分包—— conversation/（title_generator 裸模型
+│                            #   标题生成）与 knowledge/（KB/document/ingestion/binding 服务 +
+│                            #   object_store/support 纯函数/document_chunker）
 ├── models/
 │   ├── schema/request/chat.py   # ChatRequest / ChatMessage (camelCase fields for ag-ui)
 │   ├── domain/agentic/      # SQLModel tables: conversation/turn/message + AgenticMemory (table agentic_memory)
@@ -158,7 +159,7 @@ Server layer rules:
 - **services** → business logic; `@injectable` + `@dataclass` with constructor
   injection (see `AgenticService`). `AGUIEventTranslator` turns LangChain stream
   chunks into ag-ui events; it is the only place that should know both shapes.
-- **knowledge domain split** → 管理侧在 `services/knowledge/`（one service per
+- **knowledge domain split** → 管理侧在 `services/domain/knowledge/`（one service per
   aggregate root + pipeline: `KnowledgeBaseService` / `KnowledgeDocumentService` /
   `DocumentIngestionService` / `KnowledgeBindingService`），检索能力在
   `components/knowledge/`（拓扑：agents→components 单向、services→components 合法

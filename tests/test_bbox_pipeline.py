@@ -15,7 +15,7 @@ from app.components.knowledge.vector_index import KnowledgeVectorIndex
 from app.infrastructures.document_parser import ParsedDocument
 from app.infrastructures.document_parser.mineru_cloud_provider import _normalize_blocks
 from app.models.domain.knowledge import DocumentSegment
-from app.services.document_chunker import chunk_document
+from app.services.domain.knowledge.document_chunker import chunk_document
 
 
 RAW_CONTENT_LIST = [
