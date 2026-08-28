@@ -19,11 +19,12 @@ from app.core.config import AppConfig
 from app.core.container import build_async_container
 from app.core.logging import setup_logging
 from app.api.exception_handlers import register_exception_handlers
-from app.api.v1.endpoints import agent_knowledge, agentic, knowledge
+from app.api.v1.endpoints import agent_knowledge, agentic, knowledge, memory
 
 # 确保所有 SQLModel 表模型被导入，以便 SQLModel.metadata 能收集到它们
 import app.models.domain.agentic  # noqa: F401
 import app.models.domain.knowledge  # noqa: F401
+import app.models.domain.memory  # noqa: F401 记忆 v2 四表
 
 # .env 由 core/config/loader.py 在首次读取配置时加载（AGENTIC_ENV_FILE 可指定路径）
 
@@ -55,6 +56,7 @@ def create_app():
     server.include_router(agentic.router)
     server.include_router(knowledge.router)
     server.include_router(agent_knowledge.router)
+    server.include_router(memory.router)
 
     # 全局异常处理器（AOP）：统一 Response 信封 + 按环境（dev/test/prod）区分响应详略
     register_exception_handlers(server)

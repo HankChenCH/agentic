@@ -1,8 +1,11 @@
 # 记忆系统 v2 设计定稿：《时-人-事-物》双层图谱
 
 > 状态：**设计共识已达成**（2026-08-27，与作者逐轮确认：建模深度、存储选型、
-> 作用域、遗忘机制、两级召回架构、渲染模板）。实现按 §9 文件清单执行，
-> 前置阅读 `server/AGENTS.md`。
+> 作用域、遗忘机制、两级召回架构、渲染模板），并已对齐同日服务层重构
+> （`AgenticService`→`ChatOrchestrator`、后置处理抽提 `TurnFinalizer`、
+> orchestration/domain 两层制、向量适配器归位领域层——提交 4bf10fb /
+> bfedf60 / ae241e0）。实现按 §9 文件清单执行，前置阅读 `server/AGENTS.md`
+> 「服务层两层制」。
 
 ## 1. 目标
 
@@ -41,6 +44,11 @@
    每次被召回则 access_count+1 并刷新 last_accessed_at（提取练习强化）。
 5. **召回架构**：快速/深度两级（§6）；管理侧能力（可视化/人工编辑）列为
    P1 分期（§11），但防再固护字段 `origin` 本版一并建模（§4）。
+6. **分层落位**：遵循 AGENTS.md「服务层两层制」依赖箭头表——记忆逻辑主体
+   留在 `components/memory`（被 agents 工具装配与编排收尾消费）；向量适配器
+   归位领域侧 `services/domain/memory/vector_index.py`（镜像知识域先例，
+   组件经合法 components→domain 边引用，不直触 `VectorStoreFactory`）。
+   全部改动必须通过 `tests/test_layer_boundaries.py` AST 边界守卫。
 
 ## 4. 数据模型
 
@@ -104,13 +112,14 @@ unique(episode_id, entity_id, role))`
 
 ## 5. 写路径：巩固管线
 
-钩子位置不变：`AgenticService._after_chat` 守护线程调用
-`MemoryService.remember(...)`，外层 try/except 全兜底（失败仅记日志）。
-四步：
+`ChatOrchestrator.chat` 流收尾后在守护线程中调 `TurnFinalizer.run(...)`
+（`app/services/orchestration/turn_finalizer.py`；三步固定顺序：填标题 →
+聚合 token 用量 → 写长期记忆）。本设计占用第三步，容错语义不变：
+remember 外层 try/except 全兜底，失败仅记日志。四步巩固管线：
 
 ```mermaid
 sequenceDiagram
-    participant AGT as _after_chat(守护线程)
+    participant AGT as TurnFinalizer.run(守护线程)
     participant MS as MemoryService.remember
     participant LLM as deepseek 抽取模型
     participant REPO as MemoryRepository(SQL)
@@ -127,8 +136,11 @@ sequenceDiagram
 
 ### 6.1 快速回忆（自动注入）
 
-- 注入点：`AgenticService.chat` 在 `agent.stream()` 前（已持有 query），
-  调 `MemoryService.build_fast_context(query)`，结果拼入输入首部。不碰 ag-ui 流。
+- 注入点：`ChatOrchestrator.chat`（`app/services/orchestration/
+  chat_orchestrator.py`）在 `replay_history` 之后、`agent.stream(...)` 之前
+  （已持有 query），调 `MemoryService.build_fast_context(query)` 拼入输入
+  首部，不碰 ag-ui 流。编排层引用组件属合法依赖箭头
+  （orchestration ──► components）。
 - 实现：纯 SQL 直读 ACTIVE 陈述按评分截断 top-N + 实体属性速览。
   **零 LLM 调用、零 embedding 调用**，保证首字延迟。
 - 小话判别：寒暄类问题跳过注入（规则或极小分类器，失败倾向注入）。
@@ -220,9 +232,13 @@ link 投影为 `§E{id}` 事件节点行）；实体显示=纯专名+类型；�
 **Weaviate collection `Memory`**（镜像 knowledge 域模式）：显式 schema
 单一事实源 —— `content`(gse 分词)、`kind`(entity/statement/episode,
 field 分词)、`ref_id`(int)、`thread_id`(field)、`occurred_at`(int epoch)。
-确定性向量 id `{kind}_{ref_id}`；幂等 ensure + 竞态重试一次、批 32 写入、
-best-effort 删除、检索失败返空不阻断。embedding=bge-m3(既有)；换模型需
-drop collection + `rebuild_index()` 全量重嵌。
+确定性向量 id 由 ``uuid5("memory/{kind}/{ref_id}")`` 生成（Weaviate 对象
+键必须为合法 UUID，不能直接拼字符串）；同 id 重写即覆盖语义不变。幂等
+ensure + 竞态重试一次、批 32 写入、best-effort 删除、检索失败返空不阻断；
+检索侧以 3 倍过采样取回后按 kind 客户端筛（VectorStore 接口不暴露属性过滤）。
+embedding=bge-m3(既有)；换模型需 drop collection + `rebuild()` 全量重嵌。
+
+**配置**：…（下表）；另含 `recall.fast_limit`(10)：快速回忆块的事实行上限。
 
 **配置 `app/core/config/memory.py` + `configs/memory.yaml`**：
 
@@ -242,16 +258,24 @@ drop collection + `rebuild_index()` 全量重嵌。
 
 **新建**：
 `app/models/domain/memory/{__init__,memory,enums}.py`；
-`app/components/memory/{vocab,collection,vector_index,scoring,renderer}.py`；
-`app/components/memory/repositories/base.py 重写 + 新 SQL 实现`
+`app/components/memory/{vocab,scoring,renderer}.py` 与
+`repositories/base.py 重写 + 新 SQL 实现`
 （ABC 收敛为图谱操作集：upsert_entity/find_entity_by_name/link_alias/
 find_active_statements/insert_statements/supersede_statement/archive/
 insert_episode/link_episode_entities/statements_by_entities/bump_access；
 `@injectable(as_type=MemoryRepository)` 换绑接缝保持）；
+`app/services/domain/memory/{__init__,vector_index,collection}.py`——
+向量适配器归位领域层，镜像知识域先例（`services/domain/knowledge/
+vector_index.py`）：collection 命名与显式 schema 单一事实源、幂等 ensure、
+批写批删；组件经合法 components→domain 边注入 `MemoryVectorIndex`，
+不直触 `VectorStoreFactory`（对齐 AGENTS.md 知识域条目的收敛原则）；
 `docs/memory-v2-design.md`（本文档）。
 
 **修改**：`app/components/memory/{service,tools,extraction}.py` 重写；
-`app/services/agentic_service.py`（chat 内增快速召回注入）；
+`app/services/orchestration/chat_orchestrator.py`（replay_history 与
+agent.stream 之间增快速召回注入，替代原 AgenticService 位置）；
+`app/services/domain/conversation/conversation_service.py`
+（delete_conversation 的"长期记忆不随会话删除"注释与新表同步）；
 `app/agents/builtin/demo.py`（system prompt 更新三工具使用指引）；
 `app/models/domain/agentic/__init__.py`（移除 AgenticMemory 导出）；
 `app/cmd/http/main.py`、`tests/conftest.py`（模型导入点）；
@@ -279,7 +303,9 @@ Celery 任务体系（写路径仍走守护线程）。
 **P1（紧随其后，非阻塞）**：管理侧 —— 只读图快照 API（GET memory/graph，
 导出 ACTIVE 实体为节点、陈述为带谓词边、episode 挂接，供 React Flow/
 Cytoscape 渲染力导向图；时间滑杆做时点回放视图）；编辑 API 与溯源跳转
-（拓扑行 #S 编号直达）；`origin=MANUAL` 编辑流。
+（拓扑行 #S 编号直达）；`origin=MANUAL` 编辑流。按「服务层两层制」，
+管理端点不得触碰 components/api 门面禁边——快照与编辑能力落在
+`services/domain/memory/` 领域服务上（新增 admin 读路径），端点直接消费。
 
 **P2 非目标**：写路径迁 Celery（`app/tasks/__init__.py` 已标注的未来工作）；
 多用户作用域；周期巩固任务；>1 hop 检索；跨智能体共享记忆池。

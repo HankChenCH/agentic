@@ -91,10 +91,13 @@ class FakeRun:
 
 
 class FakeAgent:
+    captured_context = None
+
     def __init__(self, run):
         self._run = run
 
     def stream(self, context):
+        type(self).captured_context = context
         return self._run
 
 
@@ -140,8 +143,19 @@ class ExplodingRepository:
 
 
 class FakeMemory:
+    """记忆替身：快速注入固定块（可开关），remember 静默。"""
+
+    def __init__(self, block=""):
+        self.block = block
+        self.fast_queries = []
+        self.remembered = []
+
+    def build_fast_context(self, query, thread_id):
+        self.fast_queries.append((query, thread_id))
+        return self.block
+
     def remember(self, **kwargs):
-        pass
+        self.remembered.append(kwargs)
 
 
 class RecordingLogger:
@@ -196,20 +210,21 @@ class InlineThread:
 def make_orchestrator(engine, monkeypatch):
     monkeypatch.setattr("app.services.orchestration.chat_orchestrator.threading.Thread", InlineThread)
 
-    def _make(agent_factory, conversation_repo=None):
+    def _make(agent_factory, conversation_repo=None, memory=None):
         repo = conversation_repo or ConversationRepository(engine=engine)
         # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML
         conversations = ConversationService(conversation_repo=repo, app_config=SimpleNamespace(default_agentic_id="builtin:demo"))
         finalizer = TurnFinalizer(
             title_generator=FakeTitleGenerator(),
             conversations=conversations,
-            memory=FakeMemory(),
+            memory=memory or FakeMemory(),
             logger_factory=RecordingLoggerFactory(),
         )
         return ChatOrchestrator(
             agent_factory=agent_factory,
             conversations=conversations,
             turn_finalizer=finalizer,
+            memory=memory or FakeMemory(),
             logger_factory=RecordingLoggerFactory(),
         )
 
@@ -310,3 +325,21 @@ def test_happy_path_lifecycle(engine, make_orchestrator, monkeypatch):
     assert turn_status(engine, thread_id) == AgenticTurnStatus.COMPLETED
     # 用户消息 + assistant MESSAGE 各一行（InlineThread 已同步跑完收尾加工）
     assert len(stored_messages(engine, thread_id)) == 2
+
+
+def test_fast_memory_block_prepended(engine, make_orchestrator, monkeypatch):
+    """快速回忆块拼进当前轮用户消息首部。"""
+    set_environment(monkeypatch, "dev")
+
+    memory = FakeMemory(block="## 快速记忆上下文（共1条）\n1. #S1 ...")
+    run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)), memory=memory)
+    thread_id = uuid4()
+
+    frames = list(orchestrator.chat(thread_id, "run-7", "我上周聊到什么了？"))
+
+    assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
+    assert memory.fast_queries[0][0] == "我上周聊到什么了？"  # 以原始 query 触发注入
+    sent_user_text = str(FakeAgent.captured_context.messages[-1].content)
+    assert sent_user_text.startswith("## 快速记忆上下文")
+    assert "用户提问：我上周聊到什么了？" in sent_user_text

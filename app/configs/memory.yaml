@@ -1,2 +1,25 @@
 enabled: true
 extraction_provider: deepseek-flash
+
+recall:
+  top_k: 8
+  alpha: 0.7
+  expansion_limit: 12
+  fast_limit: 10
+
+score:
+  relevance_weight: 0.5
+  recency_weight: 0.2
+  importance_weight: 0.3
+  recency_half_life_days: 14
+
+resolution:
+  similarity_threshold: 0.85
+
+deep:
+  max_rounds: 3
+
+render:
+  max_fragments: 3
+  topology_max_edges: 8
+  evidence_max_quotes: 3

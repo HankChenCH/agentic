@@ -21,7 +21,11 @@ class DemoAgent(BaseAgent):
     def build_system_prompt(self) -> str:
         return """
             你是个善于帮助用户解决问题的智能助手，请善用工具为用户解决问题。
-            涉及用户个人背景、偏好或此前提过的信息时，先调用 memory_recall 查询长期记忆再回答。
+            跨会话记忆分两级：若本轮开头已附【快速记忆上下文】，优先直接利用；
+            不足以还原事情来龙去脉时再调用记忆工具深挖——timeline 按线索查
+            过去的事件情节、expand 展开某个人或物的关联事实与经历、state_at
+            回放某日期当时的状态。工具检索一般一轮即可，确有信息缺口才继续，
+            不要反复空查。
             回答事实性/资料性问题前，先用 knowledge_list 查看可用知识库，再用 knowledge_search
             检索相关内容，依据检索结果的 sources 作答，引用处以 [index] 角标注明出处
             （如 [1]，对应 sources 里的编号与文档名/页码）；未检索到时如实说明。

@@ -27,7 +27,9 @@ server/                          # this directory is its own git repo (the works
 ├── api/                     # exception_handlers.py (global AOP handlers); v1/endpoints/ — agentic.py -> POST /agentic/chat (StreamingResponse)
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传，文件落 rustfs）;
-│                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）
+│                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）;
+│                              memory.py -> /memory/graph 记忆图快照（管理侧只读；at 参数做时点回放，
+│                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
 ├── core/container.py        # Shared wireup injectables + build_async_container()/build_sync_container()
     ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py, memory.py, task.py, logging.py; get_environment()
     ├── core/exceptions/         # Framework baseline exceptions: AgenticError root → framework.py (FrameworkError, ConfigError,
@@ -39,22 +41,28 @@ server/                          # this directory is its own git repo (the works
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
     ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary)
-├── components/              # Self-contained capability components: components/memory (MemoryService facade,
-│                            #   memory_recall tool, own repositories/) and components/knowledge (retrieval:
+├── components/              # Self-contained capability components: components/memory (MemoryService 门面：
+│                            #   remember 巩固管线·build_fast_context 快速注入·timeline/expand/state_at 深度三件套、
+│                            #   own repositories/ 图谱实现、renderer 模板契约/scoring/extraction/vocab；
+│                            #   向量适配器在 services/domain/memory 经 components→domain 合法边引用)
+│                            #   and components/knowledge (retrieval:
 │                            #   KnowledgeRetrievalService + knowledge_list/knowledge_search tools) —
 │                            #   components may import domain/repositories/infra (单向)，严禁
 │                            #   app.services.orchestration / app.agents / app.api
 ├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
 │                            #   （ChatOrchestrator chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
 │                            #   domain/: 领域服务，按聚合分包—— conversation/（title_generator 裸模型
-│                            #   标题生成）与 knowledge/（KB/document/ingestion/binding 服务 +
-│                            #   object_store/support 纯函数/document_chunker）
+│                            #   标题生成）、knowledge/（KB/document/ingestion/binding 服务 +
+│                            #   object_store/support 纯函数/document_chunker）与 memory/
+│                            #   （记忆向量适配器 MemoryVectorIndex+collection 显式 schema）
 ├── models/
 │   ├── schema/request/chat.py   # ChatRequest / ChatMessage (camelCase fields for ag-ui)
-│   ├── domain/agentic/      # SQLModel tables: conversation/turn/message + AgenticMemory (table agentic_memory)
-│   └── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
+│   ├── domain/agentic/      # SQLModel tables: conversation / turn / message
+│   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
 │                             #   knowledge_agent_binding (agent↔KB); KnowledgeStatus enum; segment.id doubles
 │                             #   as the Weaviate object UUID
+│   └── domain/memory/       # 记忆 v2 双层图谱四表: entity / statement(双时间轴·SUPERSEDED 不删除可回放)
+│                             #   / episode / episode_link —— 设计定稿见 docs/memory-v2-design.md
 ├── repositories/            # Data-access (@injectable) — ConversationRepository,
 │                             #   KnowledgeBaseRepository, KnowledgeDocumentRepository (docs+segments),
 │                             #   KnowledgeBindingRepository
@@ -103,8 +111,10 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   - **postgres** (`postgres:18-alpine`) → `127.0.0.1:5432`, user/pass/db
     `agentic`/`agentic`/`agentic`
 - **weaviate** (`semitechnologies/weaviate:1.39.0`) → `127.0.0.1:8080` (HTTP,
-  matches the reserved `app/configs/vector_db.yaml`) + `127.0.0.1:50051`
-  (gRPC), anonymous access, `DEFAULT_VECTORIZER_MODULE=none` (vectors come
+  matches the reserved `app/configs/vector_db.yaml`) + `127.0.0.1:50052`
+  (gRPC; 宿主侧刻意错开 50051——本机 Ollama 桌面版的 ui server 占用
+  `127.0.0.1:50051` 且 loopback 精确绑定优先于 Docker 通配绑定，会截走
+  gRPC 流量；`.env` 的 `WEAVIATE_GRPC_PORT=50052` 与之保持一致), anonymous access, `DEFAULT_VECTORIZER_MODULE=none` (vectors come
   from the app's embedding models), `ENABLE_TOKENIZER_GSE=true` (gse 中文
   分词——knowledge collection 的 content 属性按 gse 建倒排，BM25/混合检索
   的前提；不开则建 collection 时 422)
@@ -369,10 +379,26 @@ future RAG).
   row, and OpenAI-compatible APIs 400 on orphan tool_calls); `THOUGHT`
   (reasoning) is never replayed. `AgentRunContext` carries `messages`, and
   `BaseAgent._input` injects the current time into the last user message.
-  Long-term memory lives in `agentic_memory` (component at
-  `app/components/memory/`, LLM-extracted after each turn, recalled via the
-  `memory_recall` tool; storage/retrieval strategy is the component's own
-  `repositories/` abstraction).
+  Long-term memory is the v2 graph model (`docs/memory-v2-design.md` is the
+  design contract): four tables in `app/models/domain/memory/` (entity /
+  bi-temporal statement / episode / episode-link), consolidated into the
+  component at `app/components/memory/` by `TurnFinalizer`'s third step
+  (extract→resolve entities→adjudicate ADD/REPLACE/SKIP→persist+vector upsert).
+  Recall has two tiers: `ChatOrchestrator.chat` auto-injects a brief block
+  (`MemoryService.build_fast_context`, pure SQL scoring, no LLM/embedding)
+  before streaming; deep recall = three tools (`timeline`/`expand`/`state_at`,
+  built in `components/memory/tools.py`, reading the current thread from the
+  langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
+  into `configurable`, and tools declare a `config: RunnableConfig` param that
+  never reaches the LLM tool schema; do NOT use a ContextVar for this: the
+  orchestrator is a sync generator resumed in a different context copy per
+  `next()` and langgraph runs tools on its own executor threads, so a
+  ContextVar is invisible to the tools and its token reset raises ValueError
+  at stream end, severing the SSE connection). Sessions track injected
+  ids in-process (`SessionInjectRegistry`) so tools return only增量.
+  `MemoryVectorIndex` lives in `services/domain/memory/` (components consume
+  it over the legal components→domain edge); vector facts源 is SQL — the index
+  is rebuildable (`rebuild()`).
 - `README.md` is the human-facing overview (quickstart, config, API, layout);
   this file remains the deeper agent guide — keep both in sync when adding
   entrypoints/config sections/endpoints.

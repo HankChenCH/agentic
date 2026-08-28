@@ -1,5 +1,4 @@
 from .conversation import AgenticTurnStatus, AgenticMessageRole, AgenticMessageType, AgenticConversation, AgenticConversationTurn, AgenticConversationMessage
-from .memory import AgenticMemory
 
 __all__ = [
     "AgenticTurnStatus",
@@ -8,5 +7,5 @@ __all__ = [
     "AgenticConversation",
     "AgenticConversationTurn",
     "AgenticConversationMessage",
-    "AgenticMemory",
 ]
+# 注：长期记忆已迁移到 app.models.domain.memory（v2 双层图谱）；旧 agentic_memory 表退役。

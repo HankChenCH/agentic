@@ -5,6 +5,7 @@ from sqlmodel import SQLModel, create_engine
 
 import app.models.domain.agentic  # noqa: F401 收集全部表模型
 import app.models.domain.knowledge  # noqa: F401
+import app.models.domain.memory  # noqa: F401 记忆 v2 四表
 
 
 @pytest.fixture()

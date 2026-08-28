@@ -53,7 +53,11 @@ services:
       - http
     ports:
       - "127.0.0.1:8080:8080" # HTTP / gRPC-Web，对应 vector_db.yaml 预留地址
-      - "127.0.0.1:50051:50051" # gRPC（weaviate-client v4 需要）
+      # gRPC（weaviate-client v4 需要）。宿主侧用 50052：本机新版 Ollama
+      # 桌面版会占 127.0.0.1:50051（ui server），且 loopback 精确绑定优先于
+      # Docker 的通配绑定，会把 gRPC 流量截走报 "Trying to connect an
+      # http1.x server"。覆盖 .env 的 WEAVIATE_GRPC_PORT 保持一致。
+      - "127.0.0.1:50052:50051"
     environment:
       QUERY_AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true" # 本地开发: 匿名访问
       PERSISTENCE_DATA_PATH: "/var/lib/weaviate"

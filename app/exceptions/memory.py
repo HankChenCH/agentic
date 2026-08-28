@@ -10,3 +10,10 @@ class MemoryComponentError(BusinessError):
     """记忆组件通用业务错误。"""
 
     default_code = 3000
+
+
+class MemoryInvalidTimeParamError(MemoryComponentError):
+    """图快照等接口的时间参数不可解析（ISO 格式约束）。"""
+
+    default_code = 3001
+    default_http_status = 400

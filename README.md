@@ -99,7 +99,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `MINERU_API_KEY` | MinerU PDF 解析 Bearer token | 空(首次解析报错) |
 | `APP_ENV` | 运行环境(dev/test 附异常 detail+trace,prod 只回通用信息) | `dev` |
 | `DB_DSN` | SQLite 数据库文件路径 | `data/agentic.db` |
-| `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50051` |
+| `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Celery broker/结果库 | `redis://127.0.0.1:6379/0` / `1` |
 | `AGENTIC_LOG_LEVEL` / `AGENTIC_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
@@ -114,7 +114,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | 服务 | 地址 | 凭据 | 用途 |
 | --- | --- | --- | --- |
 | postgres 18 | `127.0.0.1:5432` | `agentic` / `agentic` / db `agentic` | 可选数据库(默认用 SQLite) |
-| weaviate 1.39 | `127.0.0.1:8080`(HTTP)+ `:50051`(gRPC) | 匿名访问 | 知识库向量存储 |
+| weaviate 1.39 | `127.0.0.1:8080`(HTTP)+ `:50052`(gRPC,宿主侧) | 匿名访问 | 知识库向量存储 |
 | rustfs(S3 兼容) | `127.0.0.1:9000` | `agentic` / `agentic-secret` | 知识库文件存储(bucket `agentic` 由 `rustfs-init` 幂等创建) |
 | redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 |
 

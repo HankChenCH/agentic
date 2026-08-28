@@ -12,6 +12,7 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
+from app.components.memory import MemoryService
 
 from .translator import AgUiTranslator, StorageTranslator
 from .turn_finalizer import TurnFinalizer
@@ -35,6 +36,8 @@ class ChatOrchestrator:
     conversations: ConversationService
 
     turn_finalizer: TurnFinalizer
+
+    memory: MemoryService
 
     logger_factory: LoggerFactory
 
@@ -69,8 +72,16 @@ class ChatOrchestrator:
             # 多轮历史以库为准（服务端权威，不信任请求携带的历史）：
             # 最近轮次的 USER/ASSISTANT 文本 + 当前提问
             history = self.conversations.replay_history(thread_id=thread_id, exclude_turn_id=turn.turn_id)
+
+            # 快速回忆：会话前按问题自动注入（纯 SQL 直读，失败不阻断对话主链路）
+            memory_block = ""
+            try:
+                memory_block = self.memory.build_fast_context(query=query, thread_id=thread_id)
+            except Exception:
+                self.logger.warning("build fast memory context failed", exc_info=True)
+            user_query = f"{memory_block}\n\n---\n\n用户提问：{query}" if memory_block else query
             run = agent.stream(AgentRunContext(
-                messages=[*history, HumanMessage(query)],
+                messages=[*history, HumanMessage(content=user_query)],
                 thread_id=str(thread_id),
                 run_id=run_id,
                 now=now,
@@ -86,7 +97,11 @@ class ChatOrchestrator:
             return
 
         # messages item 是整条 assistant 消息的 ChatModelStream（非片段），
-        # 每条消息生成一次 id 注入两个 translator，保证流式事件与落库行共用同一 message_id
+        # 每条消息生成一次 id 注入两个 translator，保证流式事件与落库行共用同一 message_id。
+        # 深度回忆三件套的会话身份走 langgraph config 注入（BaseAgent._config 的
+        # configurable.thread_id），不在此绑定——本生成器由 Starlette 逐次在不同
+        # context 副本里恢复，ContextVar 的 set/reset 跨不过去（工具读不到值，
+        # token reset 还会在流收尾抛 ValueError 打断 SSE 连接）。
         try:
             for name, item in run.interleave("messages", "tools"):
                 message_id = uuid4()

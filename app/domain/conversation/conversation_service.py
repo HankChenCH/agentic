@@ -150,7 +150,7 @@ class ConversationService:
 
     def delete_conversation(self, thread_id: UUID) -> AgenticConversation:
         # 硬删除：会话+轮次+消息单事务清空，返回删除前快照。
-        # 长期记忆（agentic_memory）是跨会话的用户级数据，不随会话删除。
+        # 长期记忆（components/memory 双层图谱模型）是跨会话的用户级数据，不随会话删除。
         conversation = self.conversation_repo.delete_conversation(thread_id=thread_id)
         if conversation is None:
             raise ConversationNotFoundError("conversation not found")
