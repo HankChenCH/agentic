@@ -47,10 +47,10 @@ export const DocumentTable: FC<DocumentTableProps> = ({
   onRetry,
 }) => {
   return (
-    <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
+    <div className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-card">
       <Table>
         <TableHeader>
-          <TableRow>
+          <TableRow className="bg-muted/60 hover:bg-muted/60">
             <TableHead className="pl-4">文档</TableHead>
             <TableHead>大小</TableHead>
             <TableHead>分段</TableHead>

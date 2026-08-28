@@ -10,7 +10,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { usePdfPreview } from "@/components/knowledge/pdf-preview-provider";
+import { usePdfPreview } from "@/components/shared/pdf-preview-provider";
+import { formatSourcePages } from "@/lib/format";
 import type {
   KnowledgeSearchResult,
   KnowledgeSource,
@@ -53,23 +54,14 @@ function parseResult(result: unknown): KnowledgeSearchResult | null {
   return null;
 }
 
-function formatPages(source: KnowledgeSource): string {
-  // 后端 page_start/page_end 为 0 起存储（MinerU page_idx），展示 +1 转人读页码
-  if (source.page_start == null) return "";
-  if (source.page_end == null || source.page_start === source.page_end) {
-    return `p.${source.page_start + 1}`;
-  }
-  return `p.${source.page_start + 1}-${source.page_end + 1}`;
-}
-
 function SourceCard({
   source,
   onOpen,
 }: {
   source: KnowledgeSource;
-  onOpen: (source: KnowledgeSource) => void;
+  onOpen: () => void;
 }) {
-  const pages = formatPages(source);
+  const pages = formatSourcePages(source);
   return (
     <div className="rounded-lg border bg-muted/30 p-2.5">
       <div className="flex min-w-0 items-center gap-2">
@@ -98,7 +90,7 @@ function SourceCard({
         variant="outline"
         size="sm"
         className="mt-2"
-        onClick={() => onOpen(source)}
+        onClick={onOpen}
       >
         <SearchIcon />
         查看原文
@@ -116,21 +108,10 @@ const KnowledgeSearchRender: ToolCallMessagePartComponent = ({
   const parsed = useMemo(() => parseResult(result), [result]);
   const running = status?.type === "running";
 
-  const openSource = (source: KnowledgeSource) => {
-    // 跳页优先取第一个 bbox 的页码（比 page_start 更贴近命中位置）
-    const highlights = (source.bboxes ?? []).map(([page, x0, y0, x1, y1]) => ({
-      page,
-      bbox: [x0, y0, x1, y1] as const,
-    }));
-    pdfPreview.open({
-      kbId: source.kb_id,
-      docId: source.doc_id,
-      docName: source.doc_name,
-      // 片段溯源走受限模式：只渲染命中页，避免整篇内容暴露
-      mode: "snippet",
-      page: source.bboxes?.[0]?.[0] ?? source.page_start ?? undefined,
-      highlights,
-    });
+  const openSource = (index: number) => {
+    // 溯源走右侧抽屉（非模态）：携带整批来源，打开后可随时切换
+    if (!parsed) return;
+    pdfPreview.openPanel({ sources: parsed.sources, activeIndex: index });
   };
 
   const label = running
@@ -158,11 +139,11 @@ const KnowledgeSearchRender: ToolCallMessagePartComponent = ({
         <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
           {parsed ? (
             <>
-              {parsed.sources.map((source) => (
+              {parsed.sources.map((source, index) => (
                 <SourceCard
                   key={`${source.doc_id}-${source.position}`}
                   source={source}
-                  onOpen={openSource}
+                  onOpen={() => openSource(index)}
                 />
               ))}
               {parsed.notes.map((note) => (

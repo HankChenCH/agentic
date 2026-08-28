@@ -14,16 +14,21 @@ agentic-client/                  # this directory is its own git repo (client/ a
 ├── src/
 │   ├── App.tsx              # createBrowserRouter + RouterProvider（AgenticRuntimeProvider 挂在路由外层）+ sonner Toaster
 │   ├── agentic-runtime.tsx  # HttpAgent + useAgUiRuntime（SSE 地址来自 @/lib/config）
-│   ├── pages/               # 路由页面：chat-page（聊天，含侧栏导航）、knowledge-list-page（知识库卡片列表）、
-│   │                        #   knowledge-detail-page（/knowledge/:kbId 文档管理）
+│   ├── pages/               # 路由页面：chat-page（纯对话；右上角「管理」按钮进管理侧）
+│   ├── pages/admin/         # 管理侧：admin-home-page（模块启动页）+ knowledge-list-page / knowledge-detail-page
+│   │                        #   + memory-graph-page（记忆图谱：React Flow 径向布局，时点回放/详情面板）
 │   ├── components/assistant-ui/  # assistant-ui chat UI (thread, reasoning, markdown-text, tool-*, ...)
 │   ├── components/ui/        # shadcn/ui 原语（base-nova 风格，Base UI 原语；table/input/select/dialog/... ）
-│   ├── components/knowledge/ # 知识库业务组件：卡片列表、状态徽章、表单/上传/确认弹窗、文档表格
+│   ├── components/shared/    # 聊天/管理两侧共用组件：confirm-dialog、PDF 预览通道（provider/查看器/预览弹窗/溯源抽屉）
+│   ├── components/knowledge/ # 知识库管理域组件：卡片列表、状态徽章、表单/上传弹窗、文档表格
+│   ├── components/memory-graph/ # 记忆图谱域组件：layout.ts（快照→径向布局+索引，实体类型配色）、
+│   │                        #   nodes/node-types（实体卡/事件卡）、detail-panel、legend
 │   ├── hooks/               # use-conversation-list（聊天）+ use-knowledge-list/-base/-documents（知识库，
-│   │                        #   含 pending/processing/deleting 状态的条件轮询）
+│   │                        #   含 pending/processing/deleting 状态的条件轮询）+ use-memory-graph（快照）
 │   ├── lib/                 # utils.ts (cn())、config.ts (REST_BASE/SSE_URL)、http.ts (axios 信封封装)、
-│   │                        #   format.ts (文件大小/时间格式化)
-│   └── services/            # REST 服务层：conversation-service、knowledge-service + types.ts（后端 snake_case 镜像类型）
+│   │                        #   format.ts (文件大小/时间格式化)、admin-modules.ts（管理模块注册表）
+│   └── services/            # REST 服务层：conversation-service、knowledge-service、memory-service
+│   │                        #   （图快照契约是 camelCase 特例）+ types.ts（后端 snake_case 镜像类型）
 ├── .oxlintrc.json
 └── package.json
 ```
@@ -61,8 +66,11 @@ changing either side, keep the event sequence/format consistent with the server.
 `hooks/use-*.ts`（状态 + 条件轮询 + toast）→ 组件。新增管理页面沿用这套分层。
 
 **路由**：react-router（`createBrowserRouter`）。`AgenticRuntimeProvider` 在
-路由外层，保证聊天 runtime 状态在页面切换间不丢。路由：`/` 聊天、
-`/knowledge` 知识库列表、`/knowledge/:kbId` 详情。
+路由外层，保证聊天 runtime 状态在页面切换间不丢。聊天与管理侧分离：`/`
+纯对话（右上角「管理」按钮进入管理侧）；`/admin` 管理控制台首页是
+「模块即 App」的启动页（无菜单栏，模块清单在 `lib/admin-modules.ts` 注册表，
+新模块 = 注册表加一条 + 路由加一条）；`/admin/knowledge` 知识库列表、
+`/admin/knowledge/:kbId` 详情；旧 `/knowledge*` 路径重定向到 `/admin/knowledge*` 兜底。
 
 ## Conventions
 
@@ -89,7 +97,8 @@ changing either side, keep the event sequence/format consistent with the server.
 - 后端地址统一在 `src/lib/config.ts`（`REST_BASE`/`SSE_URL`，来自
   `import.meta.env.VITE_API_BASE`/`VITE_SSE_URL`，兜底 `http://127.0.0.1:8000`
   —— API 根）。REST 端点按领域挂顶级前缀：会话 `/agentic/conversation...`、
-  聊天 SSE `/agentic/chat`、知识库 `/knowledge...`、绑定 `/agent/.../knowledge`；
+  聊天 SSE `/agentic/chat`、知识库 `/knowledge...`、绑定 `/agent/.../knowledge`、
+  记忆图谱 `/memory/graph`（响应字段 camelCase 特例，类型见 memory-service.ts）；
   service 层写完整相对路径（相对 API 根），不再共享单一 `/agentic` 前缀。
 - **shadcn CLI 路径坑**：`yarn shadcn add <comp>` 时 CLI 解析不到 `@` 别名
   （paths 只在 `tsconfig.app.json`），会把文件写到项目根目录的字面量 `@/`

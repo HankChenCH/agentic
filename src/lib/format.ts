@@ -1,3 +1,5 @@
+import type { KnowledgeSource } from "@/services/types";
+
 /**
  * 展示层格式化工具（纯函数，无副作用）。
  */
@@ -26,4 +28,13 @@ export function formatDateTime(iso: string | null | undefined): string {
     `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
     `${pad(date.getHours())}:${pad(date.getMinutes())}`
   );
+}
+
+/** 检索来源页码（后端 0 起存储，展示 +1；起止同页合并），无页码信息返回空串 */
+export function formatSourcePages(source: KnowledgeSource): string {
+  if (source.page_start == null) return "";
+  if (source.page_end == null || source.page_start === source.page_end) {
+    return `p.${source.page_start + 1}`;
+  }
+  return `p.${source.page_start + 1}-${source.page_end + 1}`;
 }

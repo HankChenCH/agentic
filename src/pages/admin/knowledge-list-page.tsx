@@ -1,24 +1,24 @@
 import { useState, type FC } from "react";
 import { useNavigate } from "react-router";
 import {
+  ArrowLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   DatabaseIcon,
-  MessageSquareIcon,
   PlusIcon,
   RefreshCwIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ConfirmDialog } from "@/components/knowledge/confirm-dialog";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { KnowledgeCardList } from "@/components/knowledge/knowledge-card-list";
 import { KnowledgeFormDialog } from "@/components/knowledge/knowledge-form-dialog";
 import { useKnowledgeList } from "@/hooks/use-knowledge-list";
 import type { BackendKnowledgeBase } from "@/services/types";
 
 /**
- * 知识库列表页（/knowledge）。
+ * 知识库列表页（/admin/knowledge，管理侧知识库模块首屏）。
  *
  * 卡片网格 + 服务端分页；新建/编辑走表单弹窗，删除走确认弹窗。
  * 过渡态（入库/删除中）由 hook 自动轮询刷新。
@@ -60,20 +60,22 @@ export const KnowledgeListPage: FC = () => {
   return (
     <div className="h-screen overflow-auto bg-background">
       <div className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 p-6 lg:p-8">
-        {/* 知识库页无侧栏，返回聊天入口与详情页「返回知识库」同模式 */}
+        {/* 管理侧模块页无侧栏，返回控制台与详情页「返回知识库」同模式 */}
         <header className="flex flex-col gap-3">
           <Button
             variant="ghost"
             size="sm"
             className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => void navigate("/")}
+            onClick={() => void navigate("/admin")}
           >
-            <MessageSquareIcon />
-            返回对话
+            <ArrowLeftIcon />
+            返回控制台
           </Button>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="font-heading text-xl font-semibold">知识库</h1>
+              <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                知识库
+              </h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 管理知识库与文档，供对话检索引用
               </p>
@@ -93,7 +95,7 @@ export const KnowledgeListPage: FC = () => {
             ))}
           </div>
         ) : error ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl ring-1 ring-foreground/10 py-16">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-border/80 bg-card py-16 shadow-card">
             <p className="text-sm text-muted-foreground">
               列表加载失败：{error.message}
             </p>
@@ -103,8 +105,10 @@ export const KnowledgeListPage: FC = () => {
             </Button>
           </div>
         ) : items.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16">
-            <DatabaseIcon className="size-10 text-muted-foreground/50" />
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed py-16">
+            <span className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <DatabaseIcon className="size-6" />
+            </span>
             <p className="text-sm text-muted-foreground">
               还没有知识库，创建一个开始积累资料吧
             </p>
@@ -116,7 +120,7 @@ export const KnowledgeListPage: FC = () => {
         ) : (
           <KnowledgeCardList
             items={items}
-            onOpen={(kb) => navigate(`/knowledge/${kb.id}`)}
+            onOpen={(kb) => navigate(`/admin/knowledge/${kb.id}`)}
             onEdit={openEdit}
             onDelete={setDeleting}
             onToggleEnabled={(kb) =>

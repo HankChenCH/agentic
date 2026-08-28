@@ -11,7 +11,7 @@ import { formatFileSize } from "@/lib/format";
 import {
   PdfViewer,
   type PdfHighlight,
-} from "@/components/knowledge/pdf-viewer";
+} from "@/components/shared/pdf-viewer";
 
 export type { PdfHighlight };
 

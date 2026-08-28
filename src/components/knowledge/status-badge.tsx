@@ -11,10 +11,10 @@ import { cn } from "@/lib/utils";
 import type { KnowledgeStatus } from "@/services/types";
 
 /**
- * 知识库/文档通用状态徽章。
+ * 知识库/文档通用状态徽章（暖砂语义色）。
  *
- * 颜色只做语义区分，不引入新设计令牌：failed 用 destructive 语义色，
- * 其余用 tailwind 调色板 + 透明度，与 shadcn 的 muted/popover 体系共存。
+ * 等待/停用用中性暖灰，处理/删除中用琥珀/橙的过渡色，就绪用橄榄绿、
+ * 启用用品牌焦糖橘（「开」状态与主色对齐），失败用 destructive 赭红。
  * status=failed 且带 error_message 时包一层 Tooltip 展示失败原因。
  */
 
@@ -28,15 +28,15 @@ const STATUS_META: Record<
   },
   processing: {
     label: "处理中",
-    className: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    className: "bg-amber-500/15 text-amber-700",
   },
   ready: {
     label: "就绪",
-    className: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+    className: "bg-emerald-500/15 text-emerald-700",
   },
   enabled: {
     label: "已启用",
-    className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    className: "bg-primary/15 text-primary",
   },
   disabled: {
     label: "已停用",
@@ -44,7 +44,7 @@ const STATUS_META: Record<
   },
   deleting: {
     label: "删除中",
-    className: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
+    className: "bg-orange-500/15 text-orange-700",
   },
   failed: {
     label: "失败",

@@ -48,7 +48,7 @@ export const KnowledgeCardList: FC<KnowledgeCardListProps> = ({
       {items.map((kb) => (
         <Card
           key={kb.id}
-          className="group cursor-pointer transition-all hover:shadow-sm hover:ring-foreground/25"
+          className="group cursor-pointer border-border/80 shadow-card transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-card-hover"
           onClick={() => onOpen(kb)}
         >
           <CardHeader>

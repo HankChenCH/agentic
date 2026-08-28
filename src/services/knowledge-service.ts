@@ -129,10 +129,17 @@ export const knowledgeService = {
    * 拉取文档原始文件字节（预览用，二进制响应不走信封）。
    * GET /knowledge/{kbId}/document/{docId}/file
    * 上传上限 50MB，超时放宽到 60s（实例默认 30s 偏紧）。
+   * ``signal``：调用方（PdfViewer）在文档切换/重挂载时中断过期请求，
+   * 避免大文件重复下载。
    */
-  async getDocumentFile(kbId: string, docId: string): Promise<ArrayBuffer> {
+  async getDocumentFile(
+    kbId: string,
+    docId: string,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
     return getBinary(`/knowledge/${kbId}/document/${docId}/file`, {
       timeout: 60_000,
+      signal,
     });
   },
 

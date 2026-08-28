@@ -28,18 +28,24 @@ export const AgenticRuntimeProvider = ({
   // 订阅 RunFinished：轮次结束后轮询标题并刷新列表）。
   // 返回的 adapter 是 threadList adapter，引用随列表/回调变化 → 驱动 runtime 刷新。
   // 详见 src/hooks/use-conversation-list.ts。
-  const { adapter: threadListAdapter, deleteConversation } =
-    useConversationList(agent);
+  const {
+    adapter: threadListAdapter,
+    deleteConversation,
+    hasMore,
+    isLoadingMore,
+    loadMoreConversations,
+  } = useConversationList(agent);
 
   const runtime = useAgUiRuntime({
     agent,
     adapters: { threadList: threadListAdapter },
   });
 
-  // 删除等会话操作经 context 下发给侧栏等 runtime 之外的组件（确认弹窗入口）
+  // 删除、加载更多等会话操作与分页状态经 context 下发给侧栏等
+  // runtime 之外的组件（确认弹窗 / 加载更多按钮入口）
   const actions = useMemo(
-    () => ({ deleteConversation }),
-    [deleteConversation],
+    () => ({ deleteConversation, loadMoreConversations, hasMore, isLoadingMore }),
+    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore],
   );
 
   return (

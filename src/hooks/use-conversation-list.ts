@@ -51,12 +51,16 @@ export interface UseConversationListOptions {
 }
 
 /**
- * 会话操作能力（目前仅删除），经 context 下发给 runtime 之外的组件（侧栏
- * 删除按钮 + 确认弹窗）。Provider 挂在 AgenticRuntimeProvider
+ * 会话操作与列表分页能力，经 context 下发给 runtime 之外的组件（侧栏
+ * 删除按钮 + 确认弹窗 + 加载更多按钮）。Provider 挂在 AgenticRuntimeProvider
  * （见 agentic-runtime.tsx），实现来自 useConversationList 的返回值。
  */
 export interface ConversationActions {
   deleteConversation: (threadId: string) => Promise<boolean>;
+  /** 追加加载下一页会话；hasMore/isLoadingMore 驱动按钮显隐与禁用态 */
+  loadMoreConversations: () => Promise<void>;
+  hasMore: boolean;
+  isLoadingMore: boolean;
 }
 
 export const ConversationActionsContext =
@@ -81,7 +85,10 @@ export const useConversationActions = (): ConversationActions => {
  * - `isLoading`: 列表首次加载态
  * - `error`: 列表加载错误（网络/业务异常），null 表示无错误
  * - `conversations`: 后端原始数据（含 id/title/current_turn_id 等）
- * - `refreshConversations`: 手动刷新列表（新建/删除会话后调用）
+ * - `refreshConversations`: 手动刷新列表（新建/删除会话后调用，重置回第 1 页）
+ * - `hasMore`: 服务端还有更早的会话可加载（已加载页数 × pageSize < total）
+ * - `isLoadingMore`: 加载更多进行中
+ * - `loadMoreConversations`: 追加加载下一页会话（失败有 toast 提示）
  * - `deleteConversation`: 删除会话（硬删除）。删的是当前会话时自动切到全新
  *   空会话并刷新列表；返回是否删除成功（失败已有 toast 提示）
  */
@@ -92,6 +99,9 @@ export interface UseConversationListResult {
   error: Error | null;
   conversations: BackendConversation[];
   refreshConversations: () => Promise<void>;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  loadMoreConversations: () => Promise<void>;
   deleteConversation: (threadId: string) => Promise<boolean>;
 }
 
@@ -116,6 +126,14 @@ export function useConversationList(
   const [conversations, setConversations] = useState<BackendConversation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  // 分页进度：page 是已加载到的页码（refresh 重置回 1），total 为后端总会话
+  // 数。加载更多按 page+1 追加而非整表替换，侧栏可回看更早的会话。
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // loadMore 并发锁：state 异步更新，双击按钮时闭包里读到的 isLoadingMore
+  // 还是旧值，用 ref 才能挡住并发的第二发请求。
+  const loadMoreLockRef = useRef(false);
 
   // runtime 主线程 id 的镜像（喂给 adapter.threadId）。平时保持 undefined，
   // 不干预既有切换路径；仅在删除当前激活会话后指向一个全新 id —— runtime
@@ -129,6 +147,8 @@ export function useConversationList(
     setError(null);
     try {
       const result = await conversationService.listConversations(1, pageSize);
+      setPage(1);
+      setTotal(result.total ?? 0);
       setConversations(result.items ?? []);
     } catch (err) {
       // 捕获后写入 error 状态，避免 useEffect 里的 unhandled rejection；
@@ -138,6 +158,40 @@ export function useConversationList(
       setIsLoading(false);
     }
   }, [pageSize]);
+
+  // 服务端还有更早的会话：以页数 × pageSize 对 total 判断，与追加时按
+  // thread_id 去重无关，不会因去重漏算而卡在"永远差一条"。
+  const hasMore = page * pageSize < total;
+
+  // 追加加载下一页。两次请求之间若新建了会话，后页数据会整体前移造成
+  // 跨页重复，按 thread_id 去重；失败 toast 提示且不动既有列表。
+  const loadMoreConversations = useCallback(async () => {
+    if (loadMoreLockRef.current) return;
+    loadMoreLockRef.current = true;
+    setIsLoadingMore(true);
+    try {
+      const result = await conversationService.listConversations(
+        page + 1,
+        pageSize,
+      );
+      setPage(page + 1);
+      setTotal(result.total ?? 0);
+      setConversations((prev) => {
+        const seen = new Set(prev.map((c) => c.thread_id));
+        return [
+          ...prev,
+          ...(result.items ?? []).filter((c) => !seen.has(c.thread_id)),
+        ];
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof BizError ? err.message : "加载更多会话失败，请稍后重试",
+      );
+    } finally {
+      loadMoreLockRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [page, pageSize]);
 
   useEffect(() => {
     void refreshConversations();
@@ -316,6 +370,9 @@ export function useConversationList(
     error,
     conversations,
     refreshConversations,
+    hasMore,
+    isLoadingMore,
+    loadMoreConversations,
     deleteConversation,
   };
 }

@@ -20,19 +20,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ConfirmDialog } from "@/components/knowledge/confirm-dialog";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DocumentFormDialog } from "@/components/knowledge/document-form-dialog";
 import { DocumentTable } from "@/components/knowledge/document-table";
 import { KnowledgeFormDialog } from "@/components/knowledge/knowledge-form-dialog";
 import { KnowledgeStatusBadge } from "@/components/knowledge/status-badge";
 import { UploadDocumentDialog } from "@/components/knowledge/upload-document-dialog";
-import { usePdfPreview } from "@/components/knowledge/pdf-preview-provider";
+import { usePdfPreview } from "@/components/shared/pdf-preview-provider";
 import { useKnowledgeBase } from "@/hooks/use-knowledge-base";
 import { useKnowledgeDocuments } from "@/hooks/use-knowledge-documents";
 import type { BackendKnowledgeDocument } from "@/services/types";
 
 /**
- * 知识库详情页（/knowledge/:kbId）。
+ * 知识库详情页（/admin/knowledge/:kbId）。
  *
  * 头部为知识库信息 + 操作（上传文档 / 编辑 / 启停 / 删除），主体为文档
  * 表格。文档解析/删除为异步，列表由 hook 自动轮询跟进状态。
@@ -50,7 +50,7 @@ export const KnowledgeDetailPage: FC = () => {
   useEffect(() => {
     if (kb.notFound) {
       toast.error("知识库不存在或已被删除");
-      void navigate("/knowledge", { replace: true });
+      void navigate("/admin/knowledge", { replace: true });
     }
   }, [kb.notFound, navigate]);
 
@@ -74,7 +74,7 @@ export const KnowledgeDetailPage: FC = () => {
             variant="ghost"
             size="sm"
             className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => void navigate("/knowledge")}
+            onClick={() => void navigate("/admin/knowledge")}
           >
             <ArrowLeftIcon />
             返回知识库
@@ -103,7 +103,7 @@ export const KnowledgeDetailPage: FC = () => {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2.5">
-                  <h1 className="font-heading truncate text-xl font-semibold">
+                  <h1 className="font-heading truncate text-2xl font-semibold tracking-tight">
                     {kb.knowledgeBase.name}
                   </h1>
                   <KnowledgeStatusBadge status={kb.knowledgeBase.status} />
@@ -166,7 +166,7 @@ export const KnowledgeDetailPage: FC = () => {
             ))}
           </div>
         ) : docs.error ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl ring-1 ring-foreground/10 py-16">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-border/80 bg-card py-16 shadow-card">
             <p className="text-sm text-muted-foreground">
               文档加载失败：{docs.error.message}
             </p>
@@ -180,8 +180,10 @@ export const KnowledgeDetailPage: FC = () => {
             </Button>
           </div>
         ) : docs.documents.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16">
-            <FileTextIcon className="size-10 text-muted-foreground/50" />
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed py-16">
+            <span className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <FileTextIcon className="size-6" />
+            </span>
             <p className="text-sm text-muted-foreground">
               还没有文档，上传后自动解析入库
             </p>
@@ -293,7 +295,7 @@ export const KnowledgeDetailPage: FC = () => {
         destructive
         onConfirm={async () => {
           const ok = await kb.deleteKnowledgeBase();
-          if (ok) void navigate("/knowledge");
+          if (ok) void navigate("/admin/knowledge");
           return ok;
         }}
       />

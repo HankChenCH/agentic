@@ -29,6 +29,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { Button } from "@/components/ui/button";
 import { BizError } from "@/lib/http";
 import { cn } from "@/lib/utils";
+import { PdfRenderBoundary } from "@/components/shared/pdf-render-boundary";
 import { knowledgeService } from "@/services/knowledge-service";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -130,9 +131,15 @@ export const PdfViewer: FC<PdfViewerProps> = ({
   // 缩放锚点：变更前视口顶所在页 + 页内偏移比例，缩放布局完成后恢复
   const scaleAnchorRef = useRef<{ page: number; frac: number } | null>(null);
 
-  // 挂载（或切换文档/点重试）时拉取文件字节并重置视图状态
+  // 挂载（或切换文档/点重试）时拉取文件字节并重置视图状态。
+  // 过期响应防护：StrictMode 双执行或快速切换文档会产生并发请求，只有
+  // 当前这轮 effect 的响应允许落地——否则迟到的旧响应会再换一次 file
+  // 引用，react-pdf 渲染期对前后 file 做 dequal 深比较时会踩到已被
+  // pdf.js 转移（detach）给 worker 的旧缓冲区，渲染期抛错打崩整页
   useEffect(() => {
     if (!docId || !kbId) return;
+    const controller = new AbortController();
+    let cancelled = false;
     setData(null);
     setNumPages(null);
     numPagesRef.current = null;
@@ -147,9 +154,12 @@ export const PdfViewer: FC<PdfViewerProps> = ({
     setFetching(true);
     setFetchError(null);
     knowledgeService
-      .getDocumentFile(kbId, docId)
-      .then((buf) => setData(buf))
+      .getDocumentFile(kbId, docId, controller.signal)
+      .then((buf) => {
+        if (!cancelled) setData(buf);
+      })
       .catch((err: unknown) => {
+        if (cancelled) return;
         const message =
           err instanceof BizError || err instanceof Error
             ? err.message
@@ -157,7 +167,13 @@ export const PdfViewer: FC<PdfViewerProps> = ({
         setFetchError(message);
         toast.error(`文档预览失败：${message}`);
       })
-      .finally(() => setFetching(false));
+      .finally(() => {
+        if (!cancelled) setFetching(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [docId, kbId, reloadKey]);
 
   const handleDocumentLoad = useCallback(async (pdf: PDFDocumentProxy) => {
@@ -261,7 +277,10 @@ export const PdfViewer: FC<PdfViewerProps> = ({
       visibleRatioRef.current.clear();
       visiblePagesRef.current.clear();
     };
-  }, [numPages, pageSizes]);
+    // snippet 模式切换来源会整批替换渲染页元素，必须重挂观察器到新
+    // data-page 节点，否则新页无人观察、工具栏页码停在旧来源的页码；
+    // document 模式 snippetPages 恒为 null，不触发重挂
+  }, [numPages, pageSizes, snippetPages]);
 
   // 溯源跳页：initialPage（0 起）变更时滚动定位。依赖 pageSizes 就绪后
   // 执行——占位尺寸已准确，目标页即使尚未栅格化 offsetTop 也正确
@@ -422,7 +441,13 @@ export const PdfViewer: FC<PdfViewerProps> = ({
             </Button>
           </div>
         ) : data && fileProps ? (
-          <Document
+          <PdfRenderBoundary
+            /* key 绑定文档与重试代际：切换文档/点重试时边界重挂载清零
+               错误状态（见 PdfRenderBoundary 注释） */
+            key={`${kbId ?? ""}:${docId ?? ""}:${reloadKey}`}
+            onRetry={handleRetry}
+          >
+            <Document
             file={fileProps}
             options={PDF_OPTIONS}
             onLoadSuccess={handleDocumentLoad}
@@ -515,6 +540,7 @@ export const PdfViewer: FC<PdfViewerProps> = ({
                   })
               : null}
           </Document>
+          </PdfRenderBoundary>
         ) : null}
       </div>
     </div>
