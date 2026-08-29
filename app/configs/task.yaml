@@ -1,3 +1,9 @@
-# 任务队列配置：默认指向 docker compose 的 redis（127.0.0.1:6379，0/1 分别作 broker 与结果库）
-broker: ${CELERY_BROKER_URL:redis://127.0.0.1:6379/0}
-backend: ${CELERY_RESULT_BACKEND:redis://127.0.0.1:6379/1}
+# 任务队列配置：broker/backend 以「驱动 + key 引用」声明（同 vector_db 顶层 embedding 指向 llm 分节的形式）。
+# driver 对应连接配置分节（redis → redis.yaml），provider 引用其 providers key，
+# 连接事实统一归属 redis.yaml；与取消信号存储等直连能力共用同一 Redis 实例（key 前缀天然隔离）。
+broker:
+  driver: redis
+  provider: redis
+backend:
+  driver: redis
+  provider: redis

@@ -1,0 +1,9 @@
+# Redis 连接配置（default + providers 形式，同 db / vector_db / filesystem）：
+# 取消信号存储等直接使用 Redis 的能力与 Celery 队列共用的连接事实归属本文件
+# ——task.yaml 的 broker/backend 经驱动+key引用指向这里的 entry
+# （默认同 entry，即同实例 db0，key 前缀隔离）
+default: redis
+providers:
+  redis:
+    type: standalone
+    url: ${REDIS_URL:redis://127.0.0.1:6379/0}

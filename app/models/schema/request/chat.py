@@ -17,3 +17,8 @@ class ChatRequest(BaseModel):
     threadId: UUID = Field(..., description="会话标识")
     runId: str = Field(..., description="会话轮次标识", min_length=1, max_length=36)
     messages: List[ChatMessage] = Field(..., description="消息列表")
+
+class CancelRequest(BaseModel):
+    # 显式取消按 thread 作用域：一个会话同一时刻只有一个活跃轮次，前端
+    # 停止按钮无需跟踪 runId
+    threadId: UUID = Field(..., description="要取消当前轮次的会话标识")

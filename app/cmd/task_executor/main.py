@@ -9,9 +9,10 @@ close 容器）；本文件只保留任务队列特有部分：broker/backend �
 
 import wireup.integration.celery
 from celery import Celery
+from celery.signals import worker_process_init
 
-from app.core.config import AppConfig
-from app.core.container import build_sync_container
+from app.core.config import AppConfig, resolve_url
+from app.core.container import build_sync_container, reset_singleton_cache
 from app.core.logging import setup_logging
 
 # 日志先于一切（与 HTTP 入口一致）；.env 由 core/config/loader.py 在首次读取配置时加载
@@ -29,8 +30,10 @@ celery_app = Celery(
     include=["app.tasks"],
 )
 celery_app.conf.update(
-    broker_url=app_config.task.broker,
-    result_backend=app_config.task.backend,
+    # broker/backend 以驱动+key引用声明（task.yaml → redis.yaml providers），
+    # 引用失效在此启动期 fail-fast（发送方进程导入本模块时同样生效）
+    broker_url=resolve_url(app_config.task.broker, redis=app_config.redis),
+    result_backend=resolve_url(app_config.task.backend, redis=app_config.redis),
     # 任务载荷只需 JSON 可序列化的原始数据，禁用 pickle
     task_serializer="json",
     result_serializer="json",
@@ -38,3 +41,13 @@ celery_app.conf.update(
 )
 
 wireup.integration.celery.setup(container, celery_app)
+
+
+@worker_process_init.connect
+def _discard_inherited_singletons(**_kwargs):
+    """prefork 子进程启动即丢弃继承的单例缓存（含潜在的重资源连接）。
+
+    见 core.container.reset_singleton_cache；仅 prefork 池触发（fork 才有
+    继承问题），solo 池不触发也不需要。
+    """
+    reset_singleton_cache(container)

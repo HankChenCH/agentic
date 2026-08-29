@@ -58,6 +58,24 @@ def test_extract_structure_degrades_to_empty_on_garbage():
     assert extract_structure(CannedLLM("[1,2,3] 不是对象"), "x", NOW).is_empty()
 
 
+REF_JSON = """{
+  "entities": [
+    {"key": "ghost", "type": "ORG", "name": "#S14", "aliases": ["#S13", "禹通"]},
+    {"key": "real", "type": "ORG", "name": "禹通公司", "aliases": ["#T8821ab", "#实体9"]}
+  ]
+}"""
+
+
+def test_extract_structure_filters_internal_ref_tokens():
+    """渲染层溯源编号（#S/#T/§E/#实体）不是实体名或别名——一律拦在入库前。"""
+    result = extract_structure(CannedLLM(REF_JSON), "x", NOW)
+
+    assert [e.key for e in result.entities] == ["real"]
+    real = result.entities[0]
+    assert real.name == "禹通公司"
+    assert real.aliases == ()
+
+
 def test_resolve_time_hint_variants():
     assert resolve_time_hint("2026-08-25", NOW) == datetime(2026, 8, 25, tzinfo=timezone.utc)
     assert resolve_time_hint("2026年8月25日", NOW) == datetime(2026, 8, 25, tzinfo=timezone.utc)

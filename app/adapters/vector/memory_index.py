@@ -37,6 +37,13 @@ def vector_object_id(kind: str, ref_id: int) -> str:
     return str(uuid5(NAMESPACE_URL, f"memory/{kind}/{ref_id}"))
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
 @dataclass(frozen=True)
 class VectorEntry:
     """一次嵌入写入的最小单元。"""
@@ -109,6 +116,8 @@ class MemoryVectorIndex:
         """混合检索（alpha<1 混 BM25）：过采样取回后按 kind 筛选截断。
 
         空库/查询失败返回空命中——召回失败不阻断对话主链路。
+        注意 hit.score 是结果窗口内的相对融合分，只可用于排序/展示，
+        不可与绝对相似度阈值比较（绝对判定用 text_cosine）。
         """
         try:
             store = self._open()
@@ -119,6 +128,25 @@ class MemoryVectorIndex:
         hits = [self._hit(doc, score) for doc, score in pairs]
         wanted = [h for h in hits if h.kind in kinds]
         return wanted[:top_k]
+
+    def text_cosine(self, query: str, contents: list[str]) -> list[float]:
+        """查询词与若干候选文本的真实余弦相似度（实体消歧的判定依据）。
+
+        hybrid 融合分随查询漂移且封顶 1.0，曾导致「学校并入公司」的实体
+        错合并（见 docs/memory-v2-design.md §8 教训）；本方法用与写入同源
+        的嵌入模型（工厂注入 store.embeddings）在客户端现算绝对余弦。
+        任何失败返回全 0——失败方向 =「不相似」，消歧宁可新建不错合并。
+        """
+        if not contents:
+            return []
+        try:
+            embeddings = self._open().embeddings
+            query_vec = embeddings.embed_query(query)
+            doc_vecs = embeddings.embed_documents(list(contents))
+            return [_cosine(query_vec, doc_vec) for doc_vec in doc_vecs]
+        except Exception:
+            self.logger.warning("memory text cosine failed (%d candidates)", len(contents), exc_info=True)
+            return [0.0] * len(contents)
 
     def _open(self):
         # 幂等 ensure：每次显式传 schema，collection 已存在则直接复用；

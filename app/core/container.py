@@ -42,3 +42,18 @@ def build_async_container() -> "AsyncContainer":
 def build_sync_container() -> "SyncContainer":
     """任务执行器用：wireup.integration.celery.setup 要求 sync 容器。"""
     return wireup.create_sync_container(injectables=_injectables())
+
+
+def reset_singleton_cache(container: "SyncContainer") -> None:
+    """清空容器的单例缓存，所有单例在下次解析时重建。
+
+    Celery prefork 加固用：worker 子进程经 fork 继承父进程内存后，丢弃
+    fork 前已创建的单例——Engine / 向量库客户端等持有 TCP 连接，fork 后
+    父子进程共用同一批 socket 会相互踩踏。正常情况下重资源是 lazy 的
+    （父进程只解析过纯数据的 AppConfig），此处清空属防御性：即使未来有人
+    在 fork 前触发了重资源创建，子进程也会丢弃重建而非共用。solo 等
+    不 fork 的 pool 不触发 worker_process_init，天然不受影响。
+
+    wireup 无公开 API，此处直接清其内部存储；升级 wireup 时需回归验证。
+    """
+    container._global_scope_objects.clear()

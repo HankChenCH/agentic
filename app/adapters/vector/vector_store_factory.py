@@ -68,6 +68,16 @@ class VectorStoreFactory:
         client = self._client_for(key, entry, builder)
         builder.drop(client, index_name)
 
+    def close(self) -> None:
+        """关闭并清空缓存的供应商客户端（进程优雅关闭时调用）。
+
+        逐客户端经注册构建器释放（如 weaviate 的 gRPC 通道）；close 是
+        快速失败语义，best-effort 容错由调用方（HTTP lifespan）负责。
+        """
+        for key, client in self._clients.items():
+            self._resolve(key)[1].close(client)
+        self._clients.clear()
+
     @property
     def _config(self) -> VectorDBConfig:
         return self.app_config.vector_db

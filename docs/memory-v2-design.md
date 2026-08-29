@@ -127,7 +127,7 @@ sequenceDiagram
     AGT->>MS: remember(query, turn_messages, thread_id, turn_id)
     Note over MS: enabled=false 跳过；拼 transcript
     Note over MS,LLM: ❶ 结构化抽取(LLM×1)<br/>transcript+当前时间锚 → {entities,episodes,facts}<br/>解析失败→本轮放弃 []
-    Note over MS,REPO: ❷ 实体消歧(程序化)<br/>名/别名精确命中→复用；未命中→向量top3<br/>相似度≥阈值→复用+link_alias(is_user不参与)；否则新建
+    Note over MS,REPO: ❷ 实体消歧(程序化·两段式)<br/>名/别名精确命中→复用；未命中→向量top3候选发现<br/>→客户端余弦(text_cosine)≥阈值→复用+回填别名<br/>(is_user不参与·类型冲突拒绝)；否则新建
     Note over MS,LLM: ❸ 陈述裁决(LLM×2, Mem0算子)<br/>新facts vs 涉及主体ACTIVE陈述 → ADD/REPLACE(id)/SKIP<br/>降级规则:单值取代·多值并存·同值SKIP<br/>origin=MANUAL 恒SKIP
     Note over MS,IDX: ❹ 落库+向量同步<br/>insert/supersede → upsert(entity/statement/episode三类)·批32<br/>id=kind_refId 同id覆盖 · REPLACE旧向量删除
 ```
@@ -238,6 +238,16 @@ ensure + 竞态重试一次、批 32 写入、best-effort 删除、检索失败�
 检索侧以 3 倍过采样取回后按 kind 客户端筛（VectorStore 接口不暴露属性过滤）。
 embedding=bge-m3(既有)；换模型需 drop collection + `rebuild()` 全量重嵌。
 
+> **事故教训（2026-08-28）**：`similarity_search_with_score` 返回的是 hybrid
+> 融合分——结果窗口内的相对归一值，随查询漂移且封顶 1.0（实测无关查询
+> 0.65、错误领域匹配 1.0），**不可与绝对相似度阈值比较**。曾因此把
+> 「广州市卫生职业技术学院」以融合分 1.0（真实余弦仅 0.44）错并进
+> 「广东禹通互联网科技有限公司」。修复后消歧为两段式：search 只做候选
+> 发现（分数仅排序），合并判定用 `MemoryVectorIndex.text_cosine` 客户端
+> 现算的余弦 ≥ 阈值 + entity_type 一致性护栏；内部溯源引用（`#S13`/`§E3`
+> 形态）一律不得作为实体名/别名入库。存量错档经
+> `python -m app.cmd.admin memory repair --apply` 修复（幂等）。
+
 **配置**：…（下表）；另含 `recall.fast_limit`(10)：快速回忆块的事实行上限。
 
 **配置 `app/core/config/memory.py` + `configs/memory.yaml`**：
@@ -249,7 +259,7 @@ embedding=bge-m3(既有)；换模型需 drop collection + `rebuild()` 全量重�
 | recall.expansion_limit | 12 | 1-hop 扩散限额 |
 | score.{relevance,recency,importance}_weight | .5/.2/.3 | 评分权重 |
 | score.recency_half_life_days | 14 | 衰减半衰期 |
-| resolution.similarity_threshold | 0.85 | 实体消歧阈值 |
+| resolution.similarity_threshold | 0.85 | 实体消歧阈值（作用于客户端现算的嵌入余弦） |
 | deep.max_rounds | 3 | 深度回忆轮数上限 |
 | render.max_fragments | 3 | 片段数上限 |
 | render.topology_max_edges / evidence_max_quotes | 8 / 3 | 片段内裁剪 |

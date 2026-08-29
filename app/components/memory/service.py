@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import logging
 import time
 from datetime import datetime, timezone
 from typing import List
@@ -44,6 +45,9 @@ from app.models.domain.agentic import (
 
 # “用户”节点的规范名：抽取出的 user 键恒定映射到该实体
 USER_ENTITY_NAME = "用户"
+
+# 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（惯例同 api/exception_handlers）
+logger = logging.getLogger(__name__)
 
 # 会话内已投喂记忆登记的默认存活时长
 _REGISTRY_TTL_SECONDS = 12 * 3600
@@ -193,10 +197,19 @@ class MemoryService:
         return created
 
     def _resolve_entities(self, candidates: tuple[ExtractedEntity, ...]) -> dict[str, MemoryEntity]:
-        """精确名 → 别名 → 向量相似（阈值内合并别名）→ 新建，返回 key→实体行。"""
+        """精确名 → 别名 → 向量候选发现+余弦判定（阈值内合并别名）→ 新建。
+
+        向量分支两段式：search 只做候选发现（融合分仅排序，不可与绝对
+        阈值比较——「学校并入公司」事故见 docs/memory-v2-design.md §8），
+        合并与否由 text_cosine 的真实余弦 ≥ resolution.similarity_threshold
+        决定；类型冲突一律拒绝。合并/拒绝均记日志，杜绝静默错合并。
+        """
         resolved: dict[str, MemoryEntity] = {}
         threshold = self.app_config.memory.resolution.similarity_threshold
         for candidate in candidates:
+            if renderer.is_internal_ref(candidate.name):
+                logger.warning("跳过内部溯源引用形态的候选实体：%r", candidate.name)
+                continue
             hit = (
                 self.memory_repo.find_entity_by_name(candidate.name)
                 or self.memory_repo.find_entity_by_alias(candidate.name)
@@ -206,26 +219,57 @@ class MemoryService:
                 )
             )
             if hit is None:
-                similar = self.vector_index.search(
-                    candidate.name, kinds=(KIND_ENTITY,), top_k=3, alpha=1.0
-                )
-                ids = [h.ref_id for h in similar if h.score >= threshold]
-                hits = self.memory_repo.get_entities(ids[:1])
-                hit = hits.get(ids[0]) if ids else None
+                hit = self._vector_resolve(candidate, threshold)
+            clean_aliases = [a for a in candidate.aliases if not renderer.is_internal_ref(a)]
             if hit is None:
                 hit = self.memory_repo.upsert_entity(MemoryEntity(
                     entity_type=candidate.entity_type,
                     name=candidate.name,
-                    aliases=list(candidate.aliases),
+                    aliases=clean_aliases,
                     importance=candidate.importance,
                     origin=MemoryOrigin.EXTRACTED.value,
                 ))
             else:
-                hit.aliases = sorted(set(hit.aliases or []) | {candidate.name} | set(candidate.aliases))
+                hit.aliases = sorted(set(hit.aliases or []) | {candidate.name} | set(clean_aliases))
                 hit.importance = max(hit.importance, candidate.importance)
                 hit = self.memory_repo.upsert_entity(hit)
+                logger.info("实体合并：%r 并入 #%s「%s」", candidate.name, hit.id, hit.name)
             resolved[candidate.key] = hit
         return resolved
+
+    def _vector_resolve(self, candidate: ExtractedEntity, threshold: float) -> MemoryEntity | None:
+        """向量候选发现 + 客户端余弦判定；低分/类型冲突/失败一律不合并。
+
+        search 的融合分只用于圈定 top-3 候选；合并判定用 text_cosine 对
+        候选档案文本（name+aliases，与向量写入同内容）现算的绝对余弦。
+        """
+        similar = self.vector_index.search(
+            candidate.name, kinds=(KIND_ENTITY,), top_k=3, alpha=1.0
+        )
+        rows = self.memory_repo.get_entities([h.ref_id for h in similar])
+        if not rows:
+            return None
+        cosines = self.vector_index.text_cosine(
+            candidate.name, [_entity_content(row) for row in rows.values()]
+        )
+        best_row, best_score = max(zip(rows.values(), cosines), key=lambda pair: pair[1])
+        if best_score < threshold:
+            logger.info(
+                "实体 %r 最近候选 #%s「%s」余弦 %.2f 低于阈值 %.2f，按新建处理",
+                candidate.name, best_row.id, best_row.name, best_score, threshold,
+            )
+            return None
+        if (
+            candidate.entity_type != best_row.entity_type
+            and EntityType.OTHER.value not in (candidate.entity_type, best_row.entity_type)
+        ):
+            logger.warning(
+                "实体 %r(%s) 与候选 #%s「%s」(%s) 余弦 %.2f 达标但类型冲突，拒绝合并",
+                candidate.name, candidate.entity_type,
+                best_row.id, best_row.name, best_row.entity_type, best_score,
+            )
+            return None
+        return best_row
 
     def _ensure_user_entity(self) -> MemoryEntity:
         node = self.memory_repo.find_entity_by_name(USER_ENTITY_NAME)
@@ -348,9 +392,10 @@ class MemoryService:
 
     @staticmethod
     def _build_transcript(query: str, turn_messages: List[AgenticConversationMessage]) -> str:
-        # 与标题生成同款拼接：用户 query + 助手 MESSAGE 文本
+        # 与标题生成同款拼接：用户 query + 助手 MESSAGE 文本。助手侧剥离
+        # 内部溯源引用（#S13/§E3 等）——防止被复读的编号经抽取吸回实体档案
         assistant_text = "\n".join(
-            part.get("text", "")
+            renderer.strip_internal_refs(part.get("text", ""))
             for msg in turn_messages
             if msg.message_type == AgenticMessageType.MESSAGE
             for part in msg.content
@@ -489,13 +534,19 @@ class MemoryService:
             self.memory_repo.find_entity_by_name(entity_ref.strip())
             or self.memory_repo.find_entity_by_alias(entity_ref.strip())
         )
-        if anchor is None:
-            threshold = self.app_config.memory.resolution.similarity_threshold
-            hits = self.vector_index.search(entity_ref, kinds=(KIND_ENTITY,), top_k=3, alpha=1.0)
-            ids = [h.ref_id for h in hits if h.score >= threshold]
-            if ids:
-                anchor = self.memory_repo.get_entities(ids[:1]).get(ids[0])
-        return anchor
+        if anchor is not None:
+            return anchor
+        # 向量兜底与实体消歧同规：融合分仅圈候选，判定用真实余弦（§8 教训）
+        threshold = self.app_config.memory.resolution.similarity_threshold
+        hits = self.vector_index.search(entity_ref, kinds=(KIND_ENTITY,), top_k=3, alpha=1.0)
+        rows = self.memory_repo.get_entities([h.ref_id for h in hits])
+        if not rows:
+            return None
+        cosines = self.vector_index.text_cosine(
+            entity_ref, [_entity_content(row) for row in rows.values()]
+        )
+        best_row, best_score = max(zip(rows.values(), cosines), key=lambda pair: pair[1])
+        return best_row if best_score >= threshold else None
 
     def _weights(self) -> ScoreWeights:
         score_cfg = self.app_config.memory.score

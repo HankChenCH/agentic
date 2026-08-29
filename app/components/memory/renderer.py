@@ -13,6 +13,26 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import re
+
+
+# ---------------- 内部溯源引用 ----------------
+# 渲染输出携带的数据库溯源键：#S 陈述 / §E 事件 / #T 证据轮次 / #实体 兜底
+# （简报态头部的「＃编号」为全角静态文案，不在其列）。它们是给人看的键，
+# 不是实体名——曾被助手复读后经抽取管线吸回实体 aliases（"#S13" 污染），
+# 入库前必须以本处正则拦截。
+INTERNAL_REF_TOKEN_RE = re.compile(r"^(?:#S\d+|§E\d+|#T[0-9a-f]+|#实体\d+)$")
+INTERNAL_REF_IN_TEXT_RE = re.compile(r"#S\d+|§E\d+|#T[0-9a-f]+|#实体\d+")
+
+
+def is_internal_ref(text: str) -> bool:
+    """该 token 是否为渲染层内部溯源引用（不可作为实体名/别名入库）。"""
+    return bool(INTERNAL_REF_TOKEN_RE.match(text.strip()))
+
+
+def strip_internal_refs(text: str) -> str:
+    """从文本中剥离内部溯源引用（抽取 transcript 的助手侧净化）。"""
+    return INTERNAL_REF_IN_TEXT_RE.sub("", text)
 
 
 # ---------------- 输出结构 ----------------

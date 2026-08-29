@@ -27,6 +27,14 @@ class PostgresDBProviderEntry(BaseModel):
     user: str = Field(description="用户名")
     password: SecretStr = Field(description="密码")
     db: str = Field(description="数据库名")
+    # 连接池（SQLAlchemy QueuePool）参数；默认值与 SQLAlchemy 缺省行为一致
+    pool_size: int = Field(default=5, ge=1, description="池内常驻连接数")
+    max_overflow: int = Field(default=10, ge=0, description="高峰期允许临时超出的连接数")
+    pool_recycle: int = Field(
+        default=1800,
+        ge=0,
+        description="连接最大存活秒数，超龄回收重建（0 = 不回收）；防服务端/中间件静默断连",
+    )
 
 
 # 按 type 判别的 Union；未来新增数据库供应商时在此扩展

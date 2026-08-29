@@ -7,8 +7,9 @@
 迁移真实业务任务（如对话后置处理）时注意：
 - 任务载荷只传可序列化的 ID / 原始数据，worker 侧重新加载领域对象；
 - 任务需保证幂等（重试会重复执行）；
-- SQLite Engine 在 prefork 下的连接池共享问题需一并加固
-  （NullPool 或 worker_process_init 后再初始化容器）。
+- prefork 连接池共享已由 task_executor 的 worker_process_init 钩子加固
+  （子进程清空 wireup 单例缓存，Engine 等连接类资源按需重建），新增
+  持有连接的单例无需额外处理。
 """
 
 from importlib import import_module

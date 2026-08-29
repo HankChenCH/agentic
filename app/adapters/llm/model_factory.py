@@ -25,14 +25,30 @@ class ModelFactory:
     entry 的用途由其 ``task_type`` 声明：create 只接受 chat entry，
     create_embeddings 只接受 embedding entry，错配即抛 ValueError，
     避免拿错 entry 静默构建出用途错误的模型。
+
+    模型实例内含 HTTP 连接池（httpx 客户端），属重资源，按 entry key
+    缓存复用——同一 entry 多次 ``create`` 拿到同一实例（entry 的
+    ``task_type`` 唯一，同一 key 不会同时产出 chat / embedding 两种模型）。
+    带 ``overrides`` 的调用绕过缓存：定制参数不定型，不污染后续调用。
+    LangChain 模型是无状态 Runnable、httpx.Client 线程安全，跨请求 /
+    跨线程复用安全（与 db / redis / vector / filesystem 工厂同一惯例）。
     """
 
     app_config: AppConfig
 
+    def __post_init__(self):
+        self._models: dict[str, Any] = {}
+
     def create(self, name: str | None = None, **overrides: Any) -> BaseChatModel:
-        entry, builder = self._resolve(name)
-        self._check_task_type(entry, name, ModelTaskType.CHAT)
-        return builder.build_chat(entry, **overrides)
+        key = name if name is not None else self._config.default
+        entry, builder = self._resolve(key)
+        self._check_task_type(entry, key, ModelTaskType.CHAT)
+        if not overrides and key in self._models:
+            return self._models[key]
+        model = builder.build_chat(entry, **overrides)
+        if not overrides:
+            self._models[key] = model
+        return model
 
     def create_embeddings(self, name: str, **overrides: Any) -> Embeddings:
         """按 provider entry key 创建 embedding 模型。
@@ -42,15 +58,21 @@ class ModelFactory:
         """
         entry, builder = self._resolve(name)
         self._check_task_type(entry, name, ModelTaskType.EMBEDDING)
-        return builder.build_embedding(entry, **overrides)
+        if not overrides and name in self._models:
+            return self._models[name]
+        model = builder.build_embedding(entry, **overrides)
+        if not overrides:
+            self._models[name] = model
+        return model
 
-    def _resolve(self, name: str | None) -> tuple[LLMProviderEntry, ModelBuilder]:
-        config: LLMConfig = self.app_config.llm
-        key = name if name is not None else config.default
+    @property
+    def _config(self) -> LLMConfig:
+        return self.app_config.llm
 
-        entry = config.providers.get(key)
+    def _resolve(self, key: str) -> tuple[LLMProviderEntry, ModelBuilder]:
+        entry = self._config.providers.get(key)
         if entry is None:
-            raise ValueError(f"unknown llm provider: {key}, configured: {list(config.providers)}")
+            raise ValueError(f"unknown llm provider: {key}, configured: {list(self._config.providers)}")
 
         try:
             provider = ModelProvider(entry.type)

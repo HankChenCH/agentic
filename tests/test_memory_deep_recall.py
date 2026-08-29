@@ -71,7 +71,7 @@ def test_expand_by_alias_and_vector_fallback_paths(engine):
     out = h.svc.expand("老李", uuid4())
     assert "记忆片段" in out and f"#S{stmt.id}" in out
 
-    # 向量兜底路径：名称不同但相似度超阈值仍能锚定同一实体
+    # 向量兜底路径：名称不同但余弦超阈值仍能锚定同一实体（融合分仅圈候选）
     v_h = Harness(engine)
     target = v_h.other("王小明")
     hit_stmt = v_h.repo.insert_statement(MemoryStatement(
@@ -79,7 +79,8 @@ def test_expand_by_alias_and_vector_fallback_paths(engine):
         summary=f"{target.name}认识核心团队", state="ACTIVE",
         valid_from=datetime(2026, 5, 1),
     ))
-    v_h.vector._preset.append(MemoryVectorHit(kind="entity", ref_id=target.id, score=0.95))
+    v_h.vector._preset.append(MemoryVectorHit(kind="entity", ref_id=target.id, score=1.0))
+    v_h.vector._cosines.append(0.9)
     out_v = v_h.svc.expand("明仔", uuid4())
     assert f"#S{hit_stmt.id}" in out_v
 

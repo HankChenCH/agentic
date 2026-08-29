@@ -6,6 +6,7 @@
 """
 
 from contextlib import asynccontextmanager
+import logging
 
 from sqlalchemy import Engine
 from sqlmodel import SQLModel
@@ -20,6 +21,7 @@ from app.core.container import build_async_container
 from app.core.logging import setup_logging
 from app.api.exception_handlers import register_exception_handlers
 from app.api.v1.endpoints import agent_knowledge, agentic, knowledge, memory
+from app.infrastructures.vector import VectorStoreFactory
 
 # 确保所有 SQLModel 表模型被导入，以便 SQLModel.metadata 能收集到它们
 import app.models.domain.agentic  # noqa: F401
@@ -41,6 +43,18 @@ async def lifespan(app: FastAPI):
     engine = await container.get(Engine)
     SQLModel.metadata.create_all(engine)
     yield
+
+    # 优雅关闭：释放 Engine 连接池与向量库客户端（与 Celery 侧的
+    # container.close() 对齐）。best-effort：清理失败只记日志，不阻断退出。
+    logger = logging.getLogger(__name__)
+    try:
+        engine.dispose()
+    except Exception:
+        logger.warning("db engine dispose failed on shutdown", exc_info=True)
+    try:
+        (await container.get(VectorStoreFactory)).close()
+    except Exception:
+        logger.warning("vector store clients close failed on shutdown", exc_info=True)
 
 
 def create_app():

@@ -1,4 +1,5 @@
-"""ChatOrchestrator.chat 的 SSE 错误路径：RunError 消息脱敏、准备段异常兜底、轮次 FAILED 收口。
+"""ChatOrchestrator.chat 的 SSE 错误路径：RunError 消息脱敏、准备段异常兜底、
+轮次 FAILED 收口；客户端断连（生成器被 close 注入 GeneratorExit）时轮次 CANCELED 收口。
 
 纯单测：真实 ConversationRepository + 临时 SQLite（conftest 的 engine fixture），
 agent 工厂 / 记忆 / 日志全替身；threading.Thread 换成同步 InlineThread，
@@ -6,12 +7,14 @@ agent 工厂 / 记忆 / 日志全替身；threading.Thread 换成同步 InlineTh
 """
 
 import json
+from time import sleep
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from sqlmodel import Session, select
 
+from conftest import FakeCancelSignalStore
 from app.exceptions import ConversationNotFoundError
 from app.models.domain.agentic import (
     AgenticConversationMessage,
@@ -210,10 +213,15 @@ class InlineThread:
 def make_orchestrator(engine, monkeypatch):
     monkeypatch.setattr("app.services.orchestration.chat_orchestrator.threading.Thread", InlineThread)
 
-    def _make(agent_factory, conversation_repo=None, memory=None):
+    def _make(agent_factory, conversation_repo=None, memory=None, cancel_signal_store=None):
         repo = conversation_repo or ConversationRepository(engine=engine)
         # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML
-        conversations = ConversationService(conversation_repo=repo, app_config=SimpleNamespace(default_agentic_id="builtin:demo"))
+        conversations = ConversationService(
+            conversation_repo=repo,
+            app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
+            cancel_signal_store=cancel_signal_store or FakeCancelSignalStore(),
+            logger_factory=RecordingLoggerFactory(),
+        )
         finalizer = TurnFinalizer(
             title_generator=FakeTitleGenerator(),
             conversations=conversations,
@@ -343,3 +351,139 @@ def test_fast_memory_block_prepended(engine, make_orchestrator, monkeypatch):
     sent_user_text = str(FakeAgent.captured_context.messages[-1].content)
     assert sent_user_text.startswith("## 快速记忆上下文")
     assert "用户提问：我上周聊到什么了？" in sent_user_text
+
+
+def test_client_disconnect_marks_turn_canceled(engine, make_orchestrator, monkeypatch):
+    """流式中途客户端断连（生成器被 close）：轮次收口 CANCELED，半截 assistant
+    消息不落库、收尾加工不执行，且不发 RUN_ERROR 帧。"""
+    set_environment(monkeypatch, "dev")
+
+    memory = FakeMemory()
+    run = FakeRun(items=[("messages", FakeChatModelStream("你好，世界"))])
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)), memory=memory)
+    thread_id = uuid4()
+
+    gen = orchestrator.chat(thread_id, "run-8", "hi")
+    frames = [next(gen), next(gen), next(gen)]  # RunStarted + 首条消息流式中途挂起
+    gen.close()
+
+    assert [e["type"] for e in decode(frames)] == [
+        "RUN_STARTED",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+    ]
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.CANCELED
+    # 用户消息已落库，半截 assistant 消息不落库（与异常路径同口径）
+    assert len(stored_messages(engine, thread_id)) == 1
+    # remember 只由 TurnFinalizer 调用：未被调用即收尾加工未执行
+    assert memory.remembered == []
+
+
+def test_disconnect_before_turn_open_is_noop(engine, make_orchestrator, monkeypatch):
+    """轮次行未建就断连（挂在首个 RunStarted 帧上）：close 不抛异常、无轮次行。"""
+    set_environment(monkeypatch, "dev")
+    run = FakeRun(items=[("messages", FakeChatModelStream("hi"))])
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)))
+    thread_id = uuid4()
+
+    gen = orchestrator.chat(thread_id, "run-9", "hi")
+    assert next(gen) is not None
+    gen.close()
+
+    assert turn_status(engine, thread_id) is None
+
+
+def test_close_at_error_frame_keeps_failed(engine, make_orchestrator, monkeypatch):
+    """错误帧挂起期间断连：轮次已置 FAILED，不被断连收口改写成 CANCELED。"""
+    set_environment(monkeypatch, "dev")
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(FakeRun(error=RuntimeError(SECRET)))))
+    thread_id = uuid4()
+
+    gen = orchestrator.chat(thread_id, "run-10", "hi")
+    frames = [next(gen), next(gen)]  # RunStarted + RunError（挂在错误帧 yield 上）
+    gen.close()
+
+    assert [e["type"] for e in decode(frames)] == ["RUN_STARTED", "RUN_ERROR"]
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.FAILED
+
+
+class CancelMidStreamRun:
+    """在第二个 item 被拉取前置位取消标志（sleep 跨过 0.5s 节流窗）。"""
+
+    def __init__(self, store, thread_id):
+        self._store = store
+        self._thread_id = thread_id
+
+    def interleave(self, *names):
+        yield ("messages", FakeChatModelStream("第一段"))
+        sleep(0.6)
+        self._store.cancel(self._thread_id)
+        yield ("messages", FakeChatModelStream("第二段"))
+        yield ("messages", FakeChatModelStream("第三段"))
+
+
+def test_cancel_flag_stops_stream_silently(engine, make_orchestrator, monkeypatch):
+    """显式取消（流中置位）：下一节流边界静默断流，轮次收口 CANCELED，
+    不发 RUN_ERROR、后续 item 不产出、半截消息不落库、收尾加工不执行。"""
+    set_environment(monkeypatch, "dev")
+
+    store = FakeCancelSignalStore()
+    memory = FakeMemory()
+    run = CancelMidStreamRun(store, None)  # thread_id 由测试启动时回填
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)), memory=memory, cancel_signal_store=store)
+    thread_id = uuid4()
+    run._thread_id = thread_id
+
+    frames = list(orchestrator.chat(thread_id, "run-11", "hi"))
+
+    types = [e["type"] for e in decode(frames)]
+    assert types[0] == "RUN_STARTED"
+    assert "第二段" not in json.dumps(frames, ensure_ascii=False)
+    assert "RUN_ERROR" not in types and "RUN_FINISHED" not in types
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.CANCELED
+    # remember 只由 TurnFinalizer 调用：未被调用即收尾加工未执行
+    assert memory.remembered == []
+
+
+class CancelBeforeFirstItemRun:
+    """在首个 item 产出前置位取消标志。"""
+
+    def __init__(self, store, thread_id):
+        self._store = store
+        self._thread_id = thread_id
+
+    def interleave(self, *names):
+        self._store.cancel(self._thread_id)
+        yield ("messages", FakeChatModelStream("不该出现"))
+
+
+def test_cancel_flag_before_first_item_stops_stream(engine, make_orchestrator, monkeypatch):
+    """取消标志在首个 item 产出前置位：首个边界即静默断流，零内容帧。"""
+    set_environment(monkeypatch, "dev")
+
+    store = FakeCancelSignalStore()
+    run = CancelBeforeFirstItemRun(store, None)
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)), cancel_signal_store=store)
+    thread_id = uuid4()
+    run._thread_id = thread_id
+
+    events = [e["type"] for e in decode(list(orchestrator.chat(thread_id, "run-12", "hi")))]
+
+    assert events == ["RUN_STARTED"]
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.CANCELED
+
+
+def test_stale_cancel_flag_does_not_kill_new_turn(engine, make_orchestrator, monkeypatch):
+    """上轮取消标志的残留被 open_turn 防御性清理：新一轮正常完成，不被误杀。"""
+    set_environment(monkeypatch, "dev")
+
+    store = FakeCancelSignalStore()
+    run = FakeRun(items=[("messages", FakeChatModelStream("你好，世界"))])
+    orchestrator = make_orchestrator(FakeAgentFactory(agent=FakeAgent(run)), cancel_signal_store=store)
+    thread_id = uuid4()
+
+    orchestrator.cancel_run(thread_id)  # 模拟 TTL 前的残留标志
+    events = [e["type"] for e in decode(list(orchestrator.chat(thread_id, "run-13", "hi")))]
+
+    assert events[-1] == "RUN_FINISHED"
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.COMPLETED

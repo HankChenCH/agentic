@@ -47,3 +47,6 @@ class WeaviateVectorDBBuilder(VectorDBBuilder):
     def drop(self, client: Any, index_name: str) -> None:
         # collection 不存在时 Weaviate 幂等返回，无需前置 exists 检查
         client.collections.delete(index_name)
+
+    def close(self, client: weaviate.WeaviateClient) -> None:
+        client.close()

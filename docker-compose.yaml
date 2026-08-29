@@ -10,7 +10,7 @@
 #   RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY / RUSTFS_BUCKET
 #
 # 说明: redis 已被任务执行器（app/cmd/task_executor，Celery broker/backend，
-# 地址与 app/configs/task.yaml 的默认值对齐）使用；数据库当前默认仍为
+# 地址经 app/configs/task.yaml 的驱动+key引用指向 redis.yaml，与默认 entry 对齐）使用；数据库当前默认仍为
 # SQLite，postgres 经 app/infrastructures/db（db.yaml 的 postgres entry，
 # psycopg3 驱动）接入，切换只需把 default 改为 postgres；weaviate 经
 # app/infrastructures/vector（vector_db.yaml）预留接入、rustfs 经
@@ -120,7 +120,7 @@ services:
     container_name: agentic-redis
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379" # Celery broker/backend，对应 app/configs/task.yaml 预留地址
+      - "127.0.0.1:6379:6379" # Celery broker/backend + 直连 Redis 能力，对应 redis.yaml 默认 entry
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s

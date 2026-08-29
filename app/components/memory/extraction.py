@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from langchain.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 
+from app.components.memory.renderer import is_internal_ref
+
 # 单实体抽取上限与证据摘录长度保护（防 transcript 失控膨胀）
 _MAX_ENTITIES = 20
 _MAX_FACTS = 30
@@ -212,9 +214,12 @@ def _build_extraction_result(content: str) -> ExtractionResult:
         if not isinstance(raw, dict):
             continue
         key, name = _clip(raw.get("key"), 40), _clip(raw.get("name"), 60)
-        if not key or not name or key == "user":
-            continue  # user 键由系统保留，防止为“用户”另建实体
-        aliases = tuple(a.strip() for a in raw.get("aliases") or [] if isinstance(a, str) and a.strip())
+        if not key or not name or key == "user" or is_internal_ref(name):
+            continue  # user 键由系统保留；内部溯源引用（#S13 等）不是实体名
+        aliases = tuple(
+            a.strip() for a in raw.get("aliases") or []
+            if isinstance(a, str) and a.strip() and not is_internal_ref(a)
+        )
         entities[key] = ExtractedEntity(
             key=key, name=name,
             entity_type=str(raw.get("type") or "OTHER").upper()[:16],

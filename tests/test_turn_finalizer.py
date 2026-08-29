@@ -16,6 +16,7 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
 )
+from conftest import FakeCancelSignalStore
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.orchestration.turn_finalizer import TurnFinalizer
@@ -101,6 +102,8 @@ def make_finalizer(repo, title_generator=None, memory=None):
     conversations = ConversationService(
         conversation_repo=repo,
         app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
+        cancel_signal_store=FakeCancelSignalStore(),
+        logger_factory=factory,
     )
     finalizer = TurnFinalizer(
         title_generator=title_generator or FakeTitleGenerator(),

@@ -89,7 +89,8 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `vector_db.yaml` | 向量库(weaviate)+ 顶层 `embedding` 指向 llm.yaml 的嵌入条目 |
 | `filesystem.yaml` | 对象存储,默认 `rustfs`(S3 兼容),亦有 `local` 磁盘实现 |
 | `document_parser.yaml` | MinerU 云端 PDF 解析(OCR / 公式 / 表格开关、轮询超时) |
-| `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend |
+| `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend(驱动+key引用,指向 redis.yaml 的 entry) |
+| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储与 Celery 队列共用,后者经 task.yaml 引用) |
 
 常用环境变量(`.env` 或进程环境均可):
 
@@ -101,7 +102,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `DB_DSN` | SQLite 数据库文件路径 | `data/agentic.db` |
 | `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
-| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Celery broker/结果库 | `redis://127.0.0.1:6379/0` / `1` |
+| `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
 | `AGENTIC_LOG_LEVEL` / `AGENTIC_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
 
 配置目录与 `.env` 路径可整体覆盖:`AGENTIC_CONFIG_DIR`、`AGENTIC_ENV_FILE`
@@ -116,7 +117,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | postgres 18 | `127.0.0.1:5432` | `agentic` / `agentic` / db `agentic` | 可选数据库(默认用 SQLite) |
 | weaviate 1.39 | `127.0.0.1:8080`(HTTP)+ `:50052`(gRPC,宿主侧) | 匿名访问 | 知识库向量存储 |
 | rustfs(S3 兼容) | `127.0.0.1:9000` | `agentic` / `agentic-secret` | 知识库文件存储(bucket `agentic` 由 `rustfs-init` 幂等创建) |
-| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 |
+| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 + 取消标志存储(独立 `redis.yaml`) |
 
 ## API 一览
 
@@ -126,6 +127,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `POST` | `/agentic/chat` | SSE 流式聊天(ag-ui 事件流) |
+| `POST` | `/agentic/chat/cancel` | 取消会话当前活跃轮次(幂等;置 Redis 取消标志,流式边界与工具入口感知收口) |
 | `GET` | `/agentic/conversation` | 会话列表 |
 | `GET` | `/agentic/conversation/{thread_id}` | 会话详情 |
 | `GET` | `/agentic/conversation/{thread_id}/history` | 会话历史消息 |

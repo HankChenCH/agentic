@@ -19,19 +19,23 @@ server/                          # this directory is its own git repo (the works
 └── app/
     ├── cmd/                     # Entrypoints — one subdir per launchable app
     │   ├── http/                # main.py (create_app + server, uvicorn import string app.cmd.http.main:server)
-    │   │                        #   + __main__.py (argparse → uvicorn.run)
-    │   └── task_executor/       # Celery app: main.py (sync wireup container + wireup.integration.celery.setup),
-    │                            #   __main__.py (argparse → worker_main); tasks live in app/tasks/
+    │   │                        #   + __main__.py (Typer → uvicorn.run，含 --host/--port/--reload)
+    │   ├── task_executor/       # Celery app: main.py (sync wireup container + wireup.integration.celery.setup),
+    │   │                        #   __main__.py (Typer，未知参数透传 → worker_main); tasks live in app/tasks/
+    │   └── admin/                 # 维护管理命令行（Typer 复合入口）：python -m app.cmd.admin <域> <命令>
+    │                            #   现有 memory 域：repair（实体错合并存量修复，幂等，默认 dry-run，--apply 落库）
+    │                            #     + rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
     ├── tasks/                   # Celery task layer: one module per task domain; __init__.py auto-imports
     │                            #   every non-underscore module so tasks self-register (include=["app.tasks"])
 ├── api/                     # exception_handlers.py (global AOP handlers); v1/endpoints/ — agentic.py -> POST /agentic/chat (StreamingResponse)
+│                              #   + POST /agentic/chat/cancel 显式取消（置 thread 作用域 Redis 标志，幂等）
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传，文件落 rustfs）;
 │                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）;
 │                              memory.py -> /memory/graph 记忆图快照（管理侧只读；at 参数做时点回放，
 │                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
 ├── core/container.py        # Shared wireup injectables + build_async_container()/build_sync_container()
-    ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py, memory.py, task.py, logging.py; get_environment()
+    ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py, memory.py, redis.py (RedisConfig + RedisProviderEntry), task.py, logging.py; get_environment()
     ├── core/exceptions/         # Framework baseline exceptions: AgenticError root → framework.py (FrameworkError, ConfigError,
     │                            #   InfrastructureError) + business.py (BusinessError base — the handlers' anchor); concrete
     │                            #   business exceptions are user-defined in app/exceptions/
@@ -51,8 +55,9 @@ server/                          # this directory is its own git repo (the works
 │                            #   app.services.orchestration / app.agents / app.api
 ├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
 │                            #   （ChatOrchestrator chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
-│                            #   domain/: 领域服务，按聚合分包—— conversation/（title_generator 裸模型
-│                            #   标题生成）、knowledge/（KB/document/ingestion/binding 服务 +
+│                            #   domain/: 领域服务，按聚合分包—— conversation/（ports.py
+│                            #   CancelSignalStore 端口 + title_generator 裸模型标题生成）、
+│                            #   knowledge/（KB/document/ingestion/binding 服务 +
 │                            #   object_store/support 纯函数/document_chunker）与 memory/
 │                            #   （记忆向量适配器 MemoryVectorIndex+collection 显式 schema）
 ├── models/
@@ -71,7 +76,10 @@ server/                          # this directory is its own git repo (the works
                                  #   singleton Engine), vector/ (VectorStoreFactory + VectorDBBuilder registry —
                                  #   Weaviate via langchain-weaviate; build_client/build + drop for collection
                                  #   deletion), filesystem/ (FilesystemFactory + FilesystemBuilder registry —
-                                 #   local pathlib / S3 via obstore)
+                                 #   local pathlib / S3 via obstore), redis/ (RedisClientFactory +
+                                 #   RedisClientBuilder registry — standalone via REDIS_URL;
+                                 #   RedisCancelSignalStore 为 conversation 域 CancelSignalStore
+                                 #   端口的实现，key 前缀 agentic:cancel:)
 ```
 
 ## Commands
@@ -88,15 +96,22 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
 - Install/sync deps: `uv sync`
 - Run dev server: `uv run uvicorn app.cmd.http.main:server --reload` → uvicorn on
   `0.0.0.0:8000`. Alternatively `uv run python -m app.cmd.http [--reload]
-  [--config-dir PATH] [--env-file PATH]` (argparse entrypoint in
-  `cmd/http/__main__.py`; flags are bridged to
+  [--host H] [--port P] [--config-dir PATH] [--env-file PATH]` (Typer
+  entrypoint in `cmd/http/__main__.py`; config flags are bridged to
   `AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` env vars).
 - Run task executor (Celery worker; needs `docker compose up -d redis` first):
   `uv run celery -A app.cmd.task_executor.main worker` or
   `uv run python -m app.cmd.task_executor [--pool=solo]` (extra args pass
-  through to the celery worker command). Broker/backend URLs come from
-  `app/configs/task.yaml` (defaults `redis://127.0.0.1:6379/0|1`, overridable
-  via `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`).
+  through to the celery worker command). Broker/backend URLs are resolved at
+  startup from `app/configs/task.yaml`, whose `broker`/`backend` each hold a
+  driver+key reference (`driver: redis` + `provider` naming a `redis.yaml`
+  providers entry; resolved by `app.core.config.resolve_url`, fail-fast on
+  unknown key/driver — defaults both point at the `redis` entry, db0).
+- Maintenance CLI (Typer): `uv run python -m app.cmd.admin memory repair`
+  (dry-run; `--apply` to write) and `uv run python -m app.cmd.admin memory
+  rebuild-index` (stats only; `--yes` to drop + re-embed). Top-level
+  `--config-dir`/`--env-file` bridge to `AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE`
+  (same convention as the http entrypoint).
 - Run unit tests: `uv run pytest tests/` (pure unit level — SQLite 临时库 +
   stub 向量索引，不碰 Weaviate/MinerU/Ollama).
 - **Entrypoint modules import `from app...`, so run them as modules
@@ -125,8 +140,10 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
     service (minio/mc) idempotently creates the default bucket `agentic`
     (`RUSTFS_BUCKET` overridable)
   - **redis** (`redis:8-alpine`) → `127.0.0.1:6379` — **in use** as the Celery
-    broker/result backend by `app/cmd/task_executor` (matches
-    `app/configs/task.yaml` defaults)
+    broker/result backend by `app/cmd/task_executor` (task.yaml's broker/
+    backend reference the `redis.yaml` `redis` entry by driver+key) and by
+    the cancel-flag store (`app/configs/redis.yaml`, same entry by default,
+    keys prefixed `agentic:cancel:`)
 - Redis is used by the task executor. The app's default db is still SQLite
   (`db.yaml` `default: sqlite`); the matching `postgres` entry is wired through
   `app/infrastructures/db/` (psycopg3 driver, lazy) — switch by changing
@@ -164,10 +181,13 @@ Server layer rules:
   检索组件消费领域向量适配器走的就是合法的 components→domain 边；④ services 根
   `__init__.py` 为 PEP 562 惰性再导出聚合面（急切导入会与 components 成环，见文件头注释）。
   禁边由 `tests/test_layer_boundaries.py` AST 扫描强制（规则改动两处同步）。
-- **api** → only HTTP wiring; delegate to **services**. The endpoint wraps the
-  service's generator with `ag_ui.encoder.EventEncoder` and returns a
-  `StreamingResponse(media_type="text/event-stream")`. The encoder already emits
-  `data: {...}\n\n` frames — don't wrap the response again. Global exception
+- **api** → only HTTP wiring; delegate to **services**. The endpoint is a
+  passthrough: `ChatOrchestrator.chat` already yields encoded `data: {...}\n\n`
+  frames (the `ag_ui.encoder.EventEncoder` lives in the orchestrator's
+  translator), returned as
+  `ClosingStreamingResponse(_stream_and_close(events), ...)`
+  (see the SSE gotcha for why not plain `StreamingResponse`) — don't wrap the
+  response again. Global exception
   handlers (AOP) also live here: `api/exception_handlers.py`, registered in
   `create_app()`.
 - **core/exceptions (framework baseline) + app/exceptions (business) +
@@ -250,8 +270,24 @@ Server layer rules:
   `filesystem` (`FilesystemConfig`: default + providers dict with
   `type`-discriminated entries — `local` / `s3`; the `rustfs` entry aligns
   with the compose service via `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET`),
-  `memory`, `logging`, `task` (Celery
-  broker/backend).
+  `memory`, `logging`, `task` (`TaskConfig`: Celery
+  broker/backend, each a driver+key reference resolved by `resolve_url` —
+  the `redis` driver resolves against `redis.yaml` providers), `redis`
+  (`RedisConfig`: default + providers dict with
+  `type`-discriminated entries — `standalone` via `REDIS_URL`; direct-Redis
+  capabilities such as the cancel-flag store, plus the Celery queue via
+  task.yaml's references — the single source of Redis connection facts).
+  Connection-info modeling rule (pick ONE form per provider): write a full
+  connection string (`url`/`dsn`) when the driver consumes a URL natively and
+  deployment hands the connection over as one unit (`standalone` redis via
+  `REDIS_URL`); use discrete fields assembled by the builder when the password
+  is a standalone secret (`SecretStr`), deployment env vars are discrete
+  (compose `POSTGRES_*` → `postgresql` entry), or a dialect string must be
+  composed (`postgresql+psycopg`). Assembly lives only in the infrastructures
+  builders — never compose URLs ad hoc in services. SDK-style clients (s3,
+  weaviate) are naturally discrete. Do not offer both `url` and discrete
+  fields for the same entry (doubled validation/error surface, no current
+  consumer needs it).
 - **models/schema** → wire request/response shapes (camelCase field names like
   `threadId`/`runId` for ag-ui compatibility). **models/domain** → internal
   domain models (SQLModel tables shared by services and components).
@@ -363,12 +399,54 @@ future RAG).
   then wraps both setup (turn/message writes, agent creation, history load)
   and the streaming loop: any `Exception` logs the full stack (business errors
   as warning), marks the turn `FAILED` (best-effort store, secondary failures
-  only logged via `_store_turn_safely`), and emits a `RunErrorEvent` whose
+  only logged via `_fail_turn_safely`), and emits a `RunErrorEvent` whose
   message follows the same policy as `api/exception_handlers.py`
   (`BusinessError` verbatim in every env; framework/base/unknown raw in
   dev/test, 「服务内部错误」 in prod — see `_run_error_message`; keep the two
-  in sync). Remaining known gap: client disconnects (`GeneratorExit`) never
-  set `CANCELED`.
+  in sync). Client disconnects are a separate path: Starlette throws
+  `GeneratorExit` (a `BaseException`) into the generator at its suspended
+  `yield`; a dedicated `except GeneratorExit` in the streaming segment calls
+  `_cancel_turn_safely` — which marks the turn `CANCELED` only while still
+  `RUNNING` (a turn already `FAILED` keeps that status) — then re-raises.
+  The handler must never yield (`RuntimeError: generator ignored
+  GeneratorExit`); partial assistant messages are not persisted and
+  `TurnFinalizer` doesn't run on cancel, mirroring the error path. Delivery
+  is deterministic only because the endpoint wraps the generator with
+  `_stream_and_close` + `ClosingStreamingResponse` (both in
+  `api/v1/endpoints/agentic.py`): Starlette never closes the body iterator
+  on disconnect — its `iterate_in_threadpool` has no `finally`, so the
+  abandoned sync generator would otherwise wait for a cyclic-GC pass
+  (minutes in practice, or never if the process exits first). The wrapper's
+  `finally` closes the sync generator as soon as the response cycle unwinds.
+  Cancel latency is bounded by the in-flight `next()`: sub-second while
+  token deltas stream, but a disconnect during a tool call lands only when
+  the tool returns (no yield boundary inside). The frontend
+  Stop button reaches this path via `agent.abortRun()` wired to
+  `useAgUiRuntime`'s `onCancel` (page refresh/close and network drops land
+  here too). An explicit cancel channel complements disconnect-based cancel
+  (transport-independent: proxies may swallow disconnect events, and
+  `POST /agentic/chat/cancel` works without dropping the connection): the
+  endpoint writes a thread-scoped flag via the `CancelSignalStore` port
+  (`services/domain/conversation/ports.py`, a `typing.Protocol`; the Redis
+  impl `RedisCancelSignalStore` in `infrastructures/redis/` connects via the
+  independent `redis.yaml` section, by default the same db0 instance as the
+  Celery broker, key `agentic:cancel:{thread_id}`, TTL 1h). The port contract is
+  fail-loud; the tolerance policy lives in `ConversationService` — reads/clears
+  degrade instead of blocking chat (throttled warning, treated as not
+  canceled), and the flag is cleared defensively at `open_turn`.
+  The streaming loop re-checks it throttled at **frame level** — always on
+  the first streamed frame, then at most every 0.5s
+  (`CANCEL_CHECK_INTERVAL_SECONDS`) — and
+  lands on the same `_cancel_turn_safely` path, silently closing the stream
+  (no RUN_ERROR frame; the client's local abort state is the source of
+  truth, since ag-ui has no server-side CANCELLED event). Tools check the
+  flag at entry via the `cancel_check` closure carried in
+  `AgentRunContext` → `_config`'s `configurable` (see `_cancel_guard` in
+  `agents/base.py`; it synthesizes a `config: RunnableConfig` param for
+  tools that don't declare one, so langchain injects + schema-excludes it —
+  same pattern as the memory tools). Flag reads are best-effort: the store
+  being down degrades to disconnect-only cancel and never blocks chat; the
+  cancel endpoint's write failure propagates to the caller.
 - Multi-turn history is server-authoritative: `ConversationService.replay_history`(由 `ChatOrchestrator.chat` 调用) rebuilds
   the LLM context from the DB (`ConversationRepository.list_replay_messages`,
   last ~20 COMPLETED turns — FAILED/CANCELED/stray RUNNING turns are skipped)
@@ -384,6 +462,16 @@ future RAG).
   bi-temporal statement / episode / episode-link), consolidated into the
   component at `app/components/memory/` by `TurnFinalizer`'s third step
   (extract→resolve entities→adjudicate ADD/REPLACE/SKIP→persist+vector upsert).
+  Entity resolution is **two-stage**: `MemoryVectorIndex.search` only nominates
+  candidates — its hit score is a Weaviate hybrid fusion score (relative,
+  capped at 1.0; never compare it against absolute thresholds), and the merge
+  decision uses `text_cosine` (client-side embedding cosine, same model as the
+  writes) ≥ `resolution.similarity_threshold` plus an entity_type guard;
+  renderer-internal trace refs (`#S13`/`§E3` shapes) are barred from entity
+  names/aliases. The 2026-08-28 incident (a school merged into a company
+  entity on fusion score 1.0 / true cosine 0.44) is documented in
+  `docs/memory-v2-design.md` §8; polluted archives are repairable via
+  `python -m app.cmd.admin memory repair --apply`.
   Recall has two tiers: `ChatOrchestrator.chat` auto-injects a brief block
   (`MemoryService.build_fast_context`, pure SQL scoring, no LLM/embedding)
   before streaming; deep recall = three tools (`timeline`/`expand`/`state_at`,

@@ -1,5 +1,7 @@
+import functools
+import inspect
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage
@@ -10,6 +12,50 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.context import AgentRunContext
 from app.agents.toolbox import AgentToolbox
 from app.agents.tools_transformer import ToolsTransformer
+
+
+class RunCanceledError(Exception):
+    """工具入口守卫检测到取消标志：跳过工具体（langgraph 记 tool-error），
+    随后由编排层的边界检查终止本轮——不继承 BaseException，避免绕过
+    langgraph 的常规错误处理路径。"""
+
+
+def _cancel_guard(tool: Callable):
+    """工具入口的协作式取消检查（显式取消通道的工具侧半边）。
+
+    检查闭包由编排层经 ``AgentRunContext.cancel_check`` → ``_config`` 的
+    ``configurable.cancel_check`` 传入，本包装在每次工具被调用前读取：命中即
+    抛 ``RunCanceledError`` 跳过工具体（省掉一次无谓的检索/LLM 外呼），随后
+    编排层流式循环的边界检查终止本轮。
+
+    包装细节：对未声明 ``config`` 参数的工具（weather/knowledge 系），显式
+    合成带 ``config: RunnableConfig`` 的签名与注解——langchain 据此把它判为
+    注入参数（不进 LLM 工具 schema、运行时以 kwargs 注入，同 memory 工具的
+    既有模式）；已声明的（memory 系）经 ``wraps`` 的 ``__wrapped__`` 原样透出。
+    注入的 config 不回传给不接收它的原函数。
+    """
+    sig_params = list(inspect.signature(tool).parameters.values())
+    has_config = any(p.name == "config" for p in sig_params)
+
+    @functools.wraps(tool)
+    def wrapper(*args, **kwargs):
+        config = kwargs.get("config")
+        check = (config or {}).get("configurable", {}).get("cancel_check")
+        if check is not None and check():
+            raise RunCanceledError("run canceled by client")
+        if not has_config:
+            kwargs.pop("config", None)
+        return tool(*args, **kwargs)
+
+    if not has_config:
+        params = [*sig_params, inspect.Parameter(
+            "config", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None, annotation=RunnableConfig,
+        )]
+        wrapper.__signature__ = inspect.Signature(params)
+        annotations = dict(getattr(tool, "__annotations__", None) or {})
+        annotations["config"] = RunnableConfig
+        wrapper.__annotations__ = annotations
+    return wrapper
 
 
 class BaseAgent(ABC):
@@ -44,7 +90,7 @@ class BaseAgent(ABC):
             name=self.agentic_id,
             system_prompt=self.build_system_prompt(),
             model=self.model,
-            tools=self.build_tools(),
+            tools=[_cancel_guard(t) for t in self.build_tools()],
             transformers=[ToolsTransformer],
         )
 
@@ -77,7 +123,10 @@ class BaseAgent(ABC):
         return {"messages": messages}
 
     def _config(self, ctx: AgentRunContext) -> RunnableConfig:
-        return {"configurable": {"thread_id": ctx.thread_id, "run_id": ctx.run_id}}
+        configurable: dict = {"thread_id": ctx.thread_id, "run_id": ctx.run_id}
+        if ctx.cancel_check is not None:
+            configurable["cancel_check"] = ctx.cancel_check
+        return {"configurable": configurable}
 
     @abstractmethod
     def build_system_prompt(self) -> str:

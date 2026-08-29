@@ -19,12 +19,17 @@ from app.repositories.conversation_repository import ConversationRepository
 from app.services.domain.conversation.conversation_service import ConversationService
 
 
+from conftest import FakeCancelSignalStore, StubLoggerFactory
+
+
 @pytest.fixture()
 def service(engine):
     # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML
     return ConversationService(
         conversation_repo=ConversationRepository(engine=engine),
         app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
+        cancel_signal_store=FakeCancelSignalStore(),
+        logger_factory=StubLoggerFactory(),
     )
 
 
@@ -56,6 +61,38 @@ def test_open_turn_persists_conversation_turn_and_user_message(service, engine):
     assert len(messages) == 1
     assert messages[0].sequence_num == 0
     assert messages[0].content == [{"type": "text", "text": "你好"}]
+
+
+def test_cancel_flag_roundtrip_and_open_turn_clears_it(engine):
+    """取消标志 roundtrip；open_turn 防御性清理上轮残留（TTL 前的标志不误杀新一轮）。"""
+    store = FakeCancelSignalStore()
+    service = ConversationService(
+        conversation_repo=ConversationRepository(engine=engine),
+        app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
+        cancel_signal_store=store,
+        logger_factory=StubLoggerFactory(),
+    )
+    thread_id = uuid4()
+
+    service.cancel_run_flag(thread_id)
+    assert service.is_run_canceled(thread_id)
+
+    service.open_turn(thread_id=thread_id, run_id="run-3", query="你好")
+    assert not service.is_run_canceled(thread_id)
+
+
+def test_cancel_turn_persists_canceled_status(service, engine):
+    """取消轮次：内存对象与库中行都收口为 CANCELED（断连路径的持久化契约）。"""
+    _, turn = service.open_turn(thread_id=uuid4(), run_id="run-3", query="你好")
+
+    service.cancel_turn(turn)
+
+    assert AgenticTurnStatus(turn.status) == AgenticTurnStatus.CANCELED
+    with Session(engine) as session:
+        row = session.exec(
+            select(AgenticConversationTurn).where(AgenticConversationTurn.turn_id == turn.turn_id)
+        ).one()
+    assert AgenticTurnStatus(row.status) == AgenticTurnStatus.CANCELED
 
 
 def test_record_turn_usage_accumulates_with_whitelist(service, engine):

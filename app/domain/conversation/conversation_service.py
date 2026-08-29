@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from time import monotonic
 from uuid import UUID, uuid4
 from typing import List, Tuple
 
@@ -7,8 +8,10 @@ from langchain.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.messages import BaseMessage
 
 from app.core.config import AppConfig
+from app.core.logging import LoggerFactory
 from app.exceptions import ConversationNotFoundError
 from app.repositories.conversation_repository import ConversationRepository
+from app.services.domain.conversation.ports import CancelSignalStore
 
 from app.models.domain.agentic import (
     AgenticConversation,
@@ -21,6 +24,9 @@ from app.models.domain.agentic import (
 
 # 计入轮次聚合的标准用量键（其余如 cached_tokens 不计）
 USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+# 取消标志读失败警告的节流窗口（存储持续不可用时避免每 0.5s 刷一条日志）
+_WARN_THROTTLE_SECONDS = 30.0
 
 
 @injectable
@@ -36,11 +42,23 @@ class ConversationService:
 
     conversation_repo: ConversationRepository
     app_config: AppConfig
+    cancel_signal_store: CancelSignalStore
+    logger_factory: LoggerFactory
+
+    def __post_init__(self):
+        self.logger = self.logger_factory.get_logger(__name__)
+        self._last_warn_at = -_WARN_THROTTLE_SECONDS
 
     # ---- chat 行程所需写路径（原 AgenticService 准备段 / 收尾段下沉）----
 
     def open_turn(self, thread_id: UUID, run_id: str, query: str) -> Tuple[AgenticConversation, AgenticConversationTurn]:
         """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。"""
+        # 防御性清理遗留取消标志（上轮取消后 TTL 内残留会误杀本轮；正常收尾
+        # 后标志本就应不存在，此处是无条件兜底）。清理失败不阻断开轮。
+        try:
+            self.cancel_signal_store.clear(thread_id)
+        except Exception as exc:
+            self.logger.warning("取消标志清理失败：%s", exc)
         conversation = self.conversation_repo.init_conversation(
             thread_id=thread_id,
             agentic_id=self.app_config.default_agentic_id,
@@ -117,6 +135,28 @@ class ConversationService:
     def fail_turn(self, turn: AgenticConversationTurn) -> None:
         turn.status = AgenticTurnStatus.FAILED
         self.save_turn(turn)
+
+    def cancel_turn(self, turn: AgenticConversationTurn) -> None:
+        turn.status = AgenticTurnStatus.CANCELED
+        self.save_turn(turn)
+
+    # ---- 显式取消通道（REST cancel 接口写、流式循环/工具入口读）----
+
+    def cancel_run_flag(self, thread_id: UUID) -> None:
+        """置 thread 作用域取消标志（存储失败异常上抛，由端点反馈调用方）。"""
+        self.cancel_signal_store.cancel(thread_id)
+
+    def is_run_canceled(self, thread_id: UUID) -> bool:
+        """读取消标志。宽容策略归领域：存储不可用绝不阻断聊天主链路——
+        警告（节流）+ 视为未取消，降级为仅断链取消。"""
+        try:
+            return self.cancel_signal_store.is_canceled(thread_id)
+        except Exception as exc:
+            now = monotonic()
+            if now - self._last_warn_at >= _WARN_THROTTLE_SECONDS:
+                self._last_warn_at = now
+                self.logger.warning("取消标志读取失败（视为未取消）：%s", exc)
+            return False
 
     def save_turn(self, turn: AgenticConversationTurn) -> None:
         self.conversation_repo.store_conversation_turn(turn)

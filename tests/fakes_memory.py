@@ -35,13 +35,25 @@ class FakeModelFactory:
 
 
 class FakeMemoryVectorIndex:
-    """MemoryVectorIndex 替身：记录写入、回放预置命中。"""
+    """MemoryVectorIndex 替身：记录写入、回放预置命中与预置余弦。
 
-    def __init__(self, preset_hits: list[MemoryVectorHit] | None = None):
+    ``preset_hits`` 的 score 是 search 的融合分（仅排序用）；实体消歧的
+    合并判定走 ``text_cosine``，其返回值由 ``preset_cosines`` FIFO 回放
+    （耗尽后复用最后一个值；未预置时全 0 = 不合并）。
+    """
+
+    def __init__(
+        self,
+        preset_hits: list[MemoryVectorHit] | None = None,
+        preset_cosines: list[float] | None = None,
+    ):
         self.upserts: list = []
         self.deleted: list = []
         self.searches: list[dict] = []
+        self.cosine_calls: list[dict] = []
+        self.rebuilds: list = []
         self._preset = preset_hits or []
+        self._cosines = list(preset_cosines or [])
 
     def upsert_many(self, entries):
         self.upserts.extend(entries)
@@ -54,8 +66,18 @@ class FakeMemoryVectorIndex:
         kept = [h for h in self._preset if h.kind in kinds]
         return kept[:top_k]
 
+    def text_cosine(self, query, contents):
+        self.cosine_calls.append({"query": query, "contents": list(contents)})
+        if not self._cosines:
+            return [0.0 for _ in contents]
+        return [
+            self._cosines.pop(0) if len(self._cosines) > 1 else self._cosines[0]
+            for _ in contents
+        ]
+
     def rebuild(self, entries):
-        raise AssertionError("rebuild 不应被常规路径触发")
+        """记录全量重建入参；常规写路径不应触发（由各用例隐式覆盖）。"""
+        self.rebuilds.append(list(entries))
 
 
 def make_service_config(**overrides):

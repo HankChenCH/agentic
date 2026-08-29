@@ -48,6 +48,14 @@ class VectorDBBuilder(ABC):
         """删除整个 collection（LangChain VectorStore 无此能力，按需实现）。"""
         raise NotImplementedError(f"{type(self).__name__} does not support drop")
 
+    def close(self, client: Any) -> None:
+        """关闭供应商客户端（进程优雅关闭时由工厂调用，按需覆写）。
+
+        默认无操作：无持久连接的客户端随进程退出即可；持有 gRPC 等长连接
+        的实现应覆写以显式释放。关闭是生命周期钩子而非能力缺口，默认不抛，
+        新供应商未实现也不会炸掉关闭流程。
+        """
+
 
 # 供应商注册表：@register 自动登记，新增供应商不改工厂
 VECTOR_DB_BUILDERS: dict[VectorDBProvider, type[VectorDBBuilder]] = {}

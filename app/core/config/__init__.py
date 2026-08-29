@@ -16,7 +16,8 @@ from .filesystem import (
 from .loader import ConfigError, load_section, read_config
 from .logging import ConsoleSinkConfig, FileSinkConfig, LoggingConfig, SinkConfig
 from .memory import MemoryConfig
-from .task import TaskConfig
+from .redis import RedisConfig, RedisProviderEntry, StandaloneRedisProviderEntry
+from .task import TaskConfig, TaskConnectionRef, resolve_url
 
 __all__ = [
     "AppConfig",
@@ -44,7 +45,12 @@ __all__ = [
     "FileSinkConfig",
     "SinkConfig",
     "MemoryConfig",
+    "RedisConfig",
+    "RedisProviderEntry",
+    "StandaloneRedisProviderEntry",
     "TaskConfig",
+    "TaskConnectionRef",
+    "resolve_url",
 ]
 
 # 合法的运行环境取值；environment 决定异常响应等信息详略
@@ -120,6 +126,10 @@ class AppConfig(BaseModel):
     memory: MemoryConfig = Field(
         description="记忆系统配置。",
         default_factory=lambda: load_section("memory.yaml", MemoryConfig),
+    )
+    redis: RedisConfig = Field(
+        description="Redis 连接配置：直接使用 Redis 的能力（取消信号存储等）共用，与 Celery 任务队列配置相互独立。",
+        default_factory=lambda: load_section("redis.yaml", RedisConfig),
     )
     logging: LoggingConfig = Field(
         description="日志配置：多 sink 输出与流转规则（装配见 app.core.logging）。",

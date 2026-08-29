@@ -25,7 +25,8 @@ class ScoreConfig(BaseModel):
 
 class ResolutionConfig(BaseModel):
     similarity_threshold: float = Field(
-        default=0.85, description="实体消歧的向量相似合并阈值"
+        default=0.85,
+        description="实体消歧合并阈值，作用于客户端现算的嵌入余弦（不可对 hybrid 融合分比较）",
     )
 
 
