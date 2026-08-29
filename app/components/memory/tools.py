@@ -17,7 +17,7 @@ from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 
-from app.components.memory.service import MemoryService
+from app.components.memory.recall import MemoryRecallService
 
 
 def _thread(config: RunnableConfig) -> UUID | None:
@@ -31,8 +31,8 @@ def _thread(config: RunnableConfig) -> UUID | None:
         return None
 
 
-def build_memory_tools(memory_service: MemoryService) -> list:
-    """构造记忆工具集（供智能体 build_tools 装配），闭包绑定 MemoryService。"""
+def build_memory_tools(memory_service: MemoryRecallService) -> list:
+    """构造记忆工具集（供智能体 build_tools 装配），闭包绑定 MemoryRecallService。"""
 
     def timeline(query: str, config: RunnableConfig) -> str:
         """

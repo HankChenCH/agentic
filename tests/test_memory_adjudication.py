@@ -5,15 +5,15 @@ from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.components.memory.service import MemoryService
+from app.components.memory import MemoryConsolidationService
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import MemoryOrigin, MemoryStatement, StatementState
 
 from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelFactory, make_service_config
 
 
-def _service(engine, llm) -> MemoryService:
-    return MemoryService(
+def _service(engine, llm) -> MemoryConsolidationService:
+    return MemoryConsolidationService(
         memory_repo=SqliteGraphMemoryRepository(engine=engine),
         vector_index=FakeMemoryVectorIndex(),
         model_factory=FakeModelFactory(llm),

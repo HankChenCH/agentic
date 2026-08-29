@@ -1,4 +1,4 @@
-"""结构化抽取与陈述裁决：记忆巩固管线的两次 LLM 裸模型调用。
+"""解析块：巩固管线的 LLM 输入组装、两次裸模型调用与裁决输出解析。
 
 风格延续 v1 抽取器：手工 JSON 截取解析、任何解析/校验失败都静默降级
 不上抛——抽取返回空结果、裁决返回 None，由服务层决定兜底路径。
@@ -9,11 +9,16 @@ prompt 携带「当前时间」作时间锚，让模型把“昨天/上个月”
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import List
+from uuid import UUID
 
 from langchain.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 
 from app.components.memory.renderer import is_internal_ref
+from app.components.memory.vocab import cardinality
+from app.models.domain.agentic import AgenticConversationMessage, AgenticMessageType
+from app.models.domain.memory import MemoryEntity
 
 # 单实体抽取上限与证据摘录长度保护（防 transcript 失控膨胀）
 _MAX_ENTITIES = 20
@@ -94,6 +99,20 @@ class FactDecision:
     replace_id: int | None = None
 
 
+@dataclass(frozen=True)
+class PairedFact:
+    """裁决前的事实-实体配对投影（收尾侧产出，裁决与落库侧消费）。"""
+
+    fact: ExtractedFact
+    subject: MemoryEntity
+    object_entity: MemoryEntity | None
+    object_text: str | None
+    evidence: list
+    valid_from: datetime
+    source_thread_id: UUID | None = None
+    source_turn_id: UUID | None = None
+
+
 def extract_structure(model: BaseChatModel, transcript: str, now: datetime) -> ExtractionResult:
     """第❶步结构化抽取；任何解析异常降级为空结果（调用方放弃本轮写入）。"""
     response = model.invoke([
@@ -169,6 +188,63 @@ def resolve_time_hint(hint: str | None, now: datetime) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=base.tzinfo)
     return parsed
+
+
+def build_transcript(query: str, turn_messages: List[AgenticConversationMessage]) -> str:
+    """抽取输入组装：与标题生成同款拼接——用户 query + 助手 MESSAGE 文本。
+
+    助手侧剥离内部溯源引用（#S13/§E3 等）——防止被复读的编号经抽取吸回实体档案。
+    """
+    assistant_text = "\n".join(
+        renderer.strip_internal_refs(part.get("text", ""))
+        for msg in turn_messages
+        if msg.message_type == AgenticMessageType.MESSAGE
+        for part in msg.content
+        if part.get("type") == "text"
+    )
+    return f"用户：{query}\n助手：{assistant_text}".strip()
+
+
+def statement_digest(rows, names: dict[int, str]) -> list[dict]:
+    """把既有 ACTIVE 陈述序列化成裁决 prompt 的摘要块。"""
+    return [
+        {
+            "id": row.id,
+            "subject_name": names.get(row.subject_id, "?"),
+            "predicate": row.predicate,
+            "object_label": f"{names.get(row.object_entity_id, '')}"
+            if row.object_entity_id is not None
+            else (row.object_text or ""),
+            "origin": row.origin,
+        }
+        for row in rows
+    ]
+
+
+def programmatic_decisions(paired: list[PairedFact], active_rows) -> list[FactDecision]:
+    """LLM 裁决失败时的程序化降级：重复→SKIP；单值谓词已有值→REPLACE 最新行；否则 ADD。"""
+    group: dict[int, list] = {}
+    for row in active_rows:
+        group.setdefault(row.subject_id, []).append(row)
+    decisions = []
+    for pair in paired:
+        same_pred = [
+            r for r in group.get(pair.subject.id, [])
+            if r.predicate == pair.fact.predicate
+        ]
+        duplicate = any(
+            (pair.object_entity is not None and r.object_entity_id == pair.object_entity.id)
+            or (pair.object_text is not None and r.object_text == pair.object_text)
+            for r in same_pred
+        )
+        if duplicate:
+            decisions.append(FactDecision("SKIP"))
+        elif cardinality(pair.fact.predicate) == "single" and same_pred:
+            newest = max(same_pred, key=lambda r: r.updated_at or r.created_at)
+            decisions.append(FactDecision("REPLACE", replace_id=newest.id))
+        else:
+            decisions.append(FactDecision("ADD"))
+    return decisions
 
 
 def _try_iso(text: str):

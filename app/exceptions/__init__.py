@@ -21,7 +21,16 @@ from app.exceptions.knowledge import (
     KnowledgeNotFoundError,
     KnowledgeStatusError,
 )
-from app.exceptions.memory import MemoryComponentError
+from app.exceptions.memory import (
+    MemoryComponentError,
+    MemoryConstraintConflictError,
+    MemoryInvalidParamError,
+    MemoryInvalidTimeParamError,
+    MemoryNameConflictError,
+    MemoryNoChangeError,
+    MemoryObjectNotFoundError,
+    MemoryProtectedObjectError,
+)
 
 __all__ = [
     "ConversationError",
@@ -29,6 +38,13 @@ __all__ = [
     "AgentError",
     "AgentNotFoundError",
     "MemoryComponentError",
+    "MemoryInvalidTimeParamError",
+    "MemoryObjectNotFoundError",
+    "MemoryProtectedObjectError",
+    "MemoryNameConflictError",
+    "MemoryNoChangeError",
+    "MemoryConstraintConflictError",
+    "MemoryInvalidParamError",
     "KnowledgeError",
     "KnowledgeNotFoundError",
     "KnowledgeNameDuplicatedError",

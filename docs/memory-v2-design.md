@@ -120,7 +120,7 @@ remember 外层 try/except 全兜底，失败仅记日志。四步巩固管线�
 ```mermaid
 sequenceDiagram
     participant AGT as TurnFinalizer.run(守护线程)
-    participant MS as MemoryService.remember
+    participant MS as MemoryConsolidationService.remember
     participant LLM as deepseek 抽取模型
     participant REPO as MemoryRepository(SQL)
     participant IDX as MemoryVectorIndex
@@ -138,7 +138,7 @@ sequenceDiagram
 
 - 注入点：`ChatOrchestrator.chat`（`app/services/orchestration/
   chat_orchestrator.py`）在 `replay_history` 之后、`agent.stream(...)` 之前
-  （已持有 query），调 `MemoryService.build_fast_context(query)` 拼入输入
+  （已持有 query），调 `MemoryRecallService.build_fast_context(query)` 拼入输入
   首部，不碰 ag-ui 流。编排层引用组件属合法依赖箭头
   （orchestration ──► components）。
 - 实现：纯 SQL 直读 ACTIVE 陈述按评分截断 top-N + 实体属性速览。
@@ -185,7 +185,7 @@ score = α·相关度(Weaviate hybrid分) + β·exp(-Δt/τ) + γ·(importance +
 sequenceDiagram
     participant M as agent(模型)
     participant TOOL as timeline/expand/state_at
-    participant MS as MemoryService
+    participant MS as MemoryRecallService
     participant IDX as MemoryVectorIndex
     participant REPO as MemoryRepository(SQL)
     M->>TOOL: 检索请求
@@ -294,6 +294,15 @@ agent.stream 之间增快速召回注入，替代原 AgenticService 位置）；
 
 **不动**：DI 容器结构；docker-compose（无新中间件）；协议流格式；
 Celery 任务体系（写路径仍走守护线程）。
+
+**2026-08-29 拆分**：原 `service.py` 的 `MemoryService` 门面按收尾/召回/解析
+三块拆分——`consolidation.py`（`MemoryConsolidationService`，remember 巩固
+管线）、`recall.py`（`MemoryRecallService`，快注 + 深度三件套 +
+`SessionInjectRegistry`）、`extraction.py` 吸收输入组装与程序化降级裁决
+（`build_transcript`/`statement_digest`/`programmatic_decisions`/`PairedFact`）；
+两段式消歧抽为共享单源 `resolution.py`（写读同规：拆分禁令翻转对读路向量
+兜底同样生效，类型护栏仅写路有期望类型时适用）。门面删除，消费方直注两服务；
+wireup 包扫描自动注册，容器无手工条目。
 
 ## 10. 测试策略（纯单元，SQLite + stub 向量索引）
 

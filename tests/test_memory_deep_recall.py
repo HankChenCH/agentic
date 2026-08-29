@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.components.memory.service import MemoryService
+from app.components.memory import MemoryRecallService
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import (
     StatementState,
@@ -26,9 +26,9 @@ class Harness:
         self.engine = engine
         self.repo = SqliteGraphMemoryRepository(engine=engine)
         self.vector = FakeMemoryVectorIndex(preset_hits=preset_hits)
-        self.svc = MemoryService(
+        self.svc = MemoryRecallService(
             memory_repo=self.repo, vector_index=self.vector,
-            model_factory=None, app_config=make_service_config(),
+            app_config=make_service_config(),
         )
 
     def user(self):
@@ -87,6 +87,32 @@ def test_expand_by_alias_and_vector_fallback_paths(engine):
     # 假向量对 query 文本不敏感，须用零预置命中的干净实例验证未命中语义
     clean = Harness(engine)
     assert clean.svc.expand("查无此人", uuid4()).startswith("（未找到")
+
+
+def test_expand_vector_fallback_honors_merge_blocklist(engine):
+    """读路向量兜底与写路消歧同规（resolution 单源）：拆分禁令对优先于余弦排序。"""
+    h = Harness(engine)
+    a = h.repo.upsert_entity(MemoryEntity(
+        name="禹通档案", entity_type="ORG",
+        attributes={"merge_blocklist": ["卫职院档案"]}))
+    b = h.repo.upsert_entity(MemoryEntity(
+        name="卫职院档案", entity_type="ORG",
+        attributes={"merge_blocklist": ["禹通档案"]}))
+    stmt_a = h.repo.insert_statement(MemoryStatement(
+        subject_id=a.id, predicate="职位", object_text="CTO",
+        summary="禹通档案的职位是CTO", state="ACTIVE", valid_from=datetime(2026, 5, 1)))
+    stmt_b = h.repo.insert_statement(MemoryStatement(
+        subject_id=b.id, predicate="职位", object_text="校长",
+        summary="卫职院档案的职位是校长", state="ACTIVE", valid_from=datetime(2026, 5, 1)))
+    # A 余弦更高本该 A 胜出；但 A/B 是人工拆分禁令对，禁令优先 → 锚到 B
+    h.vector._preset.append(MemoryVectorHit(kind="entity", ref_id=a.id, score=0.99))
+    h.vector._preset.append(MemoryVectorHit(kind="entity", ref_id=b.id, score=0.98))
+    h.vector._cosines.append(0.90)
+    h.vector._cosines.append(0.86)
+
+    out = h.svc.expand("学校新表述", uuid4())
+
+    assert f"#S{stmt_b.id}" in out and f"#S{stmt_a.id}" not in out
 
 
 def test_state_at_slices_bi_temporal_history(engine):

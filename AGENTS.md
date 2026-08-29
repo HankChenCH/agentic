@@ -12,6 +12,11 @@ Python 3.12 backend (**FastAPI + Celery + LangChain/LangGraph + ag-ui**) serving
 ```
 server/                          # this directory is its own git repo (the workspace root is not)
 ├── pyproject.toml               # uv-managed deps (langchain, langchain-deepseek, wireup, ag-ui-protocol, celery[redis], langchain-weaviate)
+├── alembic.ini                  # Alembic 配置：script_location 用 %(here)s 锚定（不依赖 CWD）；
+│                                #   sqlalchemy.url 留空——URL 由 migrations/env.py 从应用配置链解析
+├── migrations/                  # Alembic 迁移：env.py（import app.models.domain 收集 SQLModel.metadata 作
+│                                #   target_metadata；URL 走 AppConfig → DatabaseFactory → engine.url，不手工拼）
+│                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表）
 ├── docker-compose.yaml          # Middleware stack: PostgreSQL + Weaviate + RustFS + Redis (local dev)
 ├── .python-version              # 3.12
 ├── .env                         # Secrets: DEEPSEEK_API_KEY (live), OPENAI_API_KEY (placeholder, OpenAI 兼容网关)
@@ -22,18 +27,31 @@ server/                          # this directory is its own git repo (the works
     │   │                        #   + __main__.py (Typer → uvicorn.run，含 --host/--port/--reload)
     │   ├── task_executor/       # Celery app: main.py (sync wireup container + wireup.integration.celery.setup),
     │   │                        #   __main__.py (Typer，未知参数透传 → worker_main); tasks live in app/tasks/
-    │   └── admin/                 # 维护管理命令行（Typer 复合入口）：python -m app.cmd.admin <域> <命令>
-    │                            #   现有 memory 域：repair（实体错合并存量修复，幂等，默认 dry-run，--apply 落库）
-    │                            #     + rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
-    ├── tasks/                   # Celery task layer: one module per task domain; __init__.py auto-imports
-    │                            #   every non-underscore module so tasks self-register (include=["app.tasks"])
+    │   └── admin/                 # 维护管理命令行（Typer 复合入口）：python -m app.cmd.admin <域> <命令>；命令实现在 app/commands/
+├── tasks/                   # Celery task layer: one module per task domain; __init__.py auto-imports
+│                            #   every non-underscore module so tasks self-register (include=["app.tasks"])
+├── commands/                # admin 命令行的领域命令层，一域一模块、各自暴露 typer.Typer，由 cmd/admin 入口
+│                            #   add_typer 挂载：memory 域 repair（实体错合并存量修复，幂等，默认 dry-run，
+│                            #   --apply 落库）+ rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
+│                            #   + db 域：Alembic 迁移薄封装（upgrade/downgrade/revision/current/history/stamp）
 ├── api/                     # exception_handlers.py (global AOP handlers); v1/endpoints/ — agentic.py -> POST /agentic/chat (StreamingResponse)
 │                              #   + POST /agentic/chat/cancel 显式取消（置 thread 作用域 Redis 标志，幂等）
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传，文件落 rustfs）;
 │                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）;
-│                              memory.py -> /memory/graph 记忆图快照（管理侧只读；at 参数做时点回放，
+│                              memory.py -> /memory/graph 记忆图快照（at 参数做时点回放，
 │                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
+│                              + POST/PATCH/DELETE /memory/statements、PATCH/POST/DELETE
+│                              /memory/entities/{ref}[/merge|/split]、PATCH/DELETE
+│                              /memory/episodes/{ref}、PATCH /memory/episode-links/{ref}、
+│                              /memory/maintenance/{purge-preview,purge,export,reset}
+│                              记忆编辑 L1–L4（取代式纠正/归档/手工补充/实体改名 +
+│                              合并/拆分/孤立清理 + 事件直改/删除/参与改挂 + 当日清除/
+│                              会话遗忘/导出/整体重置；服务为
+│                              domain/memory/admin_service.py 经 ports.MemoryEditor 端口，
+│                              实现在 components/memory/editor.py——用例级事务+定向向量同步；
+│                              身份纠错的归属改写走仓储复合事务 absorb/split_entity，
+│                              拆分双方互写 attributes.merge_blocklist，消歧遇禁令对优先于余弦）
 ├── core/container.py        # Shared wireup injectables + build_async_container()/build_sync_container()
     ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py, memory.py, redis.py (RedisConfig + RedisProviderEntry), task.py, logging.py; get_environment()
     ├── core/exceptions/         # Framework baseline exceptions: AgenticError root → framework.py (FrameworkError, ConfigError,
@@ -45,10 +63,13 @@ server/                          # this directory is its own git repo (the works
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
     ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary)
-├── components/              # Self-contained capability components: components/memory (MemoryService 门面：
-│                            #   remember 巩固管线·build_fast_context 快速注入·timeline/expand/state_at 深度三件套、
-│                            #   own repositories/ 图谱实现、renderer 模板契约/scoring/extraction/vocab；
-│                            #   向量适配器在 services/domain/memory 经 components→domain 合法边引用)
+├── components/              # Self-contained capability components: components/memory（按收尾/召回/解析三块拆分：
+│                            #   consolidation.py 收尾·remember 巩固管线（抽取→消歧→裁决→落库+向量同步）、
+│                            #   recall.py 召回·build_fast_context 快速注入 + timeline/expand/state_at 深度三件套
+│                            #   + SessionInjectRegistry、extraction.py 解析·LLM 输入组装/抽取/裁决/降级裁决、
+│                            #   resolution.py 两段式实体消歧单源（写读同规）、own repositories/ 图谱实现、
+│                            #   renderer 模板契约/scoring/vocab；向量适配器在 services/domain/memory
+│                            #   经 components→domain 合法边引用)
 │                            #   and components/knowledge (retrieval:
 │                            #   KnowledgeRetrievalService + knowledge_list/knowledge_search tools) —
 │                            #   components may import domain/repositories/infra (单向)，严禁
@@ -82,6 +103,12 @@ server/                          # this directory is its own git repo (the works
                                  #   端口的实现，key 前缀 agentic:cancel:)
 ```
 
+> **命名对照**：`cmd/` 借自 Go 布局惯例（Python 官方无目录级入口规范，入口机制是
+> `[project.scripts]` + `__main__.py`/`python -m`；此为有意识的借用）。每个入口的
+> "命令体"按产物类型分包——`cmd/http` → `api/`（HTTP 端点体）、`cmd/task_executor` →
+> `tasks/`（Celery 任务体）、`cmd/admin` → `commands/`（CLI 命令体；内部分层参照
+> pip `_internal/{cli,commands}` 与 poetry `console/commands` 的先例）。
+
 ## Commands
 
 All commands run with CWD = `server/` (this directory).
@@ -112,6 +139,16 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   rebuild-index` (stats only; `--yes` to drop + re-embed). Top-level
   `--config-dir`/`--env-file` bridge to `AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE`
   (same convention as the http entrypoint).
+- Database migrations (Alembic): `uv run python -m app.cmd.admin db upgrade`
+  (creates tables on a fresh DB and applies增量; the http app does **not**
+  create tables at startup). Subcommands: `downgrade <rev>`, `revision -m
+  "..." [--autogenerate]`, `current`, `history`, `stamp [head]` — thin
+  wrappers over `alembic.command`, URL resolved by `migrations/env.py` from
+  the app config chain (`DB_DSN`/`AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` all
+  apply). Workflow: change `models/domain` → `db revision --autogenerate` →
+  review the script → `db upgrade`. A pre-Alembic DB (created by the old
+  startup `create_all`) is adopted once via `db stamp head`. Direct
+  `uv run alembic <cmd>` from `server/` also works (same `alembic.ini`).
 - Run unit tests: `uv run pytest tests/` (pure unit level — SQLite 临时库 +
   stub 向量索引，不碰 Weaviate/MinerU/Ollama).
 - **Entrypoint modules import `from app...`, so run them as modules
@@ -147,7 +184,9 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
 - Redis is used by the task executor. The app's default db is still SQLite
   (`db.yaml` `default: sqlite`); the matching `postgres` entry is wired through
   `app/infrastructures/db/` (psycopg3 driver, lazy) — switch by changing
-  `default`. Weaviate is reachable via `app/infrastructures/vector/` and rustfs
+  `default`. Schema is managed by Alembic migrations (`admin db` commands,
+  see Commands) — nothing creates tables at process startup, and DDL changes
+  must go through a new migration. Weaviate is reachable via `app/infrastructures/vector/` and rustfs
   via `app/infrastructures/filesystem/` (both lazy — nothing connects until
   the first `create()`; neither has a consumer in the app so far).
 
@@ -473,7 +512,7 @@ future RAG).
   `docs/memory-v2-design.md` §8; polluted archives are repairable via
   `python -m app.cmd.admin memory repair --apply`.
   Recall has two tiers: `ChatOrchestrator.chat` auto-injects a brief block
-  (`MemoryService.build_fast_context`, pure SQL scoring, no LLM/embedding)
+  (`MemoryRecallService.build_fast_context`, pure SQL scoring, no LLM/embedding)
   before streaming; deep recall = three tools (`timeline`/`expand`/`state_at`,
   built in `components/memory/tools.py`, reading the current thread from the
   langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`

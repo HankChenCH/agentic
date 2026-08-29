@@ -8,7 +8,7 @@ from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.infrastructures.llm import ModelFactory
 from app.components.knowledge import KnowledgeRetrievalService
-from app.components.memory import MemoryService
+from app.components.memory import MemoryRecallService
 
 import app.agents.builtin  # noqa: F401  触发内置智能体的 @register_agent 注册
 
@@ -27,7 +27,7 @@ class AgentFactory:
 
     model_factory: ModelFactory
     app_config: AppConfig
-    memory: MemoryService
+    memory: MemoryRecallService
     knowledge: KnowledgeRetrievalService
     logger_factory: LoggerFactory
 

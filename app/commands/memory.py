@@ -4,7 +4,7 @@
 消歧曾把 Weaviate hybrid 融合分当余弦阈值用，statement / episode_link 随之
 错挂，别名还吸入了「学校名」「#S13/#S14」等污染项。代码侧修复见
 ``services/domain/memory/vector_index.py``（text_cosine）与
-``components/memory/service.py``（两段式消歧）；本模块的 repair 清存量。
+``components/memory/resolution.py``（两段式消歧）；本模块的 repair 清存量。
 
 仓储的 upsert_entity 对 aliases 只并集不删除、也没有按 id 改 statement 的
 接口，因此修复直开 SQLModel Session 写（一次性维护命令可接受的例外）。
@@ -19,6 +19,7 @@ import typer
 from sqlmodel import Session, select
 
 from app.components.memory.renderer import INTERNAL_REF_TOKEN_RE
+from app.components.memory.resolution import entity_content as _entity_content
 from app.core.container import build_sync_container
 from app.infrastructures.db import DatabaseFactory
 from app.models.domain.memory import (
@@ -227,12 +228,6 @@ def rebuild_index(engine, vector_index) -> dict[str, int]:
     entries, counts = collect_index_entries(engine)
     vector_index.rebuild(entries)
     return counts
-
-
-def _entity_content(row: MemoryEntity) -> str:
-    """与 service._entity_content 同构：实体向量写入的档案文本。"""
-    alias_bit = f"（{'、'.join(row.aliases)}）" if row.aliases else ""
-    return f"{row.name}{alias_bit}"
 
 
 def _services():

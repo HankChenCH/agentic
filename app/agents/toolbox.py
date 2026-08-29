@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from app.components.knowledge import KnowledgeRetrievalService
-from app.components.memory import MemoryService
+from app.components.memory import MemoryRecallService
 
 
 @dataclass
@@ -11,5 +11,5 @@ class AgentToolbox:
     新增能力（如知识库检索）时加字段即可，BaseAgent 构造签名不必再变。
     """
 
-    memory: MemoryService
+    memory: MemoryRecallService
     knowledge: KnowledgeRetrievalService

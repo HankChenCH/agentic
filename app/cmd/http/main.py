@@ -1,15 +1,15 @@
 """HTTP 入口：FastAPI 应用工厂。
 
 容器装配来自 app.core.container（async 容器），本文件只保留 HTTP
-特有部分：路由、全局异常处理器、CORS、lifespan 建表。
-命令行参数见 __main__.py。
+特有部分：路由、全局异常处理器、CORS。建表/迁移不在启动路径——
+由 `python -m app.cmd.admin db upgrade` 负责（Alembic 管理，见
+alembic.ini + migrations/）。命令行参数见 __main__.py。
 """
 
 from contextlib import asynccontextmanager
 import logging
 
 from sqlalchemy import Engine
-from sqlmodel import SQLModel
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,11 +23,6 @@ from app.api.exception_handlers import register_exception_handlers
 from app.api.v1.endpoints import agent_knowledge, agentic, knowledge, memory
 from app.infrastructures.vector import VectorStoreFactory
 
-# 确保所有 SQLModel 表模型被导入，以便 SQLModel.metadata 能收集到它们
-import app.models.domain.agentic  # noqa: F401
-import app.models.domain.knowledge  # noqa: F401
-import app.models.domain.memory  # noqa: F401 记忆 v2 四表
-
 # .env 由 core/config/loader.py 在首次读取配置时加载（AGENTIC_ENV_FILE 可指定路径）
 
 # wireup 容器在 setup() 之后才能注入 FastAPI，故用闭包延迟访问 lifespan 内的容器。
@@ -36,19 +31,19 @@ _container_holder: dict = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时建表：从容器取出单例 Engine，DDL 仅对 table=True 的模型生效
+    # 启动即实例化 AppConfig：环境变量缺失/校验失败让进程起不来，而非等首个请求。
+    # 不再建表：表结构由 Alembic 迁移管理（admin db upgrade），库未迁移会在
+    # 首个请求时报错——部署流程需先执行迁移。
     container = _container_holder["container"]
-    # 启动即实例化 AppConfig：环境变量缺失/校验失败让进程起不来，而非等首个请求
     await container.get(AppConfig)
-    engine = await container.get(Engine)
-    SQLModel.metadata.create_all(engine)
     yield
 
     # 优雅关闭：释放 Engine 连接池与向量库客户端（与 Celery 侧的
     # container.close() 对齐）。best-effort：清理失败只记日志，不阻断退出。
+    # Engine 此前未被用过时，这里会惰性构建一次再 dispose（无连接可释放）。
     logger = logging.getLogger(__name__)
     try:
-        engine.dispose()
+        (await container.get(Engine)).dispose()
     except Exception:
         logger.warning("db engine dispose failed on shutdown", exc_info=True)
     try:

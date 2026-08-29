@@ -24,3 +24,15 @@ def cardinality(predicate: str) -> str:
     if predicate in SINGLE_VALUE_PREDICATES:
         return "single"
     return "multi"
+
+
+def fact_summary(subject_name: str, predicate: str, object_label: str) -> str:
+    """陈述 summary 的唯一规范句式（向量嵌入源）。
+
+    单值谓词「A的X是B」、其余「AXB」。抽取落库（service._fact_summary）与
+    人工编辑改挂（editor）共用此实现——客体实体被合并/拆分改挂时 summary
+    必须按新归属重组，否则留下语义错位的向量。
+    """
+    if cardinality(predicate) == "single":
+        return f"{subject_name}的{predicate}是{object_label}"
+    return f"{subject_name}{predicate}{object_label}"

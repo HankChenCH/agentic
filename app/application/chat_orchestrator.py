@@ -12,7 +12,7 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
-from app.components.memory import MemoryService
+from app.components.memory import MemoryRecallService
 
 from .translator import AgUiTranslator, StorageTranslator
 from .turn_finalizer import TurnFinalizer
@@ -40,7 +40,7 @@ class ChatOrchestrator:
 
     turn_finalizer: TurnFinalizer
 
-    memory: MemoryService
+    memory: MemoryRecallService
 
     logger_factory: LoggerFactory
 

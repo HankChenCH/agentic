@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from sqlmodel import Session, select
 
-from app.cmd.admin.memory import (
+from app.commands.memory import (
     COMPANY_NAME,
     SCHOOL_NAME,
     rebuild_index,

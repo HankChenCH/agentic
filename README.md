@@ -47,10 +47,13 @@ uv sync
 # 3. 启动中间件(知识库需要;纯聊天只需默认 SQLite,可跳过)
 docker compose up -d
 
-# 4. 启动 HTTP 服务
+# 4. 数据库迁移(建表/升级,由 Alembic 管理;库指向由 db.yaml/DB_DSN 决定)
+uv run python -m app.cmd.admin db upgrade
+
+# 5. 启动 HTTP 服务
 uv run uvicorn app.cmd.http.main:server --reload
 
-# 5. 启动 Celery worker(知识库文档摄取需要;需先起 redis)
+# 6. 启动 Celery worker(知识库文档摄取需要;需先起 redis)
 uv run celery -A app.cmd.task_executor.main worker
 ```
 
@@ -64,6 +67,7 @@ HTTP 服务监听 `0.0.0.0:8000`,聊天端点即 `http://127.0.0.1:8000/agentic/
 | 运行 dev server | `uv run uvicorn app.cmd.http.main:server --reload` |
 | 运行 Celery worker | `uv run celery -A app.cmd.task_executor.main worker` |
 | 运行单元测试 | `uv run pytest tests/` |
+| 数据库迁移(Alembic) | `uv run python -m app.cmd.admin db upgrade`(另有 `downgrade` / `revision` / `current` / `history` / `stamp`) |
 | 启动/停止中间件 | `docker compose up -d` / `docker compose down` |
 | 清空中间件数据 | `docker compose down -v` |
 
@@ -141,6 +145,19 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `POST` | `/knowledge/{kb_id}/document/{doc_id}/retry` · `/enable` · `/disable` | 重试 / 启停文档 |
 | `GET` | `/knowledge/{kb_id}/document/{doc_id}/file` | 下载源文件 |
 | `GET` / `PUT` | `/agent/{agent_id}/knowledge` | 查看 / 全量替换 agent↔知识库绑定 |
+| `GET` | `/memory/graph` | 记忆图快照(`at` 做时点回放,含已取代历史) |
+| `POST` | `/memory/statements` | 手工补充事实(origin=MANUAL,抽取裁决恒不取代) |
+| `PATCH` / `DELETE` | `/memory/statements/{ref}` | 取代式纠正(旧行 SUPERSEDED 新行接续) / 归档(软删可回放) |
+| `PATCH` | `/memory/entities/{ref}` | 实体改名/别名全量替换/类型修改 |
+| `POST` | `/memory/entities/{ref}/merge` | 错分离合并:全量并入目标(含历史行)后删除本实体 |
+| `POST` | `/memory/entities/{ref}/split` | 错合并拆分:所选事实/参与/别名迁往新实体,双方写拆分禁令 |
+| `DELETE` | `/memory/entities/{ref}` | 孤立实体清理(无任何事实引用与事件参与;用户节点受保护) |
+| `PATCH` / `DELETE` | `/memory/episodes/{ref}` | 事件档案直改(摘要/场景/时间) / 物理删除(含参与,不可恢复) |
+| `PATCH` | `/memory/episode-links/{ref}` | 参与改挂:换实体/改角色(撞唯一组合 → 3007) |
+| `GET` | `/memory/maintenance/purge-preview` | 清除影响面预览(scope=day 用 from/to;scope=thread 用 threadId) |
+| `POST` | `/memory/maintenance/purge` | 范围清除:在效事实归档(可回放)、事件物理删除、孤立实体清理 |
+| `GET` | `/memory/maintenance/export` | 四表全量导出 JSON 备份(含历史行) |
+| `POST` | `/memory/maintenance/reset` | 整体重置(confirmation 须为「重置」;清空四表+重建向量) |
 
 ## 测试
 
@@ -162,6 +179,7 @@ server/
 │   ├── components/        # 自包含能力组件:memory(长期记忆)、knowledge(检索)
 │   ├── agents/            # BaseAgent 注册表 + AgentFactory + 内置 agent
 │   ├── tasks/             # Celery 任务(文档摄取)
+│   ├── commands/          # admin 命令行的领域命令(memory repair/rebuild-index、db 迁移)
 │   ├── repositories/      # 数据访问(SQLModel 会话)
 │   ├── infrastructures/   # 共享驱动工厂:llm / db / vector / filesystem / document_parser
 │   ├── models/            # schema(线格式,camelCase)+ domain(SQLModel 表)

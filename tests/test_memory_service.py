@@ -1,9 +1,9 @@
-"""MemoryService 编排：快速回忆注入的排序/强化/小话短路与会话内增量去重。"""
+"""MemoryRecallService 快注：排序/强化/小话短路与会话内增量去重。"""
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from app.components.memory.service import MemoryService
+from app.components.memory import MemoryRecallService
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import MemoryEntity, MemoryStatement
 
@@ -14,10 +14,9 @@ THREAD = uuid4()
 
 
 def _service(engine, **config_overrides):
-    return MemoryService(
+    return MemoryRecallService(
         memory_repo=SqliteGraphMemoryRepository(engine=engine),
         vector_index=FakeMemoryVectorIndex(),
-        model_factory=None,
         app_config=make_service_config(**config_overrides),
     )
 

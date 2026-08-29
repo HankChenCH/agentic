@@ -3,7 +3,7 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.components.memory import MemoryService
+from app.components.memory import MemoryConsolidationService
 from app.core.logging import LoggerFactory
 from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.domain.conversation.title_generator import ConversationTitleGenerator
@@ -29,7 +29,7 @@ class TurnFinalizer:
 
     title_generator: ConversationTitleGenerator
     conversations: ConversationService
-    memory: MemoryService
+    memory: MemoryConsolidationService
     logger_factory: LoggerFactory
 
     def __post_init__(self):

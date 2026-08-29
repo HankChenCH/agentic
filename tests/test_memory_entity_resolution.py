@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 
 from app.components.memory.extraction import ExtractedEntity
-from app.components.memory.service import USER_ENTITY_NAME, MemoryService
+from app.components.memory import MemoryConsolidationService
+from app.components.memory.consolidation import USER_ENTITY_NAME
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import EntityType, MemoryEntity
 from app.services.domain.memory import MemoryVectorHit
@@ -14,7 +15,7 @@ NOW = datetime(2026, 8, 27, tzinfo=timezone.utc)
 
 
 def _service(engine, vector=None):
-    return MemoryService(
+    return MemoryConsolidationService(
         memory_repo=SqliteGraphMemoryRepository(engine=engine),
         vector_index=vector or FakeMemoryVectorIndex(),
         model_factory=None,
