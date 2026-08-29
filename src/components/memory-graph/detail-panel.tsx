@@ -1,8 +1,22 @@
 import type { FC } from "react";
-import { XIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   ENTITY_TYPE_COLOR_FALLBACK,
   ENTITY_TYPE_COLORS,
@@ -20,6 +34,8 @@ import type {
  * 记忆图谱详情面板：展示选中节点/边（陈述）的完整档案。
  *
  * 纯展示组件——选中对象与索引数据由页面组装后传入；`onClose` 清空选中。
+ * 编辑类动作（纠正/归档/实体编辑/补充事实）通过回调上抛，弹窗与请求
+ * 统一由页面托管。
  */
 
 const fmtDate = (iso: string | null): string =>
@@ -48,12 +64,14 @@ export interface EntitySelection {
   node: MemoryEntityNode;
   facts: LiteralFact[];
   relations: EntityRelation[];
+  /** 事件参与（孤立判定与拆分选择用） */
+  participations: { linkId: string; label: string; role: string | null }[];
 }
 
 export interface EpisodeSelection {
   kind: "episode";
   node: MemoryEpisodeNode;
-  roles: { entityName: string; role: string | null }[];
+  roles: { linkId: string; entityId: string; entityName: string; role: string | null }[];
 }
 
 export interface StatementSelection {
@@ -71,29 +89,135 @@ export type MemorySelection =
 export const MemoryDetailPanel: FC<{
   selection: MemorySelection;
   onClose: () => void;
-}> = ({ selection, onClose }) => {
+  onEditEntity?: (node: MemoryEntityNode) => void;
+  onAddFact?: (node: MemoryEntityNode) => void;
+  onCorrectStatement?: (edge: Extract<MemoryGraphEdge, { kind: "statement" }>) => void;
+  onArchiveStatement?: (edge: Extract<MemoryGraphEdge, { kind: "statement" }>) => void;
+  /** 点实体档案里的字面量事实/关系行 → 打开对应事实档案（字面量事实无画布边，这是唯一入口） */
+  onOpenStatement?: (statementId: string) => void;
+  onMergeEntity?: (node: MemoryEntityNode) => void;
+  onSplitEntity?: (node: MemoryEntityNode) => void;
+  onDeleteEntity?: (node: MemoryEntityNode) => void;
+  onEditEpisode?: (node: MemoryEpisodeNode) => void;
+  onDeleteEpisode?: (node: MemoryEpisodeNode) => void;
+  onEditLink?: (link: EpisodeSelection["roles"][number]) => void;
+}> = ({
+  selection,
+  onClose,
+  onEditEntity,
+  onAddFact,
+  onCorrectStatement,
+  onArchiveStatement,
+  onOpenStatement,
+  onMergeEntity,
+  onSplitEntity,
+  onDeleteEntity,
+  onEditEpisode,
+  onDeleteEpisode,
+  onEditLink,
+}) => {
+  const actions: { label: string; icon: FC; onClick: () => void; key: string }[] = [];
+  if (selection.kind === "entity") {
+    if (onAddFact)
+      actions.push({ key: "add-fact", label: "补充事实", icon: PlusIcon, onClick: () => onAddFact(selection.node) });
+    if (onEditEntity)
+      actions.push({ key: "edit", label: "编辑", icon: PencilIcon, onClick: () => onEditEntity(selection.node) });
+  }
+  if (selection.kind === "statement") {
+    if (onCorrectStatement)
+      actions.push({ key: "correct", label: "纠正", icon: PencilIcon, onClick: () => onCorrectStatement(selection.edge) });
+    if (onArchiveStatement)
+      actions.push({ key: "archive", label: "归档", icon: ArchiveIcon, onClick: () => onArchiveStatement(selection.edge) });
+  }
+  if (selection.kind === "episode") {
+    if (onEditEpisode)
+      actions.push({ key: "edit-episode", label: "编辑", icon: PencilIcon, onClick: () => onEditEpisode(selection.node) });
+    if (onDeleteEpisode)
+      actions.push({ key: "delete-episode", label: "删除", icon: Trash2Icon, onClick: () => onDeleteEpisode(selection.node) });
+  }
+
+  // 孤立判定：无字面量事实、无双向关系、无事件参与（与服务端口径一致，
+  // 仅别名留存不阻断删除）
+  const isOrphanEntity =
+    selection.kind === "entity" &&
+    selection.facts.length === 0 &&
+    selection.relations.length === 0 &&
+    selection.participations.length === 0;
+
   return (
     <aside className="absolute right-4 top-4 z-10 flex max-h-[calc(100%-2rem)] w-80 flex-col overflow-hidden rounded-xl border border-border/80 bg-card shadow-card">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
         <span className="text-xs font-medium tracking-wide text-muted-foreground">
           {selection.kind === "statement" ? "事实档案" : "节点档案"}
         </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-6"
-          onClick={onClose}
-          aria-label="关闭详情"
-        >
-          <XIcon className="size-3.5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          {actions.map(({ key, label, icon: Icon, onClick }) => (
+            <Button
+              key={key}
+              variant="outline"
+              size="xs"
+              onClick={onClick}
+            >
+              <Icon />
+              {label}
+            </Button>
+          ))}
+          {selection.kind === "entity" && (onMergeEntity || onSplitEntity || onDeleteEntity) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="ghost" size="icon" className="size-6" aria-label="更多操作" />
+                }
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {onMergeEntity && (
+                  <DropdownMenuItem onClick={() => onMergeEntity(selection.node)}>
+                    合并到其他实体…
+                  </DropdownMenuItem>
+                )}
+                {onSplitEntity && (
+                  <DropdownMenuItem onClick={() => onSplitEntity(selection.node)}>
+                    拆分实体…
+                  </DropdownMenuItem>
+                )}
+                {onDeleteEntity && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={!isOrphanEntity}
+                      onClick={() => onDeleteEntity(selection.node)}
+                    >
+                      {isOrphanEntity ? "删除实体" : "删除实体（仍被事实/事件引用）"}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            onClick={onClose}
+            aria-label="关闭详情"
+          >
+            <XIcon className="size-3.5" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-2.5 overflow-auto px-4 py-3">
         {selection.kind === "entity" && (
-          <EntityDetail selection={selection} />
+          <EntityDetail
+            selection={selection}
+            onOpenStatement={onOpenStatement}
+          />
         )}
-        {selection.kind === "episode" && <EpisodeDetail selection={selection} />}
+        {selection.kind === "episode" && (
+          <EpisodeDetail selection={selection} onEditLink={onEditLink} />
+        )}
         {selection.kind === "statement" && (
           <StatementDetail selection={selection} />
         )}
@@ -102,7 +226,46 @@ export const MemoryDetailPanel: FC<{
   );
 };
 
-const EntityDetail: FC<{ selection: EntitySelection }> = ({ selection }) => {
+const FactRow: FC<{
+  label: string;
+  hint: string;
+  superseded?: boolean;
+  extra?: React.ReactNode;
+  onClick?: () => void;
+}> = ({ label, hint, superseded = false, extra, onClick }) => {
+  const content = (
+    <>
+      <span className="font-medium">{label}</span>
+      <span className="mx-1 text-muted-foreground">→</span>
+      {hint}
+      {superseded && <span className="ml-1 text-[10px]">（已被取代）</span>}
+      {extra}
+    </>
+  );
+  const tone = superseded ? "text-muted-foreground/70" : "";
+  if (!onClick) {
+    return (
+      <div className={`rounded-md border border-border/60 bg-background/60 px-2 py-1 text-xs ${tone}`}>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title="查看事实档案"
+      onClick={onClick}
+      className={`block w-full cursor-pointer rounded-md border border-border/60 bg-background/60 px-2 py-1 text-left text-xs transition-colors hover:border-primary/40 hover:bg-muted/60 ${tone}`}
+    >
+      {content}
+    </button>
+  );
+};
+
+const EntityDetail: FC<{
+  selection: EntitySelection;
+  onOpenStatement?: (statementId: string) => void;
+}> = ({ selection, onOpenStatement }) => {
   const { node, facts, relations } = selection;
   const color = ENTITY_TYPE_COLORS[node.entityType] ?? ENTITY_TYPE_COLOR_FALLBACK;
   return (
@@ -151,20 +314,17 @@ const EntityDetail: FC<{ selection: EntitySelection }> = ({ selection }) => {
           <SectionTitle>属性事实（字面量）</SectionTitle>
           <div className="flex flex-col gap-1">
             {facts.map((fact) => (
-              <div
+              <FactRow
                 key={fact.statementId}
-                className={[
-                  "rounded-md border border-border/60 bg-background/60 px-2 py-1 text-xs",
-                  fact.state !== "ACTIVE" && "text-muted-foreground/70",
-                ].join(" ")}
-              >
-                <span className="font-medium">{fact.predicate}</span>
-                <span className="mx-1 text-muted-foreground">→</span>
-                {fact.objectText}
-                {fact.state !== "ACTIVE" && (
-                  <span className="ml-1 text-[10px]">（已被取代）</span>
-                )}
-              </div>
+                label={fact.predicate}
+                hint={fact.objectText}
+                superseded={fact.state !== "ACTIVE"}
+                onClick={
+                  onOpenStatement
+                    ? () => onOpenStatement(fact.statementId)
+                    : undefined
+                }
+              />
             ))}
           </div>
         </>
@@ -174,16 +334,21 @@ const EntityDetail: FC<{ selection: EntitySelection }> = ({ selection }) => {
           <SectionTitle>关系</SectionTitle>
           <div className="flex flex-col gap-1">
             {relations.map((rel) => (
-              <div key={rel.edgeId} className="text-xs">
-                <span className="font-medium">{rel.predicate}</span>
-                <span className="mx-1 text-muted-foreground">→</span>
-                {rel.targetName}
-                {rel.origin === "MANUAL" && (
-                  <Badge variant="outline" className="ml-1 rounded-full px-1 text-[10px]">
-                    人工
-                  </Badge>
-                )}
-              </div>
+              <FactRow
+                key={rel.edgeId}
+                label={rel.predicate}
+                hint={rel.targetName}
+                extra={
+                  rel.origin === "MANUAL" ? (
+                    <Badge variant="outline" className="ml-1 rounded-full px-1 text-[10px]">
+                      人工
+                    </Badge>
+                  ) : undefined
+                }
+                onClick={
+                  onOpenStatement ? () => onOpenStatement(rel.edgeId) : undefined
+                }
+              />
             ))}
           </div>
         </>
@@ -192,7 +357,10 @@ const EntityDetail: FC<{ selection: EntitySelection }> = ({ selection }) => {
   );
 };
 
-const EpisodeDetail: FC<{ selection: EpisodeSelection }> = ({ selection }) => {
+const EpisodeDetail: FC<{
+  selection: EpisodeSelection;
+  onEditLink?: (link: EpisodeSelection["roles"][number]) => void;
+}> = ({ selection, onEditLink }) => {
   const { node, roles } = selection;
   return (
     <>
@@ -210,12 +378,25 @@ const EpisodeDetail: FC<{ selection: EpisodeSelection }> = ({ selection }) => {
         <>
           <SectionTitle>参与角色</SectionTitle>
           <div className="flex flex-col gap-1 text-xs">
-            {roles.map((role, index) => (
-              <div key={`${role.entityName}-${index}`}>
-                <Badge variant="outline" className="mr-1.5 rounded-full px-1.5 font-normal">
-                  {role.role ?? "涉及"}
-                </Badge>
-                {role.entityName}
+            {roles.map((role) => (
+              <div key={role.linkId} className="flex items-center justify-between gap-2">
+                <div>
+                  <Badge variant="outline" className="mr-1.5 rounded-full px-1.5 font-normal">
+                    {role.role ?? "涉及"}
+                  </Badge>
+                  {role.entityName}
+                </div>
+                {onEditLink && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-5 shrink-0"
+                    aria-label={`编辑参与：${role.entityName}`}
+                    onClick={() => onEditLink(role)}
+                  >
+                    <PencilIcon className="size-3" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>

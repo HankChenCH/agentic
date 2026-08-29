@@ -66,8 +66,8 @@ export interface MemoryEntityFlowData extends Record<string, unknown> {
 
 export interface MemoryEpisodeFlowData extends Record<string, unknown> {
   memory: MemoryEpisodeNode;
-  /** 参与角色（来自 episode_link 边，详情面板用；节点上只画边） */
-  roles: { entityId: string; entityName: string; role: string | null }[];
+  /** 参与角色（来自 episode_link 边，详情面板展示 + 参与改挂定位用） */
+  roles: { linkId: string; entityId: string; entityName: string; role: string | null }[];
 }
 
 /** React Flow 自定义节点类型：v12 泛型 = Node<数据, 节点名>（NodeProps 传整个节点类型） */
@@ -90,6 +90,11 @@ export interface GraphModel {
   relationsByEntity: Map<string, EntityRelation[]>;
   /** 情节参与角色（episode_link 边聚合，key = ep:{id}） */
   rolesByEpisode: Map<string, MemoryEpisodeFlowData["roles"]>;
+  /** 实体参与的事件边（episode_link 按 target 实体聚合，key = e:{id}），
+      实体档案的参与列表与孤立判定、拆分选择共用 */
+  linksByEntity: Map<string, { linkId: string; episodeId: string; role: string | null }[]>;
+  /** 节点邻接（statement / episode_link 双向互挂），聚焦扩散用 */
+  neighborsByNode: Map<string, { nodeId: string; edgeId: string }[]>;
   /** 边两端名称（边详情面板用，key = s:{id}） */
   endpointNamesByStatement: Map<string, { source: string; target: string | null }>;
 }
@@ -120,6 +125,15 @@ export function buildGraphModel(snapshot: MemoryGraphSnapshot): GraphModel {
     string,
     { source: string; target: string | null }
   >();
+  const neighborsByNode = new Map<
+    string,
+    { nodeId: string; edgeId: string }[]
+  >();
+  const addNeighbor = (from: string, to: string, edgeId: string) => {
+    const bucket = neighborsByNode.get(from) ?? [];
+    bucket.push({ nodeId: to, edgeId });
+    neighborsByNode.set(from, bucket);
+  };
 
   for (const s of statements) {
     endpointNames.set(s.id, {
@@ -158,6 +172,8 @@ export function buildGraphModel(snapshot: MemoryGraphSnapshot): GraphModel {
         targetName: nameById.get(s.source) ?? s.source,
       });
       relationsByEntity.set(s.target, objectBucket);
+      addNeighbor(s.source, s.target, s.id);
+      addNeighbor(s.target, s.source, s.id);
     }
   }
 
@@ -165,15 +181,25 @@ export function buildGraphModel(snapshot: MemoryGraphSnapshot): GraphModel {
     string,
     MemoryEpisodeFlowData["roles"]
   >();
+  const linksByEntity = new Map<
+    string,
+    { linkId: string; episodeId: string; role: string | null }[]
+  >();
   for (const edge of snapshot.edges) {
     if (edge.kind !== "episode_link") continue;
     const bucket = rolesByEpisode.get(edge.source) ?? [];
     bucket.push({
+      linkId: edge.id,
       entityId: edge.target,
       entityName: nameById.get(edge.target) ?? edge.target,
       role: edge.role,
     });
     rolesByEpisode.set(edge.source, bucket);
+    const entityBucket = linksByEntity.get(edge.target) ?? [];
+    entityBucket.push({ linkId: edge.id, episodeId: edge.source, role: edge.role });
+    linksByEntity.set(edge.target, entityBucket);
+    addNeighbor(edge.source, edge.target, edge.id);
+    addNeighbor(edge.target, edge.source, edge.id);
   }
 
   // ---- 节点布局：用户居中 → 实体双环 → 情节外环 ------------------------
@@ -299,6 +325,8 @@ export function buildGraphModel(snapshot: MemoryGraphSnapshot): GraphModel {
     factsByEntity,
     relationsByEntity,
     rolesByEpisode,
+    linksByEntity,
+    neighborsByNode,
     endpointNamesByStatement: endpointNames,
   };
 }
@@ -312,4 +340,70 @@ export function isEmptySnapshot(snapshot: MemoryGraphSnapshot | null): boolean {
     snapshot.stats.statementEdges === 0 &&
     snapshot.stats.episodeLinkEdges === 0
   );
+}
+
+// ---------------------------------------------------------------------------
+// 类型筛选与聚焦扩散（页面上分别驱动顶栏开关与节点淡出）
+// ---------------------------------------------------------------------------
+export interface GraphKindFilters {
+  entity: boolean;
+  episode: boolean;
+  statement: boolean;
+}
+
+/**
+ * 按节点/边类型预过滤快照（buildGraphModel 之前调用）。
+ * - 字面量事实行由 buildGraphModel 从 statement 派生，statement 被滤掉后，
+ *   实体卡内嵌行与详情面板数据一并消失——「事实」开关语义完整。
+ * - 不画悬空半边：边的任一端点节点被滤掉时，该边一并丢弃。
+ */
+export function filterSnapshot(
+  snapshot: MemoryGraphSnapshot,
+  filters: GraphKindFilters,
+): MemoryGraphSnapshot {
+  const nodes = snapshot.nodes.filter((n) =>
+    n.kind === "entity" ? filters.entity : filters.episode,
+  );
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const edges = snapshot.edges.filter((e) => {
+    if (e.kind === "statement") {
+      return (
+        filters.statement &&
+        nodeIds.has(e.source) &&
+        (!e.target || nodeIds.has(e.target))
+      );
+    }
+    return (
+      filters.entity && filters.episode && nodeIds.has(e.source) && nodeIds.has(e.target)
+    );
+  });
+  return { ...snapshot, nodes, edges };
+}
+
+/**
+ * 聚焦集合：以 centerId 为核心扩散 depth 跳内的节点与边（含核心自身）。
+ * 返回的 id 集合用于把集合外的节点/边淡出。
+ */
+export function buildFocusSets(
+  model: GraphModel,
+  centerId: string,
+  depth = 1,
+): { nodeIds: Set<string>; edgeIds: Set<string> } {
+  const nodeIds = new Set([centerId]);
+  const edgeIds = new Set<string>();
+  let frontier = [centerId];
+  for (let hop = 0; hop < depth; hop += 1) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const { nodeId, edgeId } of model.neighborsByNode.get(id) ?? []) {
+        edgeIds.add(edgeId);
+        if (!nodeIds.has(nodeId)) {
+          nodeIds.add(nodeId);
+          next.push(nodeId);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return { nodeIds, edgeIds };
 }
