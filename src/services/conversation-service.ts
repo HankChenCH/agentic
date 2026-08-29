@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { deleteJson, getJson } from "@/lib/http";
+import { deleteJson, getJson, postJson } from "@/lib/http";
 import type {
   BackendConversation,
   ConversationListResult,
@@ -73,5 +73,19 @@ export const conversationService = {
     return deleteJson<BackendConversation>(
       `/agentic/conversation/${threadId}`,
     );
+  },
+
+  /**
+   * 显式取消当前会话的活跃轮次。
+   * POST /agentic/chat/cancel（body: { threadId }，幂等）
+   *
+   * 服务端置 Redis 取消标志即返回，流式循环在节流边界感知后收口（静默
+   * 断流）。前端仍配合 abortRun 本地断链：abort 提供即时取消态与断链取消
+   * 路径，REST 标志兜底代理吞断链事件 / 工具执行中不可打断的场景。
+   */
+  async cancelChatRun(threadId: string): Promise<{ canceled: boolean }> {
+    return postJson<{ canceled: boolean }>("/agentic/chat/cancel", {
+      threadId,
+    });
   },
 };

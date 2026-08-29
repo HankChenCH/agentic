@@ -94,6 +94,12 @@ changing either side, keep the event sequence/format consistent with the server.
 
 ## Gotchas
 
+- 「停止生成」走**双通道取消**（`agentic-runtime.tsx` 的 `onCancel`）：先
+  `POST /agentic/chat/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
+  工具执行中不可打断的场景），再 `agent.abortRun()` 本地断链（即时取消态 +
+  断链取消路径）。缺一不可：只留 abort 则断链事件可能被传输层吞掉；只留
+  REST 则前端没有即时取消态。react-ag-ui 0.0.44 自身的 cancel 只 abort
+  运行时内部 controller，signal 传不到 `HttpAgent` 的 fetch。
 - 后端地址统一在 `src/lib/config.ts`（`REST_BASE`/`SSE_URL`，来自
   `import.meta.env.VITE_API_BASE`/`VITE_SSE_URL`，兜底 `http://127.0.0.1:8000`
   —— API 根）。REST 端点按领域挂顶级前缀：会话 `/agentic/conversation...`、
