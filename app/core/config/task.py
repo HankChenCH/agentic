@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .redis import RedisConfig
 
@@ -27,6 +27,20 @@ class TaskConfig(BaseModel):
 
     broker: TaskConnectionRef = Field(default_factory=TaskConnectionRef, description="消息 broker 连接引用")
     backend: TaskConnectionRef = Field(default_factory=TaskConnectionRef, description="任务结果 backend 连接引用")
+    time_limit: int = Field(
+        default=600,
+        description="任务硬超时（秒），超时 worker 强杀任务进程（对齐 ``task_time_limit``）",
+    )
+    soft_time_limit: int = Field(
+        default=540,
+        description="任务软超时（秒），超时向任务内抛 SoftTimeLimitExceeded，任务可自行收尾；须小于 time_limit",
+    )
+
+    @model_validator(mode="after")
+    def _soft_before_hard(self):
+        if self.soft_time_limit >= self.time_limit:
+            raise ValueError(f"soft_time_limit ({self.soft_time_limit}) must be < time_limit ({self.time_limit})")
+        return self
 
 
 def resolve_url(ref: TaskConnectionRef, *, redis: RedisConfig) -> str:

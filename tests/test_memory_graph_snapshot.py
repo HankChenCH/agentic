@@ -8,7 +8,7 @@
 from datetime import datetime
 import pytest
 
-from app.components.memory.graph_reader import MemoryRepositoryGraphReader
+from app.components.memory.admin import MemoryRepositoryGraphReader
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.exceptions.memory import MemoryInvalidTimeParamError
 from app.models.domain.memory import (
@@ -19,10 +19,11 @@ from app.models.domain.memory import (
     StatementState,
 )
 from app.services.domain.memory import MemoryGraphService
+from conftest import TEST_USER_ID
 
 
 def _world(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine)
+    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
     user = repo.upsert_entity(MemoryEntity(name="用户", entity_type="PERSON", is_user=True))
     boss = repo.upsert_entity(MemoryEntity(name="李总", entity_type="PERSON"))
 
@@ -57,13 +58,13 @@ def _world(engine):
 
 
 def _service(engine) -> MemoryGraphService:
-    repo = SqliteGraphMemoryRepository(engine=engine)
+    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
     return MemoryGraphService(reader=MemoryRepositoryGraphReader(memory_repo=repo))
 
 
 def test_current_snapshot_shape_and_active_only(engine):
     repo, user, boss, new_job, knows, ep_neg, ep_future = _world(engine)
-    snap = _service(engine).graph_snapshot()
+    snap = _service(engine).graph_snapshot(TEST_USER_ID)
 
     node_kinds = {n["kind"] for n in snap["nodes"]}
     assert node_kinds == {"entity", "episode"}
@@ -92,14 +93,14 @@ def test_time_slice_replays_history_with_occurrence_gate(engine):
     _world(engine)
     svc = _service(engine)
 
-    march = svc.graph_snapshot(at_iso="2026-03-01")
+    march = svc.graph_snapshot(TEST_USER_ID, at_iso="2026-03-01")
     march_states = {e["state"] for e in march["edges"] if e["kind"] == "statement"}
     assert "SUPERSEDED" in march_states                    # 回放看到“当时是什么”
     march_ep_ids = {n["id"] for n in march["nodes"] if n["kind"] == "episode"}
     assert march_ep_ids == set() or all("年底复盘" not in
         next(n["summary"] for n in march["nodes"] if n["id"] == nid) for nid in march_ep_ids)
 
-    late = svc.graph_snapshot(at_iso="2026-08-25")
+    late = svc.graph_snapshot(TEST_USER_ID, at_iso="2026-08-25")
     late_predicates = [e["objectText"] for e in late["edges"] if e["kind"] == "statement"]
     assert "后端开发" in late_predicates and "教师" not in late_predicates
     late_ep_summaries = [n["summary"] for n in late["nodes"] if n["kind"] == "episode"]
@@ -109,11 +110,11 @@ def test_time_slice_replays_history_with_occurrence_gate(engine):
 
 def test_invalid_at_raises_business_error(engine):
     with pytest.raises(MemoryInvalidTimeParamError):
-        _service(engine).graph_snapshot(at_iso="大概是上个月吧")
+        _service(engine).graph_snapshot(TEST_USER_ID, at_iso="大概是上个月吧")
 
 
 def test_limit_caps_collections(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine)
+    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
     user = repo.upsert_entity(MemoryEntity(name="用户", entity_type="PERSON", is_user=True))
     for index in range(4):
         repo.insert_statement(MemoryStatement(
@@ -121,6 +122,6 @@ def test_limit_caps_collections(engine):
             summary=f"用户的偏好是爱好{index}", state=StatementState.ACTIVE.value,
             valid_from=datetime(2026, 1, 1),
         ))
-    snap = _service(engine).graph_snapshot(limit=2)
+    snap = _service(engine).graph_snapshot(TEST_USER_ID, limit=2)
     assert snap["stats"]["statementEdges"] == 2
     assert snap["stats"]["episodeLinkEdges"] == 0

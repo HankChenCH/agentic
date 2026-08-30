@@ -4,8 +4,8 @@ import json
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.components.knowledge.service import RetrievalHit
-from app.components.knowledge.tools import build_knowledge_tools
+from app.components.knowledge import KnowledgeComponent
+from app.components.knowledge.ability.retrieval import RetrievalHit
 
 
 class StubRetrieval:
@@ -23,8 +23,8 @@ class StubRetrieval:
 
 
 def tools_from(stub):
-    tools = build_knowledge_tools(stub, "builtin:demo")
-    return {tool.__name__: tool for tool in tools}
+    tools = KnowledgeComponent(retrieval=stub).tools("builtin:demo")
+    return {tool.name: tool for tool in tools}
 
 
 def test_knowledge_search_returns_structured_sources():
@@ -44,7 +44,7 @@ def test_knowledge_search_returns_structured_sources():
         },
     )
     stub = StubRetrieval(result=([hit], ["知识库「旧库」嵌入模型与当前配置不一致，已跳过"]))
-    payload = json.loads(tools_from(stub)["knowledge_search"]("如何安装"))
+    payload = json.loads(tools_from(stub)["knowledge_search"].invoke({"query": "如何安装"}))
 
     source = payload["sources"][0]
     assert source["index"] == 1
@@ -69,13 +69,13 @@ def test_knowledge_search_source_without_bboxes_omits_field():
         position=0,
         meta={"page_start": 1, "page_end": 1},
     )
-    payload = json.loads(tools_from(StubRetrieval(result=([hit], [])))["knowledge_search"]("问题"))
+    payload = json.loads(tools_from(StubRetrieval(result=([hit], [])))["knowledge_search"].invoke({"query": "问题"}))
     assert "bboxes" not in payload["sources"][0]
 
 
 def test_knowledge_search_empty_result_and_notes():
     stub = StubRetrieval(result=([], ["知识库「A」未启用（ready），已跳过"]))
-    output = tools_from(stub)["knowledge_search"]("问题")
+    output = tools_from(stub)["knowledge_search"].invoke({"query": "问题"})
     assert "未检索到相关内容" in output
     assert "未启用" in output
 
@@ -85,7 +85,7 @@ def test_knowledge_list_output():
         name="产品手册", id=uuid4(), doc_num=3, status=SimpleNamespace(value="enabled"),
         description="安装与配置",
     )
-    output = tools_from(StubRetrieval(kbs=[kb]))["knowledge_list"]()
+    output = tools_from(StubRetrieval(kbs=[kb]))["knowledge_list"].invoke({})
     assert "产品手册" in output and "3 篇文档" in output and "enabled" in output
     assert "安装与配置" in output
 
@@ -93,7 +93,7 @@ def test_knowledge_list_output():
 def test_invalid_kb_ids_dropped_not_fatal():
     stub = StubRetrieval()
     valid = uuid4()
-    tools_from(stub)["knowledge_search"]("问题", kb_ids=[str(valid), "not-a-uuid"])
+    tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": [str(valid), "not-a-uuid"]})
     agentic_id, _query, kb_ids, _top_k = stub.captured
     assert agentic_id == "builtin:demo"
     assert kb_ids == [valid]  # 非法项剔除，合法项保留
@@ -101,5 +101,5 @@ def test_invalid_kb_ids_dropped_not_fatal():
 
 def test_none_kb_ids_passes_through():
     stub = StubRetrieval()
-    tools_from(stub)["knowledge_search"]("问题", kb_ids=None)
+    tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": None})
     assert stub.captured[2] is None  # 缺省 = 全部可用库

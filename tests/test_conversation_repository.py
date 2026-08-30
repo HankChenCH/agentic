@@ -12,12 +12,14 @@ from app.models.domain.agentic import (
     AgenticMessageType,
 )
 from app.repositories.conversation_repository import ConversationRepository
+from conftest import TEST_USER_ID
 
 
 def make_conversation(engine, thread_id, title="标题") -> None:
     with Session(engine) as session:
         session.add(
             AgenticConversation(
+                user_id=TEST_USER_ID,
                 thread_id=thread_id,
                 agentic_id="builtin:demo",
                 conversation_title=title,
@@ -77,7 +79,7 @@ def test_delete_removes_all_thread_rows_only(engine):
     seed_thread(engine, thread_a)
     seed_thread(engine, thread_b)
 
-    deleted = repo.delete_conversation(thread_id=thread_a)
+    deleted = repo.delete_conversation(thread_id=thread_a, user_id=TEST_USER_ID)
 
     assert deleted is not None
     assert deleted.thread_id == thread_a
@@ -91,17 +93,17 @@ def test_delete_removes_all_thread_rows_only(engine):
 
 def test_delete_missing_thread_returns_none(engine):
     repo = ConversationRepository(engine=engine)
-    assert repo.delete_conversation(thread_id=uuid4()) is None
+    assert repo.delete_conversation(thread_id=uuid4(), user_id=TEST_USER_ID) is None
 
 
 def test_recreate_after_delete_starts_clean(engine):
     repo = ConversationRepository(engine=engine)
     thread_id = uuid4()
     seed_thread(engine, thread_id)
-    assert repo.delete_conversation(thread_id=thread_id) is not None
+    assert repo.delete_conversation(thread_id=thread_id, user_id=TEST_USER_ID) is not None
 
     # 同 thread_id 重新 get-or-create：得到全新空会话（无残留轮次/消息）
-    recreated = repo.init_conversation(thread_id=thread_id, agentic_id="builtin:demo")
+    recreated = repo.init_conversation(user_id=TEST_USER_ID, thread_id=thread_id, agentic_id="builtin:demo")
     assert recreated.conversation_title == ""
     assert count_rows(engine, AgenticConversationTurn, thread_id) == 0
     assert count_rows(engine, AgenticConversationMessage, thread_id) == 0

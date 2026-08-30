@@ -9,11 +9,14 @@ from app.models.domain.knowledge import (
     KnowledgeStatus,
 )
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from tests.conftest import TEST_USER_ID
 
 
 def make_kb_and_doc(engine, kb_status=KnowledgeStatus.PENDING):
     with Session(engine) as session:
-        kb = KnowledgeBase(name="kb", embedding_model="ollama-embedding", status=kb_status)
+        kb = KnowledgeBase(
+            user_id=TEST_USER_ID, name="kb", embedding_model="ollama-embedding", status=kb_status
+        )
         session.add(kb)
         session.commit()
         session.refresh(kb)

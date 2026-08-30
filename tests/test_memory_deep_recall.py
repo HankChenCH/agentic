@@ -15,6 +15,7 @@ from app.models.domain.memory import (
 from app.services.domain.memory import MemoryVectorHit
 
 from fakes_memory import FakeMemoryVectorIndex, make_service_config
+from conftest import TEST_USER_ID
 
 NOW = datetime(2026, 8, 27, tzinfo=timezone.utc)
 
@@ -24,7 +25,7 @@ class Harness:
 
     def __init__(self, engine, preset_hits=None):
         self.engine = engine
-        self.repo = SqliteGraphMemoryRepository(engine=engine)
+        self.repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
         self.vector = FakeMemoryVectorIndex(preset_hits=preset_hits)
         self.svc = MemoryRecallService(
             memory_repo=self.repo, vector_index=self.vector,
@@ -47,11 +48,11 @@ def test_timeline_renders_event_fragments_and_marks_seen(engine):
     h.repo.link_episode_entities([MemoryEpisodeLink(episode_id=ep.id, entity_id=h.other().id, role="对手方")])
     h.vector._preset.append(MemoryVectorHit(kind="episode", ref_id=ep.id, score=0.91))
 
-    out = h.svc.timeline("发布会为什么延期", session)
+    out = h.svc.timeline("发布会为什么延期", TEST_USER_ID, session)
     assert "记忆片段 1" in out and f"§E{ep.id}" in out and "对手方" in out
     assert "场景：商业谈判" in out
 
-    again = h.svc.timeline("再讲讲发布会", session)
+    again = h.svc.timeline("再讲讲发布会", TEST_USER_ID, session)
     assert again == ""  # 同会话已投喂内容不重复返回（SessionInjectRegistry）
 
 
@@ -68,7 +69,7 @@ def test_expand_by_alias_and_vector_fallback_paths(engine):
     boss.aliases = ["老李"]
     h.repo.upsert_entity(boss)
 
-    out = h.svc.expand("老李", uuid4())
+    out = h.svc.expand("老李", TEST_USER_ID, uuid4())
     assert "记忆片段" in out and f"#S{stmt.id}" in out
 
     # 向量兜底路径：名称不同但余弦超阈值仍能锚定同一实体（融合分仅圈候选）
@@ -81,12 +82,12 @@ def test_expand_by_alias_and_vector_fallback_paths(engine):
     ))
     v_h.vector._preset.append(MemoryVectorHit(kind="entity", ref_id=target.id, score=1.0))
     v_h.vector._cosines.append(0.9)
-    out_v = v_h.svc.expand("明仔", uuid4())
+    out_v = v_h.svc.expand("明仔", TEST_USER_ID, uuid4())
     assert f"#S{hit_stmt.id}" in out_v
 
     # 假向量对 query 文本不敏感，须用零预置命中的干净实例验证未命中语义
     clean = Harness(engine)
-    assert clean.svc.expand("查无此人", uuid4()).startswith("（未找到")
+    assert clean.svc.expand("查无此人", TEST_USER_ID, uuid4()).startswith("（未找到")
 
 
 def test_expand_vector_fallback_honors_merge_blocklist(engine):
@@ -110,7 +111,7 @@ def test_expand_vector_fallback_honors_merge_blocklist(engine):
     h.vector._cosines.append(0.90)
     h.vector._cosines.append(0.86)
 
-    out = h.svc.expand("学校新表述", uuid4())
+    out = h.svc.expand("学校新表述", TEST_USER_ID, uuid4())
 
     assert f"#S{stmt_b.id}" in out and f"#S{stmt_a.id}" not in out
 
@@ -132,12 +133,12 @@ def test_state_at_slices_bi_temporal_history(engine):
         valid_from=datetime(2026, 8, 20),
     ))
 
-    historical = h.svc.state_at("2026-03-01", uuid4())
+    historical = h.svc.state_at("2026-03-01", TEST_USER_ID, uuid4())
     assert f"#S{old_job.id}" in historical and "教师" in historical
     assert f"#S{current_job.id}" not in historical   # 尚未生效
 
-    recent = h.svc.state_at("2026-08-25", uuid4())
+    recent = h.svc.state_at("2026-08-25", TEST_USER_ID, uuid4())
     assert f"#S{current_job.id}" in recent and f"#S{old_job.id}" not in recent
 
-    hint = h.svc.state_at("大概是上个月吧", uuid4())
+    hint = h.svc.state_at("大概是上个月吧", TEST_USER_ID, uuid4())
     assert "YYYY-MM-DD" in hint                      # 不可解析给出格式指引

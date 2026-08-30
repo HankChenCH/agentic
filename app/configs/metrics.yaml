@@ -1,0 +1,8 @@
+# 运维监控指标配置：Prometheus 采集端点（/metrics）与 Celery worker 指标暴露端口。
+# 模型见 app/core/config/metrics.py；端点与中间件见 app/api/metrics.py，
+# worker 侧接线在 app/cmd/task_executor/main.py。
+
+enabled: ${METRICS_ENABLED:true}
+
+# worker 指标 HTTP 服务端口（Prometheus 抓取该端口；与 HTTP 应用的 /metrics 分开）
+worker_metrics_port: ${METRICS_WORKER_PORT:9091}

@@ -13,7 +13,6 @@
   JSON sink 输出）。
 """
 
-import logging
 from abc import ABC, abstractmethod
 
 

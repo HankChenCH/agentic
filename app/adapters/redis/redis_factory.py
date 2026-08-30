@@ -56,3 +56,16 @@ class RedisClientFactory:
                 f"unsupported redis provider type: {entry.type} (entry: {key}), supported: {supported}"
             )
         return entry, REDIS_BUILDERS[provider]()
+
+
+@injectable(lifetime="singleton")
+def create_default_redis(factory: RedisClientFactory) -> redis.Redis:
+    """默认 Redis 客户端（``RedisConfig.default``）的注入入口。
+
+    仿 ``create_default_db`` 的惯例：消费方（就绪探针等）直接注入
+    ``redis.Redis`` 契约类型使用，无需感知工厂（api 层禁入
+    infrastructures 的分层禁边由此绕开——只依赖第三方类型）；需要指定
+    其他 entry 时注入 :class:`RedisClientFactory` 自行 ``create(name=...)``。
+    lazy——wireup 首次解析本函数才触发构建，连接发生在首个命令。
+    """
+    return factory.create()

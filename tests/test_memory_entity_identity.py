@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.components.memory.editor import MemoryRepositoryEditor
+from app.components.memory.admin import MemoryRepositoryEditor
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.components.memory import MemoryConsolidationService
 from app.exceptions.memory import (
@@ -27,6 +27,7 @@ from app.services.domain.memory import MemoryAdminService
 from app.services.domain.memory.ports import EntitySplitSpec
 from app.services.domain.memory.vector_index import MemoryVectorHit
 
+from conftest import TEST_USER_ID
 from fakes_memory import (
     CannedLLM,
     FakeMemoryVectorIndex,
@@ -38,7 +39,7 @@ NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 
 
 def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine)
+    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:
@@ -217,22 +218,22 @@ def test_split_request_guards(engine):
     other = editor.memory_repo.upsert_entity(_entity("别的实体"))
 
     with pytest.raises(MemoryNoChangeError):
-        svc.split_entity(ref, _split_request(name="新学校"))  # 什么都没选
+        svc.split_entity(TEST_USER_ID, ref, _split_request(name="新学校"))  # 什么都没选
     with pytest.raises(MemoryInvalidParamError):
-        svc.split_entity(ref, _split_request(name="广东禹通", statementIds=[f"s:{school_fact.id}"]))
+        svc.split_entity(TEST_USER_ID, ref, _split_request(name="广东禹通", statementIds=[f"s:{school_fact.id}"]))
     with pytest.raises(MemoryNameConflictError):
-        svc.split_entity(ref, _split_request(name="别的实体", statementIds=[f"s:{school_fact.id}"]))
+        svc.split_entity(TEST_USER_ID, ref, _split_request(name="别的实体", statementIds=[f"s:{school_fact.id}"]))
     with pytest.raises(MemoryInvalidParamError):
-        svc.split_entity(ref, _split_request(
+        svc.split_entity(TEST_USER_ID, ref, _split_request(
             name="新学校", statementIds=[f"s:{school_fact.id}"], entityType="VEHICLE"))
     with pytest.raises(MemoryInvalidParamError):
-        svc.split_entity(ref, _split_request(
+        svc.split_entity(TEST_USER_ID, ref, _split_request(
             name="新学校", statementIds=[f"s:{school_fact.id}"],
             episodeLinkIds=[f"l:{_episode_with_link(engine, other).id}"]))
     # 陈述不属于 source（挂在别的实体上）→ 拒绝跨实体误迁移
     foreign_statement = _statement(engine, other, "偏好", object_text="爬山")
     with pytest.raises(MemoryInvalidParamError):
-        svc.split_entity(ref, _split_request(
+        svc.split_entity(TEST_USER_ID, ref, _split_request(
             name="新学校", statementIds=[f"s:{foreign_statement.id}"]))
 
 
@@ -291,11 +292,11 @@ def test_merge_blocklist_overrides_cosine_ranking(engine):
         model_factory=FakeModelFactory(CannedLLM()),
         app_config=make_service_config(),
     )
-    from app.components.memory.extraction import ExtractedEntity
+    from app.components.memory.internal.extraction import ExtractedEntity
 
     # A/B 是禁令对且双双达标：禁令优先于余弦排序，归属 B 而非 A
     candidate = ExtractedEntity(key="k1", name="卫职院新表述", entity_type="ORG")
-    assert svc._resolve_entities((candidate,))["k1"].id == b.id
+    assert svc._resolve_entities((candidate,), svc.memory_repo, svc.vector_index)["k1"].id == b.id
 
     # 对照：禁令对整体解除后（合并语义会清两侧），余弦排序恢复决定权
     # （换新表述避开上轮并入的别名）
@@ -304,4 +305,4 @@ def test_merge_blocklist_overrides_cosine_ranking(engine):
     repo.save_entity(a)
     repo.save_entity(b)
     control = ExtractedEntity(key="k2", name="另一处新表述", entity_type="ORG")
-    assert svc._resolve_entities((control,))["k2"].id == a.id
+    assert svc._resolve_entities((control,), svc.memory_repo, svc.vector_index)["k2"].id == a.id

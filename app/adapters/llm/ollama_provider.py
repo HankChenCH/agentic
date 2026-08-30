@@ -18,10 +18,16 @@ class OllamaModelBuilder(ModelBuilder):
 
     provider: ClassVar[ModelProvider] = ModelProvider.OLLAMA
 
+    @staticmethod
+    def _client_kwargs(entry: LLMProviderEntry) -> dict[str, Any]:
+        # ollama 客户端超时不在模型字段上，经 client_kwargs 传给底层 httpx 客户端
+        return {"timeout": entry.timeout} if entry.timeout is not None else {}
+
     def build_chat(self, entry: LLMProviderEntry, **overrides: Any) -> BaseChatModel:
         return ChatOllama(
             model=entry.model,
             base_url=entry.api_url,
+            client_kwargs=self._client_kwargs(entry),
             **overrides,
         )
 
@@ -29,5 +35,6 @@ class OllamaModelBuilder(ModelBuilder):
         return OllamaEmbeddings(
             model=entry.model,
             base_url=entry.api_url,
+            client_kwargs=self._client_kwargs(entry),
             **overrides,
         )

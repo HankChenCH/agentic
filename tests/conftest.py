@@ -1,11 +1,16 @@
 """共享 fixture：临时 SQLite 引擎（文件库，多 Session 连接可见）。"""
 
 import logging
+from uuid import UUID
 
 import pytest
 from sqlmodel import SQLModel, create_engine
 
 import app.models.domain  # noqa: F401 收集全部表模型
+
+# 记忆/会话用户化后的测试身份：A 为主作用域（测试默认），B 用于跨用户隔离断言
+TEST_USER_ID = UUID("aaaaaaaa-0000-0000-0000-000000000001")
+OTHER_USER_ID = UUID("bbbbbbbb-0000-0000-0000-000000000002")
 
 
 @pytest.fixture()
@@ -20,23 +25,3 @@ class StubLoggerFactory:
 
     def get_logger(self, name):
         return logging.getLogger(name)
-
-
-class FakeCancelSignalStore:
-    """``CancelSignalStore`` 端口的内存实现（第二实现，同时是
-    app.infrastructures.redis.RedisCancelSignalStore 的测试替身）。"""
-
-    def __init__(self):
-        self.canceled: set[str] = set()
-        self.fail_writes = False
-
-    def cancel(self, thread_id):
-        if self.fail_writes:
-            raise RuntimeError("store down")
-        self.canceled.add(str(thread_id))
-
-    def is_canceled(self, thread_id):
-        return str(thread_id) in self.canceled
-
-    def clear(self, thread_id):
-        self.canceled.discard(str(thread_id))

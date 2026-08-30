@@ -18,6 +18,11 @@ class KnowledgeStatus(Enum):
 
 class KnowledgeBase(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "knowledge_base" # type: ignore
+    # 名称唯一性是每用户的（同一属主内不重名，不同属主可同名）；
+    # 全局唯一约束随用户归属引入移除（迁移中替换为复合唯一）
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_kb_user_name"),
+    )
 
     id: UUID | None = Field(
         title="主键id",
@@ -26,12 +31,24 @@ class KnowledgeBase(TimeFieldMixin, SQLModel, table=True):
         primary_key=True
     )
 
+    user_id: UUID = Field(
+        title="属主用户id",
+        description="知识库属主用户id（FK→users.id）；私有库仅属主可见",
+        foreign_key="users.id",
+        index=True,
+    )
+
     name: str = Field(
         title="知识库名称",
-        description="知识库名称，最大支持25个字符",
+        description="知识库名称，最大支持25个字符（同一属主内唯一）",
         min_length=1,
         max_length=25,
-        unique=True,
+    )
+
+    is_public: bool = Field(
+        title="是否公开",
+        description="公开或私有标识：true 公开（全员可见、可检索），false 私有（仅属主可见）",
+        default=False,
     )
 
     description: str = Field(

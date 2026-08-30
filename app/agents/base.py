@@ -7,6 +7,7 @@ from langchain.agents import create_agent
 from langchain.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.context import AgentRunContext
@@ -20,24 +21,23 @@ class RunCanceledError(Exception):
     langgraph 的常规错误处理路径。"""
 
 
-def _cancel_guard(tool: Callable):
-    """工具入口的协作式取消检查（显式取消通道的工具侧半边）。
+def _cancel_checked(func: Callable):
+    """为工具函数包上入口取消检查（_cancel_guard 的共用包装器）。
 
     检查闭包由编排层经 ``AgentRunContext.cancel_check`` → ``_config`` 的
-    ``configurable.cancel_check`` 传入，本包装在每次工具被调用前读取：命中即
+    ``configurable.cancel_check`` 传入，包装器在每次工具被调用前读取：命中即
     抛 ``RunCanceledError`` 跳过工具体（省掉一次无谓的检索/LLM 外呼），随后
     编排层流式循环的边界检查终止本轮。
 
-    包装细节：对未声明 ``config`` 参数的工具（weather/knowledge 系），显式
-    合成带 ``config: RunnableConfig`` 的签名与注解——langchain 据此把它判为
-    注入参数（不进 LLM 工具 schema、运行时以 kwargs 注入，同 memory 工具的
-    既有模式）；已声明的（memory 系）经 ``wraps`` 的 ``__wrapped__`` 原样透出。
-    注入的 config 不回传给不接收它的原函数。
+    无论原函数是否声明 ``config``，包装器都透出 ``config: RunnableConfig``
+    形参（langchain 的运行时注入以函数签名为准）：已声明的原样透传，未声明
+    的剥除后调用——取消检查本身需要 config，但 config 不得进工具的 LLM schema
+    （StructuredTool 用显式 args_schema、裸函数靠 RunnableConfig 注解排除）。
     """
-    sig_params = list(inspect.signature(tool).parameters.values())
+    sig_params = list(inspect.signature(func).parameters.values())
     has_config = any(p.name == "config" for p in sig_params)
 
-    @functools.wraps(tool)
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         config = kwargs.get("config")
         check = (config or {}).get("configurable", {}).get("cancel_check")
@@ -45,17 +45,36 @@ def _cancel_guard(tool: Callable):
             raise RunCanceledError("run canceled by client")
         if not has_config:
             kwargs.pop("config", None)
-        return tool(*args, **kwargs)
+        return func(*args, **kwargs)
 
     if not has_config:
         params = [*sig_params, inspect.Parameter(
             "config", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None, annotation=RunnableConfig,
         )]
         wrapper.__signature__ = inspect.Signature(params)
-        annotations = dict(getattr(tool, "__annotations__", None) or {})
+        annotations = dict(getattr(func, "__annotations__", None) or {})
         annotations["config"] = RunnableConfig
         wrapper.__annotations__ = annotations
     return wrapper
+
+
+def _cancel_guard(tool: Callable | BaseTool) -> Callable | BaseTool:
+    """工具入口的协作式取消检查（显式取消通道的工具侧半边），支持两种工具形态：
+
+    - StructuredTool（组件工具的声明式形态）：守卫下沉到底层 func 重建工具，
+      args_schema 原样透传（config 注入形参在签名层保证，不进 schema）；
+    - 裸函数（智能体自带工具，如 weather）：同款包装并合成签名，langchain
+      据此把 config 判为注入参数。
+    """
+    if isinstance(tool, BaseTool):
+        return StructuredTool.from_function(
+            name=tool.name,
+            description=tool.description,
+            args_schema=tool.args_schema,
+            func=_cancel_checked(tool.func),
+            infer_schema=False,
+        )
+    return _cancel_checked(tool)
 
 
 class BaseAgent(ABC):
@@ -123,7 +142,7 @@ class BaseAgent(ABC):
         return {"messages": messages}
 
     def _config(self, ctx: AgentRunContext) -> RunnableConfig:
-        configurable: dict = {"thread_id": ctx.thread_id, "run_id": ctx.run_id}
+        configurable: dict = {"thread_id": ctx.thread_id, "run_id": ctx.run_id, "user_id": ctx.user_id}
         if ctx.cancel_check is not None:
             configurable["cancel_check"] = ctx.cancel_check
         return {"configurable": configurable}

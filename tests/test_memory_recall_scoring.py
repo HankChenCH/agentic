@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from app.components.memory.scoring import (
+from app.components.memory.internal.scoring import (
     ACCESS_BONUS_CAP,
     ScoreWeights,
     ScorableItem,

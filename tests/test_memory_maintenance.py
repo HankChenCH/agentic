@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session
 
-from app.components.memory.editor import MemoryRepositoryEditor
+from app.components.memory.admin import MemoryRepositoryEditor
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.exceptions.memory import MemoryInvalidParamError
 from app.models.domain.memory import (
@@ -20,13 +20,14 @@ from app.services.domain.memory import MemoryAdminService
 from app.services.domain.memory.ports import FactWrite
 
 from fakes_memory import FakeMemoryVectorIndex
+from conftest import TEST_USER_ID
 
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
 YESTERDAY = NOW - timedelta(days=1)
 
 
 def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine)
+    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:
@@ -82,14 +83,17 @@ def _naive_iso(d: datetime) -> str:
 def test_purge_day_archives_statements_deletes_episodes_and_sweeps_orphans(engine):
     editor, user, seeded = _seed_today(engine)
     svc = _service(engine, editor)  # 复用同一 editor：向量断言才对得上同一个 fake
-    window_from = datetime(2026, 8, 29, 0, 0)
-    window_to = datetime(2026, 8, 29, 23, 59, 59)
+    # created_at 是种子落库的真实时刻，窗口以当前时间锚定（写死日期只会在
+    # 种子当日跑绿——历史遗留的时间炸弹，见 2026-08-30 基线复现）
+    now = datetime.now(timezone.utc)
+    window_from = now - timedelta(minutes=5)
+    window_to = now + timedelta(minutes=5)
 
-    preview = svc.purge_preview(_purge_request("day", window_from, window_to))
+    preview = svc.purge_preview(TEST_USER_ID, _purge_request("day", window_from, window_to))
     assert preview["statements"] == 2 and preview["activeStatements"] == 1
     assert preview["episodes"] == 1
 
-    result = svc.purge_memory(_purge_request("day", window_from, window_to))
+    result = svc.purge_memory(TEST_USER_ID, _purge_request("day", window_from, window_to))
 
     assert result["archivedStatements"] == 1  # 仅在效行归档，已归档历史行不动
     assert result["deletedEpisodes"] == 1
@@ -135,11 +139,11 @@ def test_purge_thread_scopes_by_source_thread(engine):
 def test_purge_requires_scope_params(engine):
     svc = _service(engine)
     with pytest.raises(MemoryInvalidParamError):
-        svc.purge_memory(_purge_request("day"))  # 缺 from/to
+        svc.purge_memory(TEST_USER_ID, _purge_request("day"))  # 缺 from/to
     with pytest.raises(MemoryInvalidParamError):
-        svc.purge_memory(_purge_request("thread"))  # 缺 threadId
+        svc.purge_memory(TEST_USER_ID, _purge_request("thread"))  # 缺 threadId
     with pytest.raises(MemoryInvalidParamError):
-        svc.purge_preview(_purge_request("thread", thread_id="不是uuid"))
+        svc.purge_preview(TEST_USER_ID, _purge_request("thread", thread_id="不是uuid"))
 
 
 def test_export_contains_all_tables_including_history(engine):
@@ -158,9 +162,9 @@ def test_reset_requires_exact_confirmation_and_wipes(engine):
     svc = _service(engine, editor)  # 复用同一 editor：rebuild 断言才对得上同一个 fake
 
     with pytest.raises(MemoryInvalidParamError):
-        svc.reset_all_memory(_reset_request("reset"))
+        svc.reset_all_memory(TEST_USER_ID, _reset_request("reset"))
 
-    counts = svc.reset_all_memory(_reset_request("重置"))
+    counts = svc.reset_all_memory(TEST_USER_ID, _reset_request("重置"))
 
     assert counts["memory_entity"] >= 2 and counts["memory_statement"] >= 2
     assert counts["memory_episode"] == 1 and counts["memory_episode_link"] == 2

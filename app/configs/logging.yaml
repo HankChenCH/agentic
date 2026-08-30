@@ -3,7 +3,8 @@
 # - level：全局级别，可被环境变量 AGENTIC_LOG_LEVEL 覆盖；留空则按运行环境
 #   推导（dev/test=DEBUG，prod=INFO）
 # - format：loguru 语法格式串，每个 sink 可用 format 覆盖；{name} 已由装配层
-#   对齐门面/桥接声明的 logger 名（等价 stdlib %(name)s，不随调用帧漂移）
+#   对齐门面/桥接声明的 logger 名（等价 stdlib %(name)s，不随调用帧漂移）；
+#   {extra[request_id]} 为请求 ID（api/middleware.py 注入，请求外为 "-"）
 # - sinks：输出位置列表，type 判别（console / file）；file 独享
 #   rotation / retention / compression / enqueue 流转规则
 # - backtrace / diagnose：异常详略（prod 建议 diagnose: false 防泄露变量值）
@@ -11,7 +12,7 @@
 # 环境变量插值与 llm.yaml 等一致：${VAR} / ${VAR:default} / ${VAR:-default}
 
 level: ${AGENTIC_LOG_LEVEL:}
-format: "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name} | {message}"
+format: "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name} | {extra[request_id]} | {message}"
 backtrace: true
 diagnose: true
 

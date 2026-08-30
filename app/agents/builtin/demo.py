@@ -1,6 +1,4 @@
 from app.agents.base import BaseAgent, register_agent
-from app.components.knowledge import build_knowledge_tools
-from app.components.memory import build_memory_tools
 
 
 def get_weather(city: str, date: str):
@@ -32,8 +30,6 @@ class DemoAgent(BaseAgent):
             """
 
     def build_tools(self) -> list:
-        return [
-            get_weather,
-            *build_memory_tools(self.toolbox.memory),
-            *build_knowledge_tools(self.toolbox.knowledge, self.agentic_id),
-        ]
+        # 组件能力（记忆三件套 + 知识双工具）经 toolbox 按注册表装配；
+        # get_weather 是智能体自带工具，不属组件能力
+        return [get_weather, *self.toolbox.tools(self.agentic_id)]

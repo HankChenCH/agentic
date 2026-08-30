@@ -17,7 +17,13 @@ from app.models.domain.memory import MemoryEntity, MemoryEpisode, MemoryEpisodeL
 
 
 class MemoryGraphReader(Protocol):
-    """图快照所需的记忆只读投影面。"""
+    """图快照所需的记忆只读投影面。
+
+    ``for_user`` 返回绑定用户的只读视图（用户级隔离的强制入口）：注入实例
+    无作用域（维护 CLI 兜底），HTTP 管理链必须先过用户作用域。
+    """
+
+    def for_user(self, user_id: UUID) -> "MemoryGraphReader": ...
 
     def list_entities(self, limit: int | None = None) -> list[MemoryEntity]: ...
 
@@ -80,7 +86,12 @@ class MemoryEditor(Protocol):
     方法即用例：存在性/状态类机械校验由实现侧抛 3xxx 业务异常，取值
     合法性与「是否真的有变化」等请求语义判断留在领域服务。向量同步是
     方法内聚动作（SQL 提交后 best-effort），调用方无需感知。
+
+    ``for_user`` 返回绑定用户的编辑视图（用户级隔离的强制入口）：注入
+    实例无作用域（维护 CLI 兜底），HTTP 管理链必须先过用户作用域。
     """
+
+    def for_user(self, user_id: UUID) -> "MemoryEditor": ...
 
     def get_statement(self, statement_id: int) -> MemoryStatement | None: ...
 

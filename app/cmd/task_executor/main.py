@@ -9,8 +9,9 @@ close 容器）；本文件只保留任务队列特有部分：broker/backend �
 
 import wireup.integration.celery
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_init, worker_process_init
 
+from app.cmd.task_executor.metrics import setup_metrics
 from app.core.config import AppConfig, resolve_url
 from app.core.container import build_sync_container, reset_singleton_cache
 from app.core.logging import setup_logging
@@ -38,9 +39,25 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
+    # 任务超时：软超时抛 SoftTimeLimitExceeded 可收尾，硬超时强杀；防止长任务占死 worker
+    task_soft_time_limit=app_config.task.soft_time_limit,
+    task_time_limit=app_config.task.time_limit,
+    # broker 连接套用 redis entry 的 socket 超时，避免 Redis 抖动时 worker 收发挂死
+    broker_transport_options={
+        "socket_timeout": app_config.redis.providers[app_config.task.broker.provider].socket_timeout,
+        "socket_connect_timeout": app_config.redis.providers[app_config.task.broker.provider].socket_connect_timeout,
+    },
 )
 
 wireup.integration.celery.setup(container, celery_app)
+
+# Prometheus 指标：装配延迟到 worker_init 信号（仅真正运行 worker 时触发，
+# prefork 前执行——env 须在 fork 前就位）。本模块会被 app.tasks 的任务模块
+# 导入（celery_app），而该链条在 HTTP 应用等进程中同样触发，故导入必须无副作用。
+worker_init.connect(
+    lambda **_: setup_metrics(app_config.metrics.enabled, app_config.metrics.worker_metrics_port),
+    weak=False,
+)
 
 
 @worker_process_init.connect

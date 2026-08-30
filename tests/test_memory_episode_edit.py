@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.components.memory.editor import MemoryRepositoryEditor
+from app.components.memory.admin import MemoryRepositoryEditor
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.exceptions.memory import (
     MemoryConstraintConflictError,
@@ -15,15 +15,15 @@ from app.exceptions.memory import (
 )
 from app.models.domain.memory import MemoryEpisode, MemoryEpisodeLink, MemoryEntity
 from app.services.domain.memory import MemoryAdminService
-from app.services.domain.memory.ports import FactWrite
 
 from fakes_memory import FakeMemoryVectorIndex
+from conftest import TEST_USER_ID
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 
 
 def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine)
+    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:
@@ -75,11 +75,11 @@ def test_update_episode_requires_fields_and_existing_target(engine):
     svc = _service(engine)
 
     with pytest.raises(MemoryInvalidParamError):
-        svc.update_episode(f"ep:{episode.id}", _episode_request())
+        svc.update_episode(TEST_USER_ID, f"ep:{episode.id}", _episode_request())
     with pytest.raises(MemoryObjectNotFoundError):
-        svc.update_episode("ep:9999", _episode_request(summary="x"))
+        svc.update_episode(TEST_USER_ID, "ep:9999", _episode_request(summary="x"))
     with pytest.raises(MemoryInvalidParamError):
-        svc.update_episode("垃圾引用", _episode_request(summary="x"))
+        svc.update_episode(TEST_USER_ID, "垃圾引用", _episode_request(summary="x"))
 
 
 def test_delete_episode_removes_links_and_row(engine):
@@ -97,8 +97,8 @@ def test_delete_episode_removes_links_and_row(engine):
     assert deleted.id == episode.id
     repo = _repo(engine)
     assert repo.get_episode(episode.id) is None
-    assert all(l.entity_id != episode.id for bundle in
-               repo.links_for_episodes([episode.id]).values() for l in bundle)
+    assert all(link.entity_id != episode.id for bundle in
+               repo.links_for_episodes([episode.id]).values() for link in bundle)
     assert repo.links_for_episodes([episode.id]) == {}
     assert ("episode", episode.id) in editor.vector_index.deleted
     with pytest.raises(MemoryObjectNotFoundError):
@@ -130,12 +130,12 @@ def test_update_episode_link_unique_conflict(engine):
         MemoryEpisodeLink(episode_id=episode.id, entity_id=b.id, role="参与者"),
     ])
     first = editor.episode_links_by_ids(
-        [l.id for bundle in _repo(engine).links_for_episodes([episode.id]).values()
-         for l in bundle])[0]
+        [link.id for bundle in _repo(engine).links_for_episodes([episode.id]).values()
+         for link in bundle])[0]
 
     # 把第一条改成第二条的 (entity, role) 组合 → 3007
-    other = next(l for bundle in _repo(engine).links_for_episodes([episode.id]).values()
-                 for l in bundle if l.id != first.id)
+    other = next(link for bundle in _repo(engine).links_for_episodes([episode.id]).values()
+                 for link in bundle if link.id != first.id)
     with pytest.raises(MemoryConstraintConflictError):
         editor.update_episode_link(first.id, entity_id=other.entity_id, role=other.role)
 
@@ -149,13 +149,13 @@ def test_update_episode_link_guards(engine):
     svc = _service(engine)
 
     with pytest.raises(MemoryNoChangeError):
-        svc.update_episode_link(f"l:{link.id}", _link_request())
+        svc.update_episode_link(TEST_USER_ID, f"l:{link.id}", _link_request())
     with pytest.raises(MemoryObjectNotFoundError):
-        svc.update_episode_link("l:9999", _link_request(role="参与者"))
+        svc.update_episode_link(TEST_USER_ID, "l:9999", _link_request(role="参与者"))
     with pytest.raises(MemoryObjectNotFoundError):
-        svc.update_episode_link(f"l:{link.id}", _link_request(entityId=9999))
+        svc.update_episode_link(TEST_USER_ID, f"l:{link.id}", _link_request(entityId=9999))
     with pytest.raises(MemoryInvalidParamError):
-        svc.update_episode_link("不是引用", _link_request(role="参与者"))
+        svc.update_episode_link(TEST_USER_ID, "不是引用", _link_request(role="参与者"))
 
 
 def _episode_request(summary: str | None = None, scene: str | None = None,

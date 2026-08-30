@@ -10,8 +10,9 @@ from langchain_core.messages import BaseMessage
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.exceptions import ConversationNotFoundError
+from app.packages.signal.signal_store import SignalStore
 from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.ports import CancelSignalStore
+from app.services.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
 
 from app.models.domain.agentic import (
     AgenticConversation,
@@ -42,7 +43,7 @@ class ConversationService:
 
     conversation_repo: ConversationRepository
     app_config: AppConfig
-    cancel_signal_store: CancelSignalStore
+    signal_store: SignalStore
     logger_factory: LoggerFactory
 
     def __post_init__(self):
@@ -51,18 +52,26 @@ class ConversationService:
 
     # ---- chat 行程所需写路径（原 AgenticService 准备段 / 收尾段下沉）----
 
-    def open_turn(self, thread_id: UUID, run_id: str, query: str) -> Tuple[AgenticConversation, AgenticConversationTurn]:
-        """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。"""
+    def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, query: str) -> Tuple[AgenticConversation, AgenticConversationTurn]:
+        """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。
+
+        归属规则：会话已存在且属于他人时按不存在处理（404，不泄露存在性），
+        不能变成新建——客户端 threadId 自行生成，必须防止借他人 thread_id
+        续聊或注入消息。
+        """
         # 防御性清理遗留取消标志（上轮取消后 TTL 内残留会误杀本轮；正常收尾
         # 后标志本就应不存在，此处是无条件兜底）。清理失败不阻断开轮。
         try:
-            self.cancel_signal_store.clear(thread_id)
+            self.signal_store.reset(cancel_flag_key(thread_id))
         except Exception as exc:
             self.logger.warning("取消标志清理失败：%s", exc)
         conversation = self.conversation_repo.init_conversation(
+            user_id=user_id,
             thread_id=thread_id,
             agentic_id=self.app_config.default_agentic_id,
         )
+        if conversation.user_id != user_id:
+            raise ConversationNotFoundError("conversation not found")
         turn = self.conversation_repo.create_conversation_turn(conversation=conversation, run_id=run_id, turn_id=uuid4())
         self.conversation_repo.store_conversation_message(AgenticConversationMessage(
             thread_id=conversation.thread_id,
@@ -144,13 +153,13 @@ class ConversationService:
 
     def cancel_run_flag(self, thread_id: UUID) -> None:
         """置 thread 作用域取消标志（存储失败异常上抛，由端点反馈调用方）。"""
-        self.cancel_signal_store.cancel(thread_id)
+        self.signal_store.fire(cancel_flag_key(thread_id), ttl_seconds=CANCEL_FLAG_TTL_SECONDS)
 
     def is_run_canceled(self, thread_id: UUID) -> bool:
         """读取消标志。宽容策略归领域：存储不可用绝不阻断聊天主链路——
         警告（节流）+ 视为未取消，降级为仅断链取消。"""
         try:
-            return self.cancel_signal_store.is_canceled(thread_id)
+            return self.signal_store.is_fired(cancel_flag_key(thread_id))
         except Exception as exc:
             now = monotonic()
             if now - self._last_warn_at >= _WARN_THROTTLE_SECONDS:
@@ -178,26 +187,28 @@ class ConversationService:
 
     # ---- 管理侧读路径（/agentic/conversation* 端点的直接消费面）----
 
-    def list_conversations(self, page: int, page_size: int):
-        conversations, total = self.conversation_repo.list_conversations(page=page, page_size=page_size)
+    def list_conversations(self, user_id: UUID, page: int, page_size: int):
+        conversations, total = self.conversation_repo.list_conversations(user_id=user_id, page=page, page_size=page_size)
         return {"items": conversations, "total": total, "page": page, "pageSize": page_size}
 
-    def describe_conversation(self, thread_id: UUID) -> AgenticConversation:
-        conversation = self.conversation_repo.get_conversation(thread_id=thread_id)
+    def describe_conversation(self, user_id: UUID, thread_id: UUID) -> AgenticConversation:
+        conversation = self.conversation_repo.get_conversation(thread_id=thread_id, user_id=user_id)
         if conversation is None:
             raise ConversationNotFoundError("conversation not found")
         return conversation
 
-    def delete_conversation(self, thread_id: UUID) -> AgenticConversation:
+    def delete_conversation(self, user_id: UUID, thread_id: UUID) -> AgenticConversation:
         # 硬删除：会话+轮次+消息单事务清空，返回删除前快照。
         # 长期记忆（components/memory 双层图谱模型）是跨会话的用户级数据，不随会话删除。
-        conversation = self.conversation_repo.delete_conversation(thread_id=thread_id)
+        conversation = self.conversation_repo.delete_conversation(thread_id=thread_id, user_id=user_id)
         if conversation is None:
             raise ConversationNotFoundError("conversation not found")
         return conversation
 
-    def list_history_messages(self, thread_id: UUID, offset: int | None = None, limit: int = 20):
-        # 仓库按 id desc 取（最新一页），这里反转为旧→新以便前端顺序渲染
+    def list_history_messages(self, user_id: UUID, thread_id: UUID, offset: int | None = None, limit: int = 20):
+        # 归属先校验（非本人会话按不存在处理），仓库按 id desc 取（最新一页），
+        # 这里反转为旧→新以便前端顺序渲染
+        self.describe_conversation(user_id=user_id, thread_id=thread_id)
         turns, total = self.conversation_repo.list_conversation_history_turns(thread_id, offset, limit)
         turns.reverse()
         return {"items": turns, "total": total, "offset": offset or 0, "limit": limit}

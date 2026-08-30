@@ -7,6 +7,10 @@ class KnowledgeBaseCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=25, description="知识库名称")
     description: str = Field(default="", max_length=500, description="知识库详情描述")
     weight: int = Field(default=0, description="管理侧排序权重，越大越靠前")
+    isPublic: bool = Field(
+        default=False,
+        description="公开或私有标识：true 公开（全员可见），false 私有（仅属主可见），缺省私有",
+    )
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
@@ -15,6 +19,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=25, description="知识库名称")
     description: str | None = Field(default=None, min_length=0, max_length=500, description="知识库详情描述")
     weight: int | None = Field(default=None, description="管理侧排序权重")
+    isPublic: bool | None = Field(default=None, description="公开或私有标识")
 
 
 class KnowledgeDocumentUpdateRequest(BaseModel):

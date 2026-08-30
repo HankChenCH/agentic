@@ -11,7 +11,7 @@ Python 3.12 backend (**FastAPI + Celery + LangChain/LangGraph + ag-ui**) serving
 
 ```
 server/                          # this directory is its own git repo (the workspace root is not)
-├── pyproject.toml               # uv-managed deps (langchain, langchain-deepseek, wireup, ag-ui-protocol, celery[redis], langchain-weaviate)
+├── pyproject.toml               # uv-managed deps (langchain, langchain-deepseek, wireup, ag-ui-protocol, celery[redis], langchain-weaviate, prometheus-client)
 ├── alembic.ini                  # Alembic 配置：script_location 用 %(here)s 锚定（不依赖 CWD）；
 │                                #   sqlalchemy.url 留空——URL 由 migrations/env.py 从应用配置链解析
 ├── migrations/                  # Alembic 迁移：env.py（import app.models.domain 收集 SQLModel.metadata 作
@@ -19,11 +19,12 @@ server/                          # this directory is its own git repo (the works
 │                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表）
 ├── docker-compose.yaml          # Middleware stack: PostgreSQL + Weaviate + RustFS + Redis (local dev)
 ├── .python-version              # 3.12
-├── .env                         # Secrets: DEEPSEEK_API_KEY (live), OPENAI_API_KEY (placeholder, OpenAI 兼容网关)
+├── .env                         # 环境变量：APP_ENV、DB_DSN、WEAVIATE_*、DEEPSEEK_API_KEY、OPENAI_API_KEY（占位，OpenAI 兼容网关）、MINERU_API_KEY
 ├── .gitignore
 └── app/
     ├── cmd/                     # Entrypoints — one subdir per launchable app
-    │   ├── http/                # main.py (create_app + server, uvicorn import string app.cmd.http.main:server)
+    │   ├── http/                # main.py (create_app + server, uvicorn import string app.cmd.http.main:server;
+    │   │                        #   CORS 白名单/限流/请求体上限在装配期读 http.yaml 并接线中间件)
     │   │                        #   + __main__.py (Typer → uvicorn.run，含 --host/--port/--reload)
     │   ├── task_executor/       # Celery app: main.py (sync wireup container + wireup.integration.celery.setup),
     │   │                        #   __main__.py (Typer，未知参数透传 → worker_main); tasks live in app/tasks/
@@ -34,10 +35,31 @@ server/                          # this directory is its own git repo (the works
 │                            #   add_typer 挂载：memory 域 repair（实体错合并存量修复，幂等，默认 dry-run，
 │                            #   --apply 落库）+ rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
 │                            #   + db 域：Alembic 迁移薄封装（upgrade/downgrade/revision/current/history/stamp）
-├── api/                     # exception_handlers.py (global AOP handlers); v1/endpoints/ — agentic.py -> POST /agentic/chat (StreamingResponse)
-│                              #   + POST /agentic/chat/cancel 显式取消（置 thread 作用域 Redis 标志，幂等）
+├── api/                     # exception_handlers.py (global AOP handlers); middleware.py (纯 ASGI 边缘中间件，SSE
+│                              #   友好：RequestIDMiddleware——X-Request-ID 生成/透传 + loguru 上下文注入，
+│                              #   SSE 线程池日志同携带；RateLimitMiddleware——按客户端 IP+路由作用域的滑动
+│                              #   窗口限流，超限直回 429 信封+Retry-After；BodySizeLimitMiddleware——请求体
+│                              #   字节上限，Content-Length 超限直回 413，实收累计超限（分块/谎报长度）由
+│                              #   receive 包装抛 HTTPException(413) 经全局 http_exception_handler 收信封；
+│                              #   作用域与数值来自 http.yaml，接线在 cmd/http/main.py);
+│                              #   cmd/task_executor/metrics.py -> Celery worker 指标（任务计数/耗时/
+│                              #   在途 Gauge,multiprocess 模式,独立端口暴露;装配延迟到 worker_init——
+│                              #   prometheus_client 的 values.ValueClass 在其模块导入期决定单/多进程
+│                              #   实现,env 须先于该导入;且本模块被 app.tasks 导入链带入 HTTP 进程,
+│                              #   导入必须无副作用）;
+│                              #   health.py -> GET /health 就绪探针（db SELECT 1 + redis PING 逐项探测，
+│                              #   全绿 200 / 任一 down 503 信封 + 组件明细；探测异常只记日志不穿透）
+│                              #   + metrics.py -> GET /metrics Prometheus 采集端点（纯函数路由,不鉴权,
+│                              #   设 PROMETHEUS_MULTIPROC_DIR 时走 MultiProcessCollector）+ MetricsMiddleware
+│                              #   （纯 ASGI:请求计数/时延直方图/在途 Gauge,handler=路由模板,404 落 unmatched）; v1/endpoints/ — agentic.py -> POST /agentic/chat (StreamingResponse)
+│                              #   + POST /agentic/chat/cancel 显式取消（fire thread 作用域取消信号，幂等）
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
-│                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传，文件落 rustfs）;
+│                              #   deps.py -> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
+│                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
+│                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
+│                              #   （agentic/knowledge/agent_knowledge/memory 组，/auth、/health 公开）；
+│                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传——端点透传 UploadFile
+│                              #   底层流，服务层流式转存对象存储边计数/摘要，不整读入内存，文件落 rustfs）;
 │                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）;
 │                              memory.py -> /memory/graph 记忆图快照（at 参数做时点回放，
 │                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
@@ -53,7 +75,10 @@ server/                          # this directory is its own git repo (the works
 │                              身份纠错的归属改写走仓储复合事务 absorb/split_entity，
 │                              拆分双方互写 attributes.merge_blocklist，消歧遇禁令对优先于余弦）
 ├── core/container.py        # Shared wireup injectables + build_async_container()/build_sync_container()
-    ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py, memory.py, redis.py (RedisConfig + RedisProviderEntry), task.py, logging.py; get_environment()
+    ├── core/config/             # AppConfig (@injectable pydantic model): llm.py (LLMConfig + LLMProviderEntry), db.py, vector_db.py, filesystem.py,
+    │                            #   memory.py, redis.py (RedisConfig + RedisProviderEntry), task.py, logging.py, http.py (HttpConfig——CORS
+    │                            #   白名单/限流/请求体上限), auth.py, document_parser.py, metrics.py; get_environment()
+    │                            #   (loader.py 负责 YAML 加载/环境变量插值)
     ├── core/exceptions/         # Framework baseline exceptions: AgenticError root → framework.py (FrameworkError, ConfigError,
     │                            #   InfrastructureError) + business.py (BusinessError base — the handlers' anchor); concrete
     │                            #   business exceptions are user-defined in app/exceptions/
@@ -63,44 +88,60 @@ server/                          # this directory is its own git repo (the works
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
     ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents (demo/summary)
-├── components/              # Self-contained capability components: components/memory（按收尾/召回/解析三块拆分：
-│                            #   consolidation.py 收尾·remember 巩固管线（抽取→消歧→裁决→落库+向量同步）、
-│                            #   recall.py 召回·build_fast_context 快速注入 + timeline/expand/state_at 深度三件套
-│                            #   + SessionInjectRegistry、extraction.py 解析·LLM 输入组装/抽取/裁决/降级裁决、
-│                            #   resolution.py 两段式实体消歧单源（写读同规）、own repositories/ 图谱实现、
-│                            #   renderer 模板契约/scoring/vocab；向量适配器在 services/domain/memory
-│                            #   经 components→domain 合法边引用)
-│                            #   and components/knowledge (retrieval:
-│                            #   KnowledgeRetrievalService + knowledge_list/knowledge_search tools) —
+├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
+│                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
+│                            #   register_component/describe_capabilities）+ memory/ + knowledge/。
+│                            #   组件解剖学：__init__.py（公共面再导出）+ manifest.py（能力声明与
+│                            #   工具构造，必有）+ ability/（能力模块，按能力命名持门面服务，必有）+
+│                            #   internal/（跨能力共享机件，可选，app 层禁入）+ admin.py（管理面端口
+│                            #   实现，可选）+ repositories/（自有存储，可选）。
+│                            #   memory: ability/{recall,consolidation,user_node} + internal/{extraction,resolution,
+│                            #   renderer,scoring,vocab} + admin.py（MemoryEditor/MemoryGraphReader 端口
+│                            #   回填）+ repositories/ 图谱实现；knowledge: ability/retrieval +
+│                            #   manifest 契约模型 KnowledgeSearchResult（LLM/前端共用 JSON 形状）。
+│                            #   能力（v1 仅 tools）经 manifest 静态登记注册表，装配器绑定服务产出
+│                            #   StructuredTool；唯一显式组件清单点是 agents/toolbox.py。
 │                            #   components may import domain/repositories/infra (单向)，严禁
 │                            #   app.services.orchestration / app.agents / app.api
+├── packages/                # 可复用能力库层：契约+后端内聚一包，领域无关，禁向上依赖
+│                            #   services/components/agents/api/tasks/repositories/models
+│                            #   （AST 强制）——居民 signal/：SignalStore 契约（key 寻址的
+│                            #   分布式 Event：fire/is_fired/reset/wait/get，wait 轮询默认
+│                            #   可被后端覆写；ttl 必选）+ RedisSignalStore（默认绑定）+
+│                            #   InMemorySignalStore（测试/单机）；详见「packages」条目
 ├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
 │                            #   （ChatOrchestrator chat 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
-│                            #   domain/: 领域服务，按聚合分包—— conversation/（ports.py
-│                            #   CancelSignalStore 端口 + title_generator 裸模型标题生成）、
+│                            #   domain/: 领域服务，按聚合分包—— conversation/（signals.py
+│                            #   会话域信号 key/常量 + title_generator 裸模型标题生成）、
 │                            #   knowledge/（KB/document/ingestion/binding 服务 +
 │                            #   object_store/support 纯函数/document_chunker）与 memory/
 │                            #   （记忆向量适配器 MemoryVectorIndex+collection 显式 schema）
 ├── models/
 │   ├── schema/request/chat.py   # ChatRequest / ChatMessage (camelCase fields for ag-ui)
-│   ├── domain/agentic/      # SQLModel tables: conversation / turn / message
+│   ├── domain/agentic/      # SQLModel tables: conversation / turn / message（conversation 带 user_id FK→users.id，
+│   │                        #   归属过滤在仓储查询条件内强制）
+│   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
+│   │                        #   迁移回填存量数据的不可登录占位用户）
 │   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
 │                             #   knowledge_agent_binding (agent↔KB); KnowledgeStatus enum; segment.id doubles
-│                             #   as the Weaviate object UUID
+│                             #   as the Weaviate object UUID; knowledge_base 带 user_id（FK→users，属主）+
+│                             #   is_public（公开/私有标识，缺省私有），name 唯一性为每用户复合唯一 (user_id, name)
 │   └── domain/memory/       # 记忆 v2 双层图谱四表: entity / statement(双时间轴·SUPERSEDED 不删除可回放)
-│                             #   / episode / episode_link —— 设计定稿见 docs/memory-v2-design.md
+│                             #   / episode / episode_link —— 设计定稿见 docs/memory-v2-design.md；
+│                             #   entity/statement/episode 各带 user_id（用户级作用域，episode_link 经
+│                             #   episode 继承）；向量侧每用户一 collection Memory_{uid.hex}
 ├── repositories/            # Data-access (@injectable) — ConversationRepository,
-│                             #   KnowledgeBaseRepository, KnowledgeDocumentRepository (docs+segments),
+│                             #   UserRepository, KnowledgeBaseRepository, KnowledgeDocumentRepository (docs+segments),
 │                             #   KnowledgeBindingRepository
 └── infrastructures/         # Shared drivers: llm/ (ModelFactory + ModelBuilder registry), db/ (DatabaseFactory +
                                  #   DatabaseBuilder registry — sqlite / postgresql via psycopg3, create_default_db
-                                 #   singleton Engine), vector/ (VectorStoreFactory + VectorDBBuilder registry —
+                                 #   singleton Engine), document_parser/ (DocumentParserFactory + DocumentParserBuilder
+                                 #   registry — mineru_cloud (MinerU 云端 PDF 解析，parse(bytes, filename) -> ParsedDocument
+                                 #   + ParsedBlock), create_default_document_parser singleton), vector/ (VectorStoreFactory + VectorDBBuilder registry —
                                  #   Weaviate via langchain-weaviate; build_client/build + drop for collection
                                  #   deletion), filesystem/ (FilesystemFactory + FilesystemBuilder registry —
                                  #   local pathlib / S3 via obstore), redis/ (RedisClientFactory +
-                                 #   RedisClientBuilder registry — standalone via REDIS_URL;
-                                 #   RedisCancelSignalStore 为 conversation 域 CancelSignalStore
-                                 #   端口的实现，key 前缀 agentic:cancel:)
+                                 #   RedisClientBuilder registry — standalone via REDIS_URL)
 ```
 
 > **命名对照**：`cmd/` 借自 Go 布局惯例（Python 官方无目录级入口规范，入口机制是
@@ -150,7 +191,11 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   startup `create_all`) is adopted once via `db stamp head`. Direct
   `uv run alembic <cmd>` from `server/` also works (same `alembic.ini`).
 - Run unit tests: `uv run pytest tests/` (pure unit level — SQLite 临时库 +
-  stub 向量索引，不碰 Weaviate/MinerU/Ollama).
+  stub 向量索引，不碰 Weaviate/MinerU/Ollama). CI 里需为 `llm.yaml` 的必填
+  占位符（`DEEPSEEK_API_KEY` 等）提供哑值，见 `.github/workflows/ci.yml`。
+- Lint: `uv run ruff check .`（dev 依赖；规则集显式固定为 E4/E7/E9/F，见
+  pyproject `[tool.ruff.lint]`，isort/pyupgrade 等风格规则未启用）。CI 同款：
+  `.github/workflows/ci.yml`（lint + pytest 两个 job）。
 - **Entrypoint modules import `from app...`, so run them as modules
   (`python -m app.cmd.http`), never as scripts from a different CWD.**
 
@@ -179,8 +224,8 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   - **redis** (`redis:8-alpine`) → `127.0.0.1:6379` — **in use** as the Celery
     broker/result backend by `app/cmd/task_executor` (task.yaml's broker/
     backend reference the `redis.yaml` `redis` entry by driver+key) and by
-    the cancel-flag store (`app/configs/redis.yaml`, same entry by default,
-    keys prefixed `agentic:cancel:`)
+    the signal store's Redis backend (`app/configs/redis.yaml`, same entry by
+    default, keys prefixed `agentic:signal:`)
 - Redis is used by the task executor. The app's default db is still SQLite
   (`db.yaml` `default: sqlite`); the matching `postgres` entry is wired through
   `app/infrastructures/db/` (psycopg3 driver, lazy) — switch by changing
@@ -211,6 +256,7 @@ Server layer rules:
   domain ──► {repositories, infrastructures}
   components ──► {domain?, repositories, infrastructures}
   agents ──► components
+  packages ──► {core, infrastructures}      （能力库层；services/components/tasks 可向下消费）
   ```
 
   补充约束：① domain 禁止 import orchestration/components/agents/api——领域需要的外部事实用端口倒置（如
@@ -218,9 +264,42 @@ Server layer rules:
   ② 编排不触碰 repositories（持久化一律经领域服务门面，如 `ConversationService` 是
   会话持久化规则的唯一归属）；③ 写入型组件工具必须过领域服务以遵守业务规则；
   检索组件消费领域向量适配器走的就是合法的 components→domain 边；④ services 根
-  `__init__.py` 为 PEP 562 惰性再导出聚合面（急切导入会与 components 成环，见文件头注释）。
-  禁边由 `tests/test_layer_boundaries.py` AST 扫描强制（规则改动两处同步）。
-- **api** → only HTTP wiring; delegate to **services**. The endpoint is a
+  `__init__.py` 为 PEP 562 惰性再导出聚合面（急切导入会与 components 成环，见文件头注释）；
+  ⑤ packages（能力库层）领域无关、禁向上依赖 services/components/agents/api/tasks/
+  repositories/models，services/components/tasks 按需向下消费其契约（详见下方
+  「packages」条目）。禁边由 `tests/test_layer_boundaries.py` AST 扫描强制（规则改动两处同步）。
+- **packages（能力库层）** → 自内聚的可复用库：契约 + 后端同包、领域无关、禁向上依赖
+  （见依赖箭头表 ⑤）。居民 `signal/`：`SignalStore` ABC = key 寻址的分布式 Event
+  （行为协议对齐 `threading.Event`：fire 幂等覆盖 value 并重置 TTL——兼作 keepalive
+  心跳续约；is_fired / reset / get 载荷；wait 为轮询默认实现、后端可覆写原生通知；
+  `ttl_seconds` 必选 = 信号必短命、孤儿自过期；失败如实上抛，读/等的宽容策略归
+  消费方）。key 为调用方构造的相对键，实现负责全局前缀（redis 侧 `agentic:signal:`，
+  与 Celery broker 键空间隔离）。后端：`RedisSignalStore`（默认，wireup
+  `as_type=SignalStore` 绑定，连接来自 redis.yaml）+ `InMemorySignalStore`
+  （测试/单机，非 injectable）。会话域消费见 `services/domain/conversation/signals.py`
+  ——cancel 为第一用途（key 布局 + TTL 常量 + 消费方流程；业务流程保持 cancel 命名，
+  机制层通用）。扩展路径：① 新信号用途 = 领域模块加 key 构造 + 常量 + 流程，零新类
+  （例 keepalive 心跳：编排循环周期 fire 刷存活、看门狗 wait/is_fired 判僵死收口）；
+  ② 新后端（etcd）= 新实现类 as_type 换绑，部署级选择需求出现再升级 signal.yaml +
+  Builder registry（filesystem 同款范式）；③ 原生通知 = 后端覆写 wait（redis
+  pub/sub / etcd watch），消费方无感；④ 一次性消费（auto-reset，读后自动复位）为
+  显式决策点，v1 sticky；⑤ SSE 流内信号（客户端可见 keepalive）独立于 SignalStore，
+  属 ag-ui 协议议题（@ag-ui/client 丢弃未知事件类型，须走 CUSTOM 事件或 SSE 注释行）。
+- **api** → only HTTP wiring; delegate to **services**. Besides the business
+  routers, `api/health.py` mounts the `GET /health` readiness probe（db/redis
+  依赖逐项探测,503 口径）and `api/metrics.py` the `GET /metrics` Prometheus
+  endpoint + `MetricsMiddleware` (pure-ASGI request counters/histogram/gauge —
+  handler 标签用路由模板而非原始 path 防标签基数爆炸;`/metrics`、`/health`
+  自身不计数), plus `api/middleware.py` provides the pure-ASGI edge middlewares
+  (see the gotchas for the full edge-policy rundown): `RequestIDMiddleware`
+  (`X-Request-ID` 生成/透传 + `logger.contextualize(request_id=...)`,响应头
+  回带;SSE 线程池日志经 ContextVar 拷贝同携带,格式串为
+  `{extra[request_id]}`,请求外默认 "-") plus `RateLimitMiddleware` /
+  `BodySizeLimitMiddleware` (限流/请求体上限;429 直发信封响应——本中间件在
+  ExceptionMiddleware 之外,抛异常只会变 500;413 的 Content-Length 路径同样
+  直发,实收超限路径经 `HTTPException(413)` 复用全局 http_exception_handler;
+  add 顺序决定层级：后 add 者在外层,请求链 CORS → Metrics → RequestID → RateLimit →
+  BodySize → 路由,拒绝响应向外穿透时补齐 X-Request-ID 与跨域头)。The endpoint is a
   passthrough: `ChatOrchestrator.chat` already yields encoded `data: {...}\n\n`
   frames (the `ag_ui.encoder.EventEncoder` lives in the orchestrator's
   translator), returned as
@@ -235,7 +314,8 @@ Server layer rules:
   (`FrameworkError` → `ConfigError`, `InfrastructureError`), business
   (`BusinessError` base defined in core as the handlers' anchor; concrete
   classes are user-defined in `app/exceptions/` carrying `http_status` +
-  int codes: 1xxx conversation, 2xxx agent, 3xxx memory, 4xxx knowledge —
+  int codes: 1xxx conversation, 2xxx agent, 3xxx memory, 4xxx knowledge,
+  5xxx user —
   the memory one is `MemoryComponentError`, never `MemoryError`, which
   would shadow the built-in). Handlers return the `Response` envelope (`error_code`/
   `error_message`, plus `detail`+`trace` in dev/test only — endpoints must
@@ -243,7 +323,7 @@ Server layer rules:
   Business errors pass their message through in every environment; framework/
   base/unknown errors become a plain「服务内部错误」500 in prod. Logs always
   carry full stacks regardless of environment (`core/logging/`). The
-  environment comes from `app.yaml` `environment: ${AGENTIC_ENV:dev}` via
+  environment comes from `app.yaml` `environment: ${APP_ENV:dev}` via
   `core.config.get_environment()` (dev/test/prod; invalid values fail fast
   with `ConfigError`).
 - **services** → 两层制见本节首条；实现风格统一为 `@injectable` + `@dataclass`
@@ -255,6 +335,14 @@ Server layer rules:
   `DocumentIngestionService` / `KnowledgeBindingService`），检索能力在
   `components/knowledge/`（拓扑见「服务层两层制」箭头表——检索编排既要被 agent
   工具消费又要碰 repositories/infra 与领域向量适配器，放 components 成环风险最小）。
+  知识库归属与可见性：knowledge_base 带 user_id（端点层 UserPrincipal 注入）与
+  is_public；读路径（详情/列表/文档读）经 `support.require_visible_kb` 属主或公开库
+  可见，写路径（更新/删除/启停/上传/文档写/retry）经 `support.require_owned_kb`
+  仅属主可操作，他人资源一律 404 不泄露存在性（与会话归属同口径）；名称唯一性每
+  用户一作用域（`get_kb_by_name(name, user_id)` + 复合唯一索引）；Celery 摄取
+  （`process_document`）无身份上下文，仍走存在性锚定 `require_kb`；绑定管理
+  （`/agent/{agent_id}/knowledge`）仅要求登录，绑定规则不变——agent↔KB 绑定是
+  显式共享通道，检索侧不按可见性过滤。
   向量细节统一收敛在领域侧 `services/domain/knowledge/vector_index.py`
   （`KnowledgeVectorIndex`，components→domain 合法引用；每库一 collection
   `Knowledge_{kb_id.hex}` + 显式 schema（content 用 gse 分词，见 collection.py）+
@@ -297,12 +385,18 @@ Server layer rules:
   env > `.env` > inline default; `.env` is loaded by the loader on first
   config read (`AGENTIC_ENV_FILE` points at an explicit path). Config dir
   overridable via `AGENTIC_CONFIG_DIR` (or `python -m app.cmd.http
-  --config-dir`). Sections: `llm`
+  --config-dir`). Sections: `auth`
+  (`AuthConfig`: JWT 签发/验签——`jwt_secret` via `AUTH_JWT_SECRET`（HS256
+  建议 ≥32 字节，过短 PyJWT 告警）、`jwt_algorithm`、`token_expire_minutes`
+  默认 7 天）、`llm`
   (`LLMConfig`: default + providers dict; each entry declares `type` —
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
-  `chat`/`embedding`; `deepseek-*` via `DEEPSEEK_API_KEY`,
+  `chat`/`embedding`; entry 级 `timeout`（秒，默认 120）落地为模型客户端
+  请求超时——deepseek/openai 走 `request_timeout`，ollama 走
+  `client_kwargs={"timeout": ...}`；`deepseek-*` via `DEEPSEEK_API_KEY`,
   `openai-chat`/`openai-embedding` via `OPENAI_API_KEY` for
-  OpenAI-compatible gateways, `ollama-embedding` (bge-m3) is local —
+  OpenAI-compatible gateways——这两条 entry 当前在 `llm.yaml` 中
+  **注释未启用**（代码侧 openai builder 已注册，启用时取消注释即可）, `ollama-embedding` (bge-m3) is local —
   `api_key` optional), `db`, `vector_db` (`VectorDBConfig`: default +
   providers dict with `type`-discriminated entries + top-level `embedding`
   naming the llm embedding entry; `weaviate` via `WEAVIATE_HOST/PORT/GRPC_PORT`),
@@ -311,11 +405,29 @@ Server layer rules:
   with the compose service via `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET`),
   `memory`, `logging`, `task` (`TaskConfig`: Celery
   broker/backend, each a driver+key reference resolved by `resolve_url` —
-  the `redis` driver resolves against `redis.yaml` providers), `redis`
+  the `redis` driver resolves against `redis.yaml` providers; plus
+  `time_limit`/`soft_time_limit` (硬/软任务超时，默认 600/540 秒，soft<hard
+  由校验保证，落到 worker conf `task_time_limit`/`task_soft_time_limit`,
+  broker 连接套用被引 redis entry 的 socket 超时)), `redis`
   (`RedisConfig`: default + providers dict with
-  `type`-discriminated entries — `standalone` via `REDIS_URL`; direct-Redis
-  capabilities such as the cancel-flag store, plus the Celery queue via
-  task.yaml's references — the single source of Redis connection facts).
+  `type`-discriminated entries — `standalone` via `REDIS_URL`, entry 级
+  `socket_timeout`/`socket_connect_timeout`（默认 5/3 秒）传给
+  `Redis.from_url`; direct-Redis
+  capabilities such as the signal store's Redis backend, plus the Celery queue via
+  task.yaml's references — the single source of Redis connection facts), `http`
+  (`HttpConfig`: CORS `origins` 白名单（逗号分隔字符串→列表，精确
+  `http(s)://host[:port]`，`CORS_ORIGINS` 整体覆盖）+ `allow_credentials`；
+  `rate_limit`/`max_body_bytes` 按 chat/upload 作用域——路由匹配在
+  `cmd/http/main.py` 接线，中间件在 `api/middleware.py`；进程内实现，多实例
+  部署各实例独立计数), `metrics` (`MetricsConfig`: `enabled`（
+  `METRICS_ENABLED`，关闭则不挂 /metrics 与 MetricsMiddleware）+
+  `worker_metrics_port`（Celery worker 指标端口，`METRICS_WORKER_PORT`）——
+  端点与中间件在 `api/metrics.py`，worker 侧装配在
+  `cmd/task_executor/metrics.py`), `document_parser` (`DocumentParserConfig`:
+  default + providers dict with `type`-discriminated entries — `mineru_cloud`
+  （MinerU 云端 PDF 解析，`MINERU_API_KEY` 必填——留空时首次解析 fail-fast；
+  `poll_interval`/`poll_timeout` 轮询参数）；实现见
+  `app/infrastructures/document_parser/`).
   Connection-info modeling rule (pick ONE form per provider): write a full
   connection string (`url`/`dsn`) when the driver consumes a URL natively and
   deployment hands the connection over as one unit (`standalone` redis via
@@ -330,12 +442,30 @@ Server layer rules:
 - **models/schema** → wire request/response shapes (camelCase field names like
   `threadId`/`runId` for ag-ui compatibility). **models/domain** → internal
   domain models (SQLModel tables shared by services and components).
-- **components** → self-contained capability components (memory today;
-  retriever and others follow the same shape): own service facade + tools +
-  own `repositories/` managing storage/retrieval per strategy. A component's
-  repository is bound to its ABC via `@injectable(as_type=...)` (see
-  `SqliteMemoryRepository` → `MemoryRepository`); the storage engine comes from
-  the shared `infrastructures` layer; table models stay in `models/domain`.
+- **components** → 自内聚能力组件 + 统一范式（`tests/test_component_structure.py`
+  机器守护结构合规）。**解剖学**（固定槽位）：`__init__.py`（公共面再导出，
+  不写逻辑）；`manifest.py` 必有——`register_component(ComponentSpec)` 能力
+  声明 + `ToolSpec.build` 工具构造 + 导出契约模型（如 `KnowledgeSearchResult`，
+  LLM/前端共用 JSON 的单一 schema 源）；`ability/` 必有——能力模块按能力
+  命名、持 `@injectable` 门面服务（禁 `service.py`/`utils.py` 式泛化命名）；
+  `internal/` 可选——跨能力共享机件，app 层禁入（tests 与 `app/commands`
+  白盒豁免，AST 扫描强制）；`admin.py` 可选——管理面端口实现
+  （`@injectable(as_type=...)` 回填领域端口，如 `MemoryEditor`）；
+  `repositories/` 可选——组件自有存储策略（ABC 经 `as_type` 绑定实现，
+  存储引擎来自共享 `infrastructures`，表模型在 `models/domain`）。
+  **能力范式**（v1 仅 tools）：spec 是静态数据——`COMPONENT_REGISTRY` 登记时
+  fail-fast 校验组件重名/组内工具重名/空描述；装配是 DI 行为——manifest 内
+  `@injectable` 装配器（如 `MemoryComponent`）持门面服务，把 `ToolSpec.build`
+  实例化为声明式 StructuredTool（args_schema 显式定义；`config:
+  RunnableConfig` 是运行时注入参数，不进 LLM schema）。`describe_capabilities()`
+  无需实例化服务即可枚举导出能力清单（后端结构化；HTTP 端点待有消费方再加）。
+  **新增组件三步**：① 建包按解剖学落位；② manifest.py 声明 spec + 装配器；
+  ③ `agents/toolbox.py` 加一个装配器字段（全系统唯一显式组件清单点，构造期
+  校验跨组件工具名冲突）——`AgentFactory` 与各 agent 的 `build_tools` 不变。
+  包内模块间一律完整子模块路径互导，禁经包 `__init__` 取属性（防初始化环）。
+  快速上下文注入与轮次收尾不在 v1 能力范式内：编排层直接 DI 组件门面服务
+  （`ChatOrchestrator` 注入 `MemoryRecallService`、`TurnFinalizer` 注入
+  `MemoryConsolidationService`）。
 - **repositories** → data access for the conversation domain (`@injectable`),
   backed by the injected SQLAlchemy `Engine` (SQLModel sessions).
 - **infrastructures** → shared drivers/connections for every layer:
@@ -391,7 +521,7 @@ Server layer rules:
 Server DI uses **wireup**. The shared registration lives in
 `app/core/container.py` (`build_async_container()` /
 `build_sync_container()`, injectables `[AppConfig, LoggerFactory, services,
-components, repositories, infrastructures, agents]` — classes like
+components, packages, repositories, infrastructures, agents]` — classes like
 `LoggerFactory` are passed directly since `core` is not a scanned package).
 The two entrypoints each build their **own** container instance from it
 (wireup's FastAPI integration requires an async container, its Celery
@@ -418,7 +548,7 @@ with `stream.interleave("messages")`. The default chat model is **DeepSeek**
 via `ChatDeepSeek` (`langchain-deepseek`), built by `app/infrastructures/llm/`
 from `AppConfig.llm` (named provider entries like `deepseek-flash` /
 `deepseek-pro`; `openai-chat` / `openai-embedding` entries target an
-OpenAI-compatible gateway — embedding via `create_embeddings` is the base for
+OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用） — embedding via `create_embeddings` is the base for
 future RAG).
 
 ## Conventions
@@ -428,10 +558,26 @@ future RAG).
 
 ## Gotchas
 
-- **`.env` is NOT gitignored** and currently holds a **live DeepSeek API
-  key**. Don't add secrets here without checking `.gitignore`, and don't paste
-  the key into commits/logs.
-- CORS is wide open (`allow_origins=["*"]`, credentials on).
+- **`.env` IS gitignored**（`.gitignore` 忽略 `.env`，未入库）and holds a
+  real **DeepSeek API key** — don't paste the key into commits/logs. CI 为
+  `llm.yaml` 必填占位符提供哑值，见 `.github/workflows/ci.yml`。
+- CORS is a whitelist (`http.yaml` `cors.origins`, default the two Vite dev-server
+  loopback origins; override wholesale via `CORS_ORIGINS` comma-separated). Methods
+  are pinned to GET/POST/PATCH/DELETE/OPTIONS and headers to Content-Type /
+  X-Request-ID / Authorization. Keep origins exact (`http(s)://host[:port]`, no
+  trailing slash, no `*` — the config validator enforces this).
+- Edge limits (`http.yaml` + `api/middleware.py`): chat-prefix and document-upload
+  POSTs are rate-limited per client IP (in-process sliding window — per-instance
+  under multi-worker deployments; behind a reverse proxy run uvicorn with
+  `--proxy-headers` or all traffic shares the proxy's slot) and body-size-capped
+  (chat 1 MiB JSON, upload 64 MiB multipart > the 50 MiB service-level file cap).
+  429/413 rejections use the standard `Response` envelope. Upload itself streams:
+  the endpoint passes `UploadFile.file` through and
+  `KnowledgeDocumentService.create_document` wraps it in a counting/sha256
+  read-through reader (`_CountingDigestReader`) so the object-store `put` never
+  holds the whole file in memory; seekable streams are size-probed up front,
+  lying/chunked streams trip the reader mid-copy and the partial object is
+  cleaned up.
 - SSE (`/agentic/chat`) is **outside** the global exception handlers: once the
   200/SSE headers are committed, in-stream errors can only surface as an ag-ui
   `RunErrorEvent`. `ChatOrchestrator.chat` therefore yields `RunStarted` first,
@@ -465,14 +611,23 @@ future RAG).
   here too). An explicit cancel channel complements disconnect-based cancel
   (transport-independent: proxies may swallow disconnect events, and
   `POST /agentic/chat/cancel` works without dropping the connection): the
-  endpoint writes a thread-scoped flag via the `CancelSignalStore` port
-  (`services/domain/conversation/ports.py`, a `typing.Protocol`; the Redis
-  impl `RedisCancelSignalStore` in `infrastructures/redis/` connects via the
+  endpoint fires a thread-scoped signal via the generic `SignalStore` contract
+  (`app/packages/signal/`, a distributed-Event ABC: fire / is_fired / reset /
+  wait / get, TTL mandatory; the default Redis backend connects via the
   independent `redis.yaml` section, by default the same db0 instance as the
-  Celery broker, key `agentic:cancel:{thread_id}`, TTL 1h). The port contract is
-  fail-loud; the tolerance policy lives in `ConversationService` — reads/clears
-  degrade instead of blocking chat (throttled warning, treated as not
-  canceled), and the flag is cleared defensively at `open_turn`.
+  Celery broker, key `agentic:signal:conversation:{thread_id}:cancel`, TTL 1h —
+  key layout and constants owned by `services/domain/conversation/signals.py`).
+  The contract is fail-loud; the tolerance policy lives in
+  `ConversationService` — reads/resets degrade instead of blocking chat
+  (throttled warning, treated as not canceled), and the signal is reset
+  defensively at `open_turn`. The same channel doubles as the **graceful
+  shutdown** path: `ChatOrchestrator` registers in-flight streams per
+  `thread_id` (`chat` wrapper + `begin_shutdown()`), and the HTTP lifespan
+  (`cmd/http/main.py`) installs SIGTERM/SIGINT handlers that first fire the
+  cancel flag for every active stream (frame-level check closes each within
+  ~0.5s — turn CANCELED, no partial message persisted) and then chain to
+  uvicorn's own handler for the normal drain; handlers are restored on
+  lifespan exit.
   The streaming loop re-checks it throttled at **frame level** — always on
   the first streamed frame, then at most every 0.5s
   (`CANCEL_CHECK_INTERVAL_SECONDS`) — and
@@ -514,8 +669,8 @@ future RAG).
   Recall has two tiers: `ChatOrchestrator.chat` auto-injects a brief block
   (`MemoryRecallService.build_fast_context`, pure SQL scoring, no LLM/embedding)
   before streaming; deep recall = three tools (`timeline`/`expand`/`state_at`,
-  built in `components/memory/tools.py`, reading the current thread from the
-  langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
+  declared and built in `components/memory/manifest.py`, reading the current
+  thread from the langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
   into `configurable`, and tools declare a `config: RunnableConfig` param that
   never reaches the LLM tool schema; do NOT use a ContextVar for this: the
   orchestrator is a sync generator resumed in a different context copy per
@@ -526,6 +681,39 @@ future RAG).
   `MemoryVectorIndex` lives in `services/domain/memory/` (components consume
   it over the legal components→domain edge); vector facts源 is SQL — the index
   is rebuildable (`rebuild()`).
+- **用户模块（认证 + 会话/记忆/知识库归属）** → 2026-08-30 引入，四块机制：
+  ① **JWT 认证走 FastAPI 依赖而非中间件**：`api/deps.py` 的 `require_user`
+  无状态验签（不查库）产出 `UserPrincipal(user_id, username)`，按 router
+  在 `cmd/http/main.py` 的 `include_router` 处声明式挂载
+  （agentic/knowledge/agent_knowledge/memory 组），
+  `/auth`、`/health` 公开——无路径白名单。不用中间件的
+  原因：现有 `api/middleware.py` 是纯 ASGI 且在全局异常处理器之外，401 得
+  手写信封（RateLimit 的 429 同因）；`BaseHTTPMiddleware` 对 SSE 有缓冲风险。
+  注册/登录在 `services/domain/user/`（PBKDF2 stdlib 哈希 + pyjwt；错用户名
+  与错密码统一 `InvalidCredentialsError` 5002 不泄露存在性；注册即登录直接
+  签发 token）。② **会话归属**：`agentic_conversation.user_id`（FK→users），
+  归属过滤下沉到仓储查询条件——`init_conversation` get-or-create 后由
+  `ConversationService.open_turn` 比对归属，他人 thread_id 续聊/取消/查删
+  一律 404 不泄露存在性。③ **记忆用户级作用域（设计反转）**：memory v2 原
+  锁定「单用户全局」（docs/memory-v2-design.md §3.3），现 entity/statement/
+  episode 三表带 `user_id`；`MemoryRepository.for_user(uid)` / 
+  `MemoryVectorIndex.for_user(uid)` / `MemoryEditor·GraphReader.for_user(uid)`
+  返回作用域视图（scope 过滤在 sqlite 仓储与 `_scope_rows` 内强制，id 直取
+  命中他人行视为不存在；向量按用户分 collection `Memory_{uid.hex}`）；注入
+  单例是无作用域的全局算子视角，**仅供维护 CLI 与 for_user 工厂使用**，
+  用户侧行程必须先 for_user。作用域标记字段一律 `field(init=False)`——
+  wireup 按 `__init__` 签名提取依赖，可选 UUID 构造参数会破坏其注册表校验
+  （作为他人依赖时先于自身清理被递归验证 → KeyError）。深度回忆三件套经
+  `configurable.user_id`（`BaseAgent._config`）取身份，`_user(config)` 同款
+  读取模式。④ **知识库归属 + 公开/私有标识**：`knowledge_base.user_id`
+  （FK→users，迁移回填默认用户）+ `is_public`（缺省私有；存量回填为公开
+  保持迁移前全员可见行为）；读路径 `require_visible_kb`（属主或公开）、
+  写路径 `require_owned_kb`（仅属主，公开不让渡管理权），他人资源 404 不
+  泄露存在性；名称唯一性每用户一作用域（复合唯一 `(user_id, name)`）；
+  Celery 摄取无身份走 `require_kb` 存在性锚定；绑定管理仅要求登录（绑定是
+  显式共享通道，检索侧不按可见性过滤）。前端配套：zustand auth-store（localStorage 持久化）+ axios 请求
+  拦截器注 Bearer + 401 登出跳转 + HttpAgent fetch 覆盖（SSE 401 在 200 头
+  之后只能 fetch 层拦截）。
 - `README.md` is the human-facing overview (quickstart, config, API, layout);
   this file remains the deeper agent guide — keep both in sync when adding
   entrypoints/config sections/endpoints.

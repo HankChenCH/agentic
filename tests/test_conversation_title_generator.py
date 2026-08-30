@@ -40,20 +40,6 @@ class FakeModelFactory:
         return self.model
 
 
-def make_message(sequence_num, message_type, text):
-    return AgenticConversationMessage(
-        thread_id=None,
-        turn_id=None,
-        message_id=None,
-        sequence_num=sequence_num,
-        role=AgenticMessageRole.ASSISTANT,
-        message_type=message_type,
-        content=[{"type": "text", "text": text}],
-        token_usage={},
-        latency_ms=0,
-    )
-
-
 def one_message():
     return [make_message(sequence_num=1, message_type=AgenticMessageType.MESSAGE, text="正文")]
 

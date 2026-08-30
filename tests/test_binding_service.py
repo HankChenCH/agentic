@@ -17,11 +17,14 @@ from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
 from app.services.domain.knowledge.binding_service import KnowledgeBindingService
+from tests.conftest import TEST_USER_ID
 
 
 def make_kb(engine, name, status=KnowledgeStatus.ENABLED) -> uuid4:
     with Session(engine) as session:
-        kb = KnowledgeBase(name=name, embedding_model="ollama-embedding", status=status)
+        kb = KnowledgeBase(
+            user_id=TEST_USER_ID, name=name, embedding_model="ollama-embedding", status=status
+        )
         session.add(kb)
         session.commit()
         session.refresh(kb)

@@ -38,8 +38,14 @@
    向量端）。不引入图数据库。
    - 图数据库再评估触发条件（任一满足重启讨论）：≥2 跳证据链推理成为需求；
      记忆规模达十万节点级并需要社区聚类摘要；多用户/多智能体共享记忆池。
-3. **作用域**：单用户全局。"用户"是标记 `is_user=True` 的特殊 PERSON 实体，
-   不引入 user_id 隔离。
+3. **作用域**：~~单用户全局~~（v1 决策，2026-08-30 随用户模块引入而反转）。
+   **现为用户级隔离**：entity/statement/episode 三表带 `user_id`
+   （episode_link 经 episode 继承归属），读写路径经
+   `MemoryRepository.for_user(uid)` 作用域视图强制过滤；向量侧每用户一个
+   collection `Memory_{uid.hex}`。"用户"仍是标记 `is_user=True` 的特殊
+   PERSON 实体，但**每用户一个**（consolidation `_ensure_user_entity` 在
+   作用域内查找/创建），消歧合并永不参与被吞并的保护语义不变。
+   图数据库再评估触发条件中的"多用户共享记忆池"指跨用户共享（仍非目标）。
 4. **遗忘**：惰性衰减。数据不物理删除，长期不被召回的条目经评分自然沉底；
    每次被召回则 access_count+1 并刷新 last_accessed_at（提取练习强化）。
 5. **召回架构**：快速/深度两级（§6）；管理侧能力（可视化/人工编辑）列为
@@ -304,6 +310,15 @@ Celery 任务体系（写路径仍走守护线程）。
 兜底同样生效，类型护栏仅写路有期望类型时适用）。门面删除，消费方直注两服务；
 wireup 包扫描自动注册，容器无手工条目。
 
+**2026-08-30 结构化输出**：抽取与裁决两次 LLM 调用从「prompt 内联 JSON
+示例 + 手工截取解析」切换为 `with_structured_output(method="function_calling")`
+——输出形状由 pydantic wire 模型表达（`extraction.py` 的 `_ExtractionPayload`/
+`_AdjudicationPayload`，裁决输出包一层对象以适配工具参数必须是 object）；
+宽松清洗层与全部降级语义不变——失败告警降级：抽取→空结果、裁决→None→
+程序化规则。静默降级点全量补告警日志：抽取/裁决失败、抽取清洗后全丢弃、
+裁决降级程序化规则、REPLACE 目标无效降为新增、MANUAL 保护放弃事实、
+主体/客体实体键无法解析。
+
 ## 10. 测试策略（纯单元，SQLite + stub 向量索引）
 
 - `test_memory_extraction.py`：结构化抽取解析健壮性（JSON 变体/缺字段/降级）
@@ -327,4 +342,5 @@ Cytoscape 渲染力导向图；时间滑杆做时点回放视图）；编辑 API
 `services/domain/memory/` 领域服务上（新增 admin 读路径），端点直接消费。
 
 **P2 非目标**：写路径迁 Celery（`app/tasks/__init__.py` 已标注的未来工作）；
-多用户作用域；周期巩固任务；>1 hop 检索；跨智能体共享记忆池。
+~~多用户作用域~~（2026-08-30 随用户模块落地，见 §3 修订）；周期巩固任务；
+>1 hop 检索；跨智能体共享记忆池。

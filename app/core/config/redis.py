@@ -11,6 +11,14 @@ class StandaloneRedisProviderEntry(BaseModel):
         default="redis://127.0.0.1:6379/0",
         description="Redis 连接地址，本地开发默认指向 docker compose 的 redis",
     )
+    socket_timeout: float = Field(
+        default=5.0,
+        description="已建立连接上的命令读写超时（秒），防止单条命令无限挂起",
+    )
+    socket_connect_timeout: float = Field(
+        default=3.0,
+        description="建立连接的超时（秒）",
+    )
 
 
 # 未来新增连接形式（cluster / sentinel 等）时在此扩展 Union（按 type 判别）

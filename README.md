@@ -88,13 +88,15 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | 文件 | 内容 |
 | --- | --- |
 | `app.yaml` | 应用名、运行环境(`APP_ENV: dev/test/prod`)、默认 agent |
-| `llm.yaml` | LLM 提供方注册表(deepseek / openai 兼容网关 / ollama),按 `task_type` 区分 chat / embedding |
+| `http.yaml` | HTTP 边缘策略:CORS 源白名单、chat/上传限流(按客户端 IP 滑动窗口)与请求体大小上限 |
+| `llm.yaml` | LLM 提供方注册表(deepseek / openai 兼容网关 / ollama),按 `task_type` 区分 chat / embedding;每个 entry 可配 `timeout`(单次请求超时,秒,默认 120) |
 | `db.yaml` | 数据库,默认 `sqlite`(`data/agentic.db`),可切 `postgres` |
 | `vector_db.yaml` | 向量库(weaviate)+ 顶层 `embedding` 指向 llm.yaml 的嵌入条目 |
 | `filesystem.yaml` | 对象存储,默认 `rustfs`(S3 兼容),亦有 `local` 磁盘实现 |
 | `document_parser.yaml` | MinerU 云端 PDF 解析(OCR / 公式 / 表格开关、轮询超时) |
-| `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend(驱动+key引用,指向 redis.yaml 的 entry) |
-| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储与 Celery 队列共用,后者经 task.yaml 引用) |
+| `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend(驱动+key引用,指向 redis.yaml 的 entry)+ 任务 `time_limit`/`soft_time_limit`(硬/软超时,默认 600/540 秒) |
+| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储与 Celery 队列共用,后者经 task.yaml 引用);可配 `socket_timeout`(命令读写,默认 5 秒)与 `socket_connect_timeout`(建连,默认 3 秒) |
+| `auth.yaml` | 认证:JWT 签发/验签(`AUTH_JWT_SECRET`、算法 HS256、`token_expire_minutes`,默认 7 天) |
 
 常用环境变量(`.env` 或进程环境均可):
 
@@ -107,7 +109,12 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
 | `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
+| `CORS_ORIGINS` | CORS 源白名单(逗号分隔整体覆盖) | `http://localhost:5173,http://127.0.0.1:5173` |
+| `AUTH_JWT_SECRET` | JWT 签名密钥(HS256 建议 ≥32 字节;生产必须显式设置) | `dev-only-secret-…`(仅开发) |
+| `CHAT_RATE_LIMIT` / `UPLOAD_RATE_LIMIT` | chat / 上传端点限流(窗口内次数) | `30` / `10`(窗口均 60 秒) |
+| `CHAT_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | chat / 上传请求体上限(字节) | 1 MiB / 64 MiB |
 | `AGENTIC_LOG_LEVEL` / `AGENTIC_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
+| `METRICS_ENABLED` / `METRICS_WORKER_PORT` | 指标采集开关 / worker 指标端口 | `true` / `9091` |
 
 配置目录与 `.env` 路径可整体覆盖:`AGENTIC_CONFIG_DIR`、`AGENTIC_ENV_FILE`
 (或 `python -m app.cmd.http --config-dir/--env-file`)。
@@ -126,17 +133,46 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 ## API 一览
 
 所有成功响应走统一信封 `{error_code, error_message, response}`;业务错误码分段:
-会话 1xxx、agent 2xxx、记忆 3xxx、知识库 4xxx。
+会话 1xxx、agent 2xxx、记忆 3xxx、知识库 4xxx、用户 5xxx。每个响应带 `X-Request-ID`
+头(沿用入站同名头,否则生成),同 ID 注入该请求全部日志(`request_id` 字段)。
+
+**认证**:注册/登录签发 JWT(HS256),除 `/health`、`/auth/*` 与 `/metrics` 外,
+全部路由要求 `Authorization: Bearer <token>`(router 级依赖声明式挂载,无路径白名单)。
+会话、记忆与知识库是用户级数据:会话/记忆归属过滤在仓储查询条件内强制;知识库
+带属主与公开/私有标识(`isPublic`,缺省私有)——读(详情/列表/文档读)属主或
+公开库可见,写(更新/删除/启停/上传/文档写)仅属主可操作,越权访问与不存在同返回 404。
+
+边缘策略(`http.yaml`,中间件均为纯 ASGI、SSE 友好):CORS 收敛为源白名单
+(默认仅 Vite dev server 两种 loopback 形态,`CORS_ORIGINS` 覆盖);chat 前缀
+与文档上传端点按客户端 IP 滑动窗口限流,超限回 429 信封 + `Retry-After`;
+两作用域同时施加请求体字节上限(Content-Length 超限直回 413,分块/谎报
+长度在读取处拦截),上传转存为流式——边写对象存储边计数与 sha256 摘要,
+内存占用与文件大小无关。
+
+**运维监控(Prometheus)**:HTTP 应用暴露 `GET /metrics`(公开,抓取格式),
+中间件按「方法 + 路由模板」记请求计数 `agentic_http_requests_total`、时延
+直方图 `agentic_http_request_duration_seconds` 与在途数
+`agentic_http_requests_in_progress`(404 等未匹配路由落 `unmatched`,
+`/metrics`/`/health` 自身不计数)。Celery worker 在独立端口(默认 9091)
+暴露任务指标 `agentic_celery_tasks_total{task,state}`、
+`agentic_celery_task_duration_seconds{task}`、
+`agentic_celery_tasks_currently_running`(multiprocess 模式聚合 prefork
+子进程)。`METRICS_ENABLED=false` 整体关闭。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| `GET` | `/health` | 就绪探针(逐一探测 db/redis,全绿 200,任一不可用 503 + 组件明细) |
+| `GET` | `/metrics` | Prometheus 采集端点(公开;HTTP 请求计数/时延,`METRICS_ENABLED=false` 关闭) |
+| `POST` | `/auth/register` | 注册(注册即登录:成功直接返回 token + 用户信息;重名 → 5001/409) |
+| `POST` | `/auth/login` | 登录(错用户名/错密码统一 5002/401,不泄露用户存在性) |
+| `GET` | `/auth/me` | 当前登录用户 |
 | `POST` | `/agentic/chat` | SSE 流式聊天(ag-ui 事件流) |
-| `POST` | `/agentic/chat/cancel` | 取消会话当前活跃轮次(幂等;置 Redis 取消标志,流式边界与工具入口感知收口) |
+| `POST` | `/agentic/chat/cancel` | 取消会话当前活跃轮次(幂等;触发 Redis 取消信号,流式边界与工具入口感知收口) |
 | `GET` | `/agentic/conversation` | 会话列表 |
 | `GET` | `/agentic/conversation/{thread_id}` | 会话详情 |
 | `GET` | `/agentic/conversation/{thread_id}/history` | 会话历史消息 |
 | `DELETE` | `/agentic/conversation/{thread_id}` | 删除会话(硬删除,连同轮次/消息;长期记忆保留) |
-| `POST` / `GET` | `/knowledge` | 创建 / 分页列出知识库 |
+| `POST` / `GET` | `/knowledge` | 创建(可带 `isPublic`,缺省私有) / 分页列出知识库(属主或公开库) |
 | `GET` / `PATCH` / `DELETE` | `/knowledge/{kb_id}` | 知识库详情 / 更新 / 删除 |
 | `POST` | `/knowledge/{kb_id}/enable` · `/disable` | 启用 / 停用 |
 | `POST` | `/knowledge/{kb_id}/document` | 上传 PDF 文档(multipart,异步摄取) |
@@ -177,6 +213,7 @@ server/
 │   ├── api/               # HTTP 装配 + 全局异常处理(AOP);v1/endpoints/ 按领域分模块
 │   ├── services/          # 业务逻辑两层制:orchestration/(chat 行程编排)与 domain/(conversation、knowledge 领域服务)
 │   ├── components/        # 自包含能力组件:memory(长期记忆)、knowledge(检索)
+│   ├── packages/          # 可复用能力库:signal(SignalStore 分布式 Event 契约 + Redis/InMemory 后端)
 │   ├── agents/            # BaseAgent 注册表 + AgentFactory + 内置 agent
 │   ├── tasks/             # Celery 任务(文档摄取)
 │   ├── commands/          # admin 命令行的领域命令(memory repair/rebuild-index、db 迁移)
@@ -192,7 +229,8 @@ server/
 ## 架构速览
 
 - **分层**:`api → services{orchestration|domain} → components/repositories → infrastructures`,单向依赖;
-  api 只做 HTTP 装配;services 两层制——orchestration 编排用户侧行程(chat),domain 承载
+  可复用能力库 `packages`(signal 信号库:契约+后端内聚一包)领域无关、禁向上依赖,被 services/components
+  向下消费;api 只做 HTTP 装配;services 两层制——orchestration 编排用户侧行程(chat),domain 承载
   领域服务(会话/知识库,管理侧端点与 Celery 任务直调);自包含能力(记忆、检索)在 components,
   写入型组件工具须经领域服务;检索组件消费领域向量适配器,走合法的 components→domain 边。
 - **DI**:wireup。共享注册在 `app/core/container.py`,HTTP 与 Celery 两个入口各建

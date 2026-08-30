@@ -47,9 +47,16 @@ class AgenticConversation(TimeFieldMixin, SQLModel, table=True):
         description="会话对应使用的智能体标识：<agent_type:agent_name>表示"
     )
 
+    user_id: UUID = Field(
+        index=True,
+        title="所属用户id",
+        description="会话归属用户（users.id）；归属过滤在仓储查询条件内强制",
+        foreign_key="users.id",
+    )
+
     thread_id: UUID = Field(
-        index=True, 
-        title="会话id", 
+        index=True,
+        title="会话id",
         description="会话id"
     )
 

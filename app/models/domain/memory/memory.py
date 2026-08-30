@@ -8,6 +8,10 @@
 «时»的落点：valid_from/valid_to 表达世界中成立区间（valid time），
 invalidated_at 是系统取代时刻（transaction time），time_remark 兜住
 无法硬解析的模糊时间原文。
+
+«作用域»：user_id 落在 entity/statement/episode 三表（episode_link 经
+episode 继承归属）。v1 设计为单用户全局，引入用户模块后改为用户级隔离，
+所有读写路径必须携带 user_id 过滤（见 components/memory/repositories）。
 """
 
 from datetime import datetime
@@ -39,6 +43,7 @@ class MemoryEntity(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "memory_entity"  # type: ignore
 
     id: int | None = Field(default=None, primary_key=True)
+    user_id: UUID = Field(index=True, description="归属用户（users.id）；记忆作用域为用户级")
     entity_type: str = Field(
         default=EntityType.OTHER.value, index=True, description="实体类型枚举值"
     )
@@ -71,8 +76,9 @@ class MemoryStatement(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "memory_statement"  # type: ignore
 
     id: int | None = Field(default=None, primary_key=True)
+    user_id: UUID = Field(index=True, description="归属用户（users.id）；冗余自 subject 实体以省召回路径 join")
     subject_id: int = Field(foreign_key="memory_entity.id", index=True)
-    predicate: str = Field(description="受控词表谓词（基数规则见 components/memory/vocab.py）")
+    predicate: str = Field(description="受控词表谓词（基数规则见 components/memory/internal/vocab.py）")
     object_entity_id: Union[int, None] = Field(default=None, foreign_key="memory_entity.id")
     object_text: Union[str, None] = Field(default=None, description="客体为字面量时取值")
     summary: str = Field(description="自然语言整句，嵌入与展示源")
@@ -105,6 +111,7 @@ class MemoryEpisode(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "memory_episode"  # type: ignore
 
     id: int | None = Field(default=None, primary_key=True)
+    user_id: UUID = Field(index=True, description="归属用户（users.id）；记忆作用域为用户级")
     thread_id: UUID = Field(index=True)
     turn_id: Union[UUID, None] = Field(default=None)
     occurred_at: datetime = Field(index=True, description="事件发生时间，默认轮次时间")

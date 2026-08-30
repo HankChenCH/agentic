@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import List, Tuple
 from uuid import UUID
 
-from sqlalchemy import Engine, func
+from sqlalchemy import Engine, func, or_
 from sqlmodel import Session, col, select
 from wireup import injectable
 
@@ -29,10 +29,14 @@ class KnowledgeBaseRepository:
             session.commit()
         return kb
 
-    def get_kb_by_name(self, name: str) -> KnowledgeBase | None:
+    def get_kb_by_name(self, name: str, user_id: UUID) -> KnowledgeBase | None:
+        # 名称唯一性是每用户的：重名预检限定在属主作用域内
         with Session(self.engine, expire_on_commit=False) as session:
             kb = session.exec(
-                select(KnowledgeBase).where(col(KnowledgeBase.name) == name)
+                select(KnowledgeBase).where(
+                    col(KnowledgeBase.name) == name,
+                    col(KnowledgeBase.user_id) == user_id,
+                )
             ).first()
             session.commit()
         return kb
@@ -56,19 +60,32 @@ class KnowledgeBaseRepository:
             session.commit()
         return True
 
-    def list_kbs(self, page: int, page_size: int) -> Tuple[List[KnowledgeBase], int]:
+    def list_kbs(
+        self, page: int, page_size: int, user_id: UUID
+    ) -> Tuple[List[KnowledgeBase], int]:
         # 分页 offset 必须按页大小计算：(page-1) * page_size
         # deleting 资源视同已删除：列表与计数都不返回（详情接口仍可查到）
+        # 可见性：属主本人或公开库；他人私有库不出现在列表与计数中
         offset = (page - 1) * page_size
+        visible = or_(
+            col(KnowledgeBase.user_id) == user_id,
+            col(KnowledgeBase.is_public),
+        )
         with Session(self.engine, expire_on_commit=False) as session:
             total = session.exec(
                 select(func.count())
                 .select_from(KnowledgeBase)
-                .where(col(KnowledgeBase.status) != KnowledgeStatus.DELETING)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    visible,
+                )
             ).one()
             result = session.exec(
                 select(KnowledgeBase)
-                .where(col(KnowledgeBase.status) != KnowledgeStatus.DELETING)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    visible,
+                )
                 .order_by(col(KnowledgeBase.weight).desc(), col(KnowledgeBase.created_at).desc())
                 .offset(offset)
                 .limit(page_size)

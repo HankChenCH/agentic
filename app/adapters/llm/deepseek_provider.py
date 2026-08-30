@@ -18,5 +18,6 @@ class DeepSeekModelBuilder(ModelBuilder):
             api_key=entry.api_key,
             model=entry.model,
             base_url=entry.api_url,
+            request_timeout=entry.timeout,
             **overrides,
         )

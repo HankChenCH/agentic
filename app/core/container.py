@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import wireup
 
-from app import agents, components, infrastructures, repositories, services
+from app import agents, components, infrastructures, packages, repositories, services
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 
@@ -28,6 +28,7 @@ def _injectables() -> list:
         LoggerFactory,  # core 不在扫描包列表内，显式注册
         services,
         components,
+        packages,
         repositories,
         infrastructures,
         agents,

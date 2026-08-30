@@ -22,16 +22,19 @@ from app.models.domain.memory import (
 from app.services.domain.memory import KIND_ENTITY, KIND_EPISODE, KIND_STATEMENT
 
 from fakes_memory import FakeMemoryVectorIndex
+from conftest import TEST_USER_ID
 
 
 def _seed_polluted(engine):
     """复刻事故形态：公司档案含学校别名与 #S 编号，statement/link 错挂。"""
     with Session(engine) as session:
         company = MemoryEntity(
+            user_id=TEST_USER_ID,
             entity_type=EntityType.ORG.value, name=COMPANY_NAME,
             aliases=["#S14", COMPANY_NAME, SCHOOL_NAME, "禹通", "禹通公司"],
         )
         system = MemoryEntity(
+            user_id=TEST_USER_ID,
             entity_type=EntityType.OBJECT.value, name="智慧系统",
             aliases=["#S13", "智慧系统", "智慧考场"],
         )
@@ -39,6 +42,7 @@ def _seed_polluted(engine):
         session.add(system)
         session.flush()
         wrong_stmt = MemoryStatement(
+            user_id=TEST_USER_ID,
             subject_id=system.id, predicate="验收方",
             object_entity_id=company.id,
             summary=f"智慧系统验收方{COMPANY_NAME}",       # 事故中的错误 summary
@@ -48,6 +52,7 @@ def _seed_polluted(engine):
         )
         session.add(wrong_stmt)
         episode = MemoryEpisode(
+            user_id=TEST_USER_ID,
             thread_id=uuid4(), occurred_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
             summary=f"评估智慧考场系统2年建设周期合理性，确定验收方为{SCHOOL_NAME}",
         )
@@ -125,6 +130,7 @@ def test_rebuild_index_collects_active_truth_only(engine):
     _company_id, system_id, _stmt_id, _episode_id, _link_id = _seed_polluted(engine)
     with Session(engine) as session:
         session.add(MemoryStatement(
+            user_id=TEST_USER_ID,
             subject_id=system_id, predicate="职业", object_text="历史值",
             summary="历史切片不应入索引",
             state=StatementState.SUPERSEDED.value,

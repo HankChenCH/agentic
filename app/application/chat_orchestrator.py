@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from time import monotonic, time
@@ -46,8 +47,42 @@ class ChatOrchestrator:
 
     def __post_init__(self):
         self.logger = self.logger_factory.get_logger(__name__)
+        # 在途对话流登记（thread_id → 并发流数）：优雅关闭的信号处理器据此为
+        # 所有在途流点亮取消标志（见 begin_shutdown）
+        self._active_lock = threading.Lock()
+        self._active_runs: Counter[UUID] = Counter()
 
-    def chat(self, thread_id: UUID, run_id: str, query: str):
+    def chat(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
+        """公共入口：登记在途流（供优雅关闭取消）后委托 _stream_chat 行程。
+        finally 兜底注销——含 GeneratorExit/异常路径。"""
+        with self._active_lock:
+            self._active_runs[thread_id] += 1
+        try:
+            yield from self._stream_chat(user_id, thread_id, run_id, query)
+        finally:
+            with self._active_lock:
+                self._active_runs[thread_id] -= 1
+                if self._active_runs[thread_id] <= 0:
+                    del self._active_runs[thread_id]
+
+    def begin_shutdown(self) -> int:
+        """进程收到 SIGTERM/SIGINT 时由 HTTP 入口的信号处理器调用：为所有在途
+        对话流点亮 thread 作用域取消标志（复用显式取消通道），流式循环在帧级
+        检查点（≤0.5s）静默收口——轮次置 CANCELED、半截消息不落库，与客户端
+        断连/Stop 按钮同口径；随后 uvicorn 正常排空连接退出。信号处理器内
+        只做标志写入（快路径），不触碰运行中的生成器。"""
+        with self._active_lock:
+            thread_ids = list(self._active_runs)
+        for thread_id in thread_ids:
+            try:
+                self.conversations.cancel_run_flag(thread_id)
+            except Exception:
+                self.logger.exception("优雅关闭取消在途流失败 thread_id=%s", thread_id)
+        if thread_ids:
+            self.logger.info("优雅关闭：已为 %d 个在途对话流发出取消标志", len(thread_ids))
+        return len(thread_ids)
+
+    def _stream_chat(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
         now = datetime.fromtimestamp(time())
 
         # 双翻译共存于同一次 interleave 遍历：
@@ -65,8 +100,8 @@ class ChatOrchestrator:
         turn: AgenticConversationTurn | None = None
         storage_translator = None
         try:
-            # 初始化会话（get-or-create）、会话轮次（create），并存储用户消息
-            conversation, turn = self.conversations.open_turn(thread_id=thread_id, run_id=run_id, query=query)
+            # 初始化会话（get-or-create + 归属校验）、会话轮次（create），并存储用户消息
+            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, query=query)
             storage_translator = StorageTranslator(thread_id=thread_id, turn_id=turn.turn_id)
 
             # 智能体实例由智能体层工厂创建（按会话绑定的 agentic_id，未注册回退默认）
@@ -79,7 +114,7 @@ class ChatOrchestrator:
             # 快速回忆：会话前按问题自动注入（纯 SQL 直读，失败不阻断对话主链路）
             memory_block = ""
             try:
-                memory_block = self.memory.build_fast_context(query=query, thread_id=thread_id)
+                memory_block = self.memory.build_fast_context(query=query, user_id=user_id, thread_id=thread_id)
             except Exception:
                 self.logger.warning("build fast memory context failed", exc_info=True)
             user_query = f"{memory_block}\n\n---\n\n用户提问：{query}" if memory_block else query
@@ -87,6 +122,7 @@ class ChatOrchestrator:
                 messages=[*history, HumanMessage(content=user_query)],
                 thread_id=str(thread_id),
                 run_id=run_id,
+                user_id=str(user_id),
                 now=now,
                 # 工具入口的协作式取消检查（经 configurable 注入工具，闭包即数据，
                 # agents 层不依赖本层）
@@ -163,11 +199,13 @@ class ChatOrchestrator:
             daemon=True,
         ).start()
 
-    def cancel_run(self, thread_id: UUID) -> None:
+    def cancel_run(self, user_id: UUID, thread_id: UUID) -> None:
         """显式取消通道（REST cancel 端点）：置 thread 作用域标志，由流式循环在
         节流边界与工具入口感知收口——不直接触碰运行中的生成器（同步生成器无法
         从外部打断在执行的 next()）。Redis 不可用时标志写入失败异常上抛，端点
-        经全局处理器如实反馈。"""
+        经全局处理器如实反馈。非本人会话按不存在处理（404）——取消标志是
+        thread 作用域的全局键，必须先过归属校验再写。"""
+        self.conversations.describe_conversation(user_id=user_id, thread_id=thread_id)
         self.conversations.cancel_run_flag(thread_id)
         self.logger.info("收到取消请求 thread_id=%s", thread_id)
 

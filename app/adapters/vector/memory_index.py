@@ -1,23 +1,25 @@
-"""记忆域向量适配器：三类对象混居 ``Memory`` collection 的写入与检索。
+"""记忆域向量适配器：三类对象混居单 collection 的写入与检索（每用户一库）。
 
 归位领域层（镜像知识域 services/domain/knowledge/vector_index.py 的先例）：
 组件侧经合法 components→domain 边注入本类，不直触 ``VectorStoreFactory``。
 确定性向量 id 用 ``uuid5("memory/{kind}/{ref_id}")``——同 id 重写即覆盖、
 取代时可反算删除；不直接拼字符串是因为 Weaviate 对象键须为合法 UUID。
-向量端任何失败都只告警不上抛：SQL 是事实源，索引可随时全量重建。
+用户隔离走**每用户一 collection**（``Memory_{uid.hex}``，见 collection.py）：
+注入实例无作用域（仅维护 CLI 兜底用），用户侧行程经 ``for_user(uid)`` 取
+作用域视图。向量端任何失败都只告警不上抛：SQL 是事实源，索引可随时全量重建。
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.documents import Document
 from wireup import injectable
 
 from app.core.logging import LoggerFactory
 from app.infrastructures.vector import VectorStoreFactory
-from app.services.domain.memory.collection import MEMORY_INDEX_NAME, collection_schema
+from app.services.domain.memory.collection import collection_schema, memory_index_name
 
 KIND_ENTITY = "entity"
 KIND_STATEMENT = "statement"
@@ -69,9 +71,22 @@ class MemoryVectorHit:
 class MemoryVectorIndex:
     vector_store_factory: VectorStoreFactory
     logger_factory: LoggerFactory
+    # 作用域标记：不进 __init__（init=False）——wireup 按 __init__ 签名提取依赖，
+    # 可选的 UUID 参数会与其注册表校验冲突；单例实例恒为 None（无作用域，仅维护
+    # CLI 兜底路径），作用域视图由 for_user 构造后回填。
+    user_id: UUID | None = field(default=None, init=False, compare=False)
 
     def __post_init__(self):
         self.logger = self.logger_factory.get_logger(__name__)
+
+    def for_user(self, user_id: UUID) -> "MemoryVectorIndex":
+        """返回绑定用户的轻量作用域视图：读写全部落在该用户的 collection。"""
+        scoped = MemoryVectorIndex(
+            vector_store_factory=self.vector_store_factory,
+            logger_factory=self.logger_factory,
+        )
+        scoped.user_id = user_id
+        return scoped
 
     def upsert_many(self, entries: list[VectorEntry]) -> None:
         """批量写入/覆盖；同 (kind, ref_id) 再次写入即更新语义。"""
@@ -151,7 +166,7 @@ class MemoryVectorIndex:
     def _open(self):
         # 幂等 ensure：每次显式传 schema，collection 已存在则直接复用；
         # 并发首建竞态重试一次即命中已存在分支（惯例同知识域）
-        name = MEMORY_INDEX_NAME
+        name = memory_index_name(self.user_id)
         try:
             return self.vector_store_factory.create(
                 index_name=name, text_key="content", schema=collection_schema(name)
@@ -163,8 +178,8 @@ class MemoryVectorIndex:
             )
 
     def rebuild(self, entries: list[VectorEntry]) -> None:
-        """全量重建：drop collection 后重新写入（换 embedding 模型等场景）。"""
-        self.vector_store_factory.drop_index(index_name=MEMORY_INDEX_NAME)
+        """全量重建：drop 本作用域 collection 后重新写入（换 embedding 模型等场景）。"""
+        self.vector_store_factory.drop_index(index_name=memory_index_name(self.user_id))
         self.upsert_many(entries)
 
     @staticmethod

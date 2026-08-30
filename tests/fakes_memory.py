@@ -1,27 +1,54 @@
 """记忆域测试共享替身：鸭子类型的假模型 / 假向量索引。
 
-刻意不用 BaseChatModel 子类——服务层只调 ``invoke``，鸭子类型即可，
-免去 pydantic 字段声明的样板。
+刻意不用 BaseChatModel 子类——服务层只走 ``with_structured_output``，
+鸭子类型即可，免去 pydantic 字段声明的样板。CannedLLM 的应答可以是预设
+文本（str，按最外层 JSON 对象截取后经 schema 校验——schema 不符即抛
+ValidationError，模拟真实行为）或 pydantic payload 实例（直接透传）。
 """
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+
+from pydantic import BaseModel
 
 from app.core.config.memory import MemoryConfig
 from app.services.domain.memory import MemoryVectorHit
 
 
 class CannedLLM:
-    """按调用次序回放预设文本；不足时复用最后一个。"""
+    """按调用次序回放预设应答；不足时复用最后一个。"""
 
-    def __init__(self, *responses: str):
+    def __init__(self, *responses: "str | BaseModel"):
         self.responses = list(responses)
         self.calls: list = []
 
+    def with_structured_output(self, schema, method=None, **kwargs):
+        def _run(messages):
+            self.calls.append(messages)
+            index = min(len(self.calls) - 1, len(self.responses) - 1)
+            response = self.responses[index]
+            if isinstance(response, BaseModel):
+                return response
+            return schema.model_validate_json(_outermost_json(response))
+
+        return _CannedStructured(_run)
+
+
+class _CannedStructured:
+    """with_structured_output 返回的 Runnable 最小替身。"""
+
+    def __init__(self, run):
+        self._run = run
+
     def invoke(self, messages):
-        self.calls.append(messages)
-        index = min(len(self.calls) - 1, len(self.responses) - 1)
-        return SimpleNamespace(content=self.responses[index])
+        return self._run(messages)
+
+
+def _outermost_json(text: str) -> str:
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError(f"应答中不含 JSON 对象：{text[:60]!r}")
+    return text[start : end + 1]
 
 
 class FakeModelFactory:
@@ -57,6 +84,10 @@ class FakeMemoryVectorIndex:
 
     def upsert_many(self, entries):
         self.upserts.extend(entries)
+
+    def for_user(self, user_id):
+        # 假替身不按用户分 collection：原样返回自身，记录面保持全局
+        return self
 
     def delete(self, items):
         self.deleted.extend(items)

@@ -4,6 +4,10 @@
 写操作经 ``ports.MemoryEditor`` 端口下沉组件侧（用例级事务 + 向量同步），
 本层只做请求语义判断：引用解析、取值合法性、名字冲突预检与「是否真的
 有变化」。响应形状复用图快照的 camelCase 组装件，前后端契约零漂移。
+
+用户作用域：每个用例先 ``editor.for_user(user_id)`` 取绑定用户的视图——
+记忆是用户级数据，他人对象在作用域内一律「不存在」（3xxx 业务异常，
+不泄露存在性）。
 """
 
 from dataclasses import dataclass
@@ -58,11 +62,12 @@ class MemoryAdminService:
 
     # ---------------- 事实：补充 / 纠正 / 归档 ----------------
 
-    def add_statement(self, request: StatementCreateRequest) -> dict:
+    def add_statement(self, user_id: UUID, request: StatementCreateRequest) -> dict:
+        editor = self.editor.for_user(user_id)
         if request.subjectEntityId is not None and request.subjectName:
             raise MemoryInvalidParamError("主体二选一：subjectEntityId 或 subjectName")
-        self._require_known_entity(request.objectEntityId)
-        row = self.editor.add_statement(
+        self._require_known_entity(editor, request.objectEntityId)
+        row = editor.add_statement(
             FactWrite(
                 subject_entity_id=request.subjectEntityId,
                 subject_name=request.subjectName,
@@ -78,15 +83,16 @@ class MemoryAdminService:
         )
         return _statement_edge(row)
 
-    def correct_statement(self, statement_ref: str, request: StatementCorrectRequest) -> dict:
+    def correct_statement(self, user_id: UUID, statement_ref: str, request: StatementCorrectRequest) -> dict:
+        editor = self.editor.for_user(user_id)
         statement_id = self._parse_ref(statement_ref, _STATEMENT_PREFIX)
-        old = self.editor.get_statement(statement_id)
+        old = editor.get_statement(statement_id)
         if old is None:
             raise MemoryObjectNotFoundError(f"陈述不存在: {statement_ref}")
-        self._require_known_entity(request.objectEntityId)
+        self._require_known_entity(editor, request.objectEntityId)
         self._ensure_values_changed(old, request)
 
-        mutation = self.editor.correct_statement(
+        mutation = editor.correct_statement(
             statement_id,
             FactWrite(
                 predicate=request.predicate,
@@ -100,8 +106,9 @@ class MemoryAdminService:
         )
         return {"old": _statement_edge(mutation.old), "new": _statement_edge(mutation.new)}
 
-    def archive_statement(self, statement_ref: str) -> dict:
-        row = self.editor.archive_statement(
+    def archive_statement(self, user_id: UUID, statement_ref: str) -> dict:
+        editor = self.editor.for_user(user_id)
+        row = editor.archive_statement(
             self._parse_ref(statement_ref, _STATEMENT_PREFIX),
             now=datetime.now(timezone.utc),
         )
@@ -109,9 +116,10 @@ class MemoryAdminService:
 
     # ---------------- 实体：改名 / 别名 / 类型 ----------------
 
-    def update_entity(self, entity_ref: str, request: EntityUpdateRequest) -> dict:
+    def update_entity(self, user_id: UUID, entity_ref: str, request: EntityUpdateRequest) -> dict:
+        editor = self.editor.for_user(user_id)
         entity_id = self._parse_ref(entity_ref, _ENTITY_PREFIX)
-        entity = self.editor.get_entity(entity_id)
+        entity = editor.get_entity(entity_id)
         if entity is None:
             raise MemoryObjectNotFoundError(f"实体不存在: {entity_ref}")
         if request.entityType is not None and request.entityType not in {e.value for e in EntityType}:
@@ -119,12 +127,12 @@ class MemoryAdminService:
                 f"非法实体类型: {request.entityType!r}，可选值: {', '.join(e.value for e in EntityType)}"
             )
         if request.name is not None and request.name != entity.name:
-            self._ensure_name_free(request.name, entity_id)
+            self._ensure_name_free(editor, request.name, entity_id)
         for alias in request.aliases or []:
             if alias != entity.name and alias != request.name:
-                self._ensure_name_free(alias, entity_id)
+                self._ensure_name_free(editor, alias, entity_id)
 
-        row = self.editor.update_entity(
+        row = editor.update_entity(
             entity_id,
             name=request.name,
             aliases=request.aliases,
@@ -134,9 +142,10 @@ class MemoryAdminService:
 
     # ---------------- 实体身份纠错：合并 / 拆分 / 孤立清理 ----------------
 
-    def merge_entity(self, source_ref: str, request: EntityMergeRequest) -> dict:
+    def merge_entity(self, user_id: UUID, source_ref: str, request: EntityMergeRequest) -> dict:
         """错分离合并：source 全量并入 target（含历史行）后删除 source。"""
-        result = self.editor.merge_entity(
+        editor = self.editor.for_user(user_id)
+        result = editor.merge_entity(
             self._parse_ref(source_ref, _ENTITY_PREFIX),
             self._parse_ref(request.targetRef, _ENTITY_PREFIX),
         )
@@ -146,10 +155,11 @@ class MemoryAdminService:
             "target": _entity_node(result["target"]),
         }
 
-    def split_entity(self, source_ref: str, request: EntitySplitRequest) -> dict:
+    def split_entity(self, user_id: UUID, source_ref: str, request: EntitySplitRequest) -> dict:
         """错合并拆分：所选内容迁往新实体，双方互写拆分禁令。"""
+        editor = self.editor.for_user(user_id)
         source_id = self._parse_ref(source_ref, _ENTITY_PREFIX)
-        source = self.editor.get_entity(source_id)
+        source = editor.get_entity(source_id)
         if source is None:
             raise MemoryObjectNotFoundError(f"实体不存在: {source_ref}")
 
@@ -166,24 +176,24 @@ class MemoryAdminService:
                 f"非法实体类型: {request.entityType!r}，可选值: {', '.join(e.value for e in EntityType)}"
             )
         # 新名字/别名不得撞其他实体——拆成已存在的名字等于变相合并
-        self._ensure_name_free(request.name, source_id)
+        self._ensure_name_free(editor, request.name, source_id)
         for alias in moving_aliases:
             if alias != source.name:
-                self._ensure_name_free(alias, source_id)
+                self._ensure_name_free(editor, alias, source_id)
 
         # 归属校验：所选陈述/参与必须真的挂在 source 上（防跨实体误迁移）
-        for row in self.editor.statements_by_ids(statement_ids):
+        for row in editor.statements_by_ids(statement_ids):
             if source_id not in (row.subject_id, row.object_entity_id):
                 raise MemoryInvalidParamError(
                     f"陈述 s:{row.id} 不属于「{source.name}」，无法分离"
                 )
-        for link in self.editor.episode_links_by_ids(link_ids):
+        for link in editor.episode_links_by_ids(link_ids):
             if link.entity_id != source_id:
                 raise MemoryInvalidParamError(
                     f"事件参与 l:{link.id} 不属于「{source.name}」，无法分离"
                 )
 
-        result = self.editor.split_entity(source_id, EntitySplitSpec(
+        result = editor.split_entity(source_id, EntitySplitSpec(
             name=request.name,
             entity_type=request.entityType,
             aliases=tuple(moving_aliases),
@@ -197,22 +207,24 @@ class MemoryAdminService:
             "sourceDeleted": result["source_deleted"],
         }
 
-    def delete_entity(self, entity_ref: str) -> dict:
+    def delete_entity(self, user_id: UUID, entity_ref: str) -> dict:
         """孤立实体清理；返回被删实体的档案快照。"""
+        editor = self.editor.for_user(user_id)
         entity_id = self._parse_ref(entity_ref, _ENTITY_PREFIX)
-        entity = self.editor.get_entity(entity_id)
+        entity = editor.get_entity(entity_id)
         if entity is None:
             raise MemoryObjectNotFoundError(f"实体不存在: {entity_ref}")
         node = _entity_node(entity)
-        self.editor.delete_orphan_entity(entity_id)
+        editor.delete_orphan_entity(entity_id)
         return node
 
     # ---------------- 事件编辑（L3）：档案直改 / 删除 / 参与改挂 ----------------
 
-    def update_episode(self, episode_ref: str, request: EpisodeUpdateRequest) -> dict:
+    def update_episode(self, user_id: UUID, episode_ref: str, request: EpisodeUpdateRequest) -> dict:
         if request.summary is None and request.scene is None and request.occurredAt is None:
             raise MemoryInvalidParamError("未提供任何要修改的字段")
-        row = self.editor.update_episode(
+        editor = self.editor.for_user(user_id)
+        row = editor.update_episode(
             self._parse_ref(episode_ref, _EPISODE_PREFIX),
             summary=request.summary,
             scene=request.scene,
@@ -220,16 +232,18 @@ class MemoryAdminService:
         )
         return _episode_node(row)
 
-    def delete_episode(self, episode_ref: str) -> dict:
+    def delete_episode(self, user_id: UUID, episode_ref: str) -> dict:
         """物理删除事件及其参与边（不可恢复）；返回被删档案快照。"""
-        row = self.editor.delete_episode(self._parse_ref(episode_ref, _EPISODE_PREFIX))
+        editor = self.editor.for_user(user_id)
+        row = editor.delete_episode(self._parse_ref(episode_ref, _EPISODE_PREFIX))
         return _episode_node(row)
 
-    def update_episode_link(self, link_ref: str, request: EpisodeLinkUpdateRequest) -> dict:
+    def update_episode_link(self, user_id: UUID, link_ref: str, request: EpisodeLinkUpdateRequest) -> dict:
         if request.entityId is None and request.role is None:
             raise MemoryNoChangeError("未提供任何要修改的字段")
-        self._require_known_entity(request.entityId)
-        link = self.editor.update_episode_link(
+        editor = self.editor.for_user(user_id)
+        self._require_known_entity(editor, request.entityId)
+        link = editor.update_episode_link(
             self._parse_ref(link_ref, _LINK_PREFIX),
             entity_id=request.entityId,
             role=request.role,
@@ -262,40 +276,42 @@ class MemoryAdminService:
             "纠正值与现值相同：该事实无需纠正（如需补充备注请直接新增关联事实）"
         )
 
-    def _ensure_name_free(self, candidate: str, self_entity_id: int) -> None:
+    @staticmethod
+    def _ensure_name_free(editor: MemoryEditor, candidate: str, self_entity_id: int) -> None:
         """名字/别名不得撞其他实体（撞自己无碍）：拆成已存在的名字等于变相合并。"""
         for hit in (
-            self.editor.find_entity_by_name(candidate),
-            self.editor.find_entity_by_alias(candidate),
+            editor.find_entity_by_name(candidate),
+            editor.find_entity_by_alias(candidate),
         ):
             if hit is not None and hit.id != self_entity_id:
                 raise MemoryNameConflictError(
                     f"「{candidate}」已被实体 #{hit.id}「{hit.name}」占用，改名会与其实体身份冲突"
                 )
 
-    def _require_known_entity(self, entity_id: int | None) -> None:
-        if entity_id is not None and self.editor.get_entity(entity_id) is None:
+    @staticmethod
+    def _require_known_entity(editor: MemoryEditor, entity_id: int | None) -> None:
+        if entity_id is not None and editor.get_entity(entity_id) is None:
             raise MemoryObjectNotFoundError(f"实体不存在: {entity_id}")
 
     # ---------------- 解析小件 ----------------
 
     # ---------------- 危险操作区（L4）：当日清除 / 会话遗忘 / 整体重置 ----------------
 
-    def purge_preview(self, request: MaintenancePurgeRequest) -> dict:
+    def purge_preview(self, user_id: UUID, request: MaintenancePurgeRequest) -> dict:
         from_dt, to_dt, thread_id = self._resolve_scope(request)
-        return self.editor.purge_preview(from_dt=from_dt, to_dt=to_dt, thread_id=thread_id)
+        return self.editor.for_user(user_id).purge_preview(from_dt=from_dt, to_dt=to_dt, thread_id=thread_id)
 
-    def purge_memory(self, request: MaintenancePurgeRequest) -> dict:
+    def purge_memory(self, user_id: UUID, request: MaintenancePurgeRequest) -> dict:
         from_dt, to_dt, thread_id = self._resolve_scope(request)
-        return self.editor.purge_memory(from_dt=from_dt, to_dt=to_dt, thread_id=thread_id)
+        return self.editor.for_user(user_id).purge_memory(from_dt=from_dt, to_dt=to_dt, thread_id=thread_id)
 
-    def export_memory(self) -> dict:
-        return self.editor.export_memory()
+    def export_memory(self, user_id: UUID) -> dict:
+        return self.editor.for_user(user_id).export_memory()
 
-    def reset_all_memory(self, request: MaintenanceResetRequest) -> dict[str, int]:
+    def reset_all_memory(self, user_id: UUID, request: MaintenanceResetRequest) -> dict[str, int]:
         if request.confirmation.strip() != "重置":
             raise MemoryInvalidParamError("确认文字不匹配：请逐字输入「重置」以执行该操作")
-        return self.editor.reset_all_memory()
+        return self.editor.for_user(user_id).reset_all_memory()
 
     @staticmethod
     def _resolve_scope(request: MaintenancePurgeRequest) -> tuple[datetime | None, datetime | None, UUID | None]:

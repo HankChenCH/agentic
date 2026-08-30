@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from app.components.memory.renderer import (
+from app.components.memory.internal.renderer import (
     Fragment,
     assemble_fragments,
     brief_context,

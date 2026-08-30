@@ -1,6 +1,7 @@
-"""知识库检索编排：绑定解析 → 状态/模型守卫 → 向量扇出融合 → 命中组装。
+"""知识库检索能力（knowledge 唯一能力模块）：绑定解析 → 状态/模型守卫 →
+向量扇出融合 → 命中组装。
 
-消费方是 agent 工具（build_knowledge_tools）：LLM 先经 knowledge_list
+消费方是 manifest 的 agent 工具：LLM 先经 knowledge_list
 了解可用知识库，再按需以 kb_ids 自选库检索（缺省检索全部可用库）。
 状态收敛规则：知识库须为 enabled、文档须为 enabled 才可被召回——管理
 侧的启停开关即检索开关。

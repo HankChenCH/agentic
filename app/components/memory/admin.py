@@ -1,29 +1,32 @@
-"""MemoryEditor 端口的组件侧回填：事实纠错与实体身份纠错的用例级实现。
+"""memory 组件的管理面：领域端口（MemoryEditor / MemoryGraphReader）的组件侧回填。
 
-绑定 ``@injectable(as_type=MemoryEditor)``（协议定义在
-``services/domain/memory/ports.py``，依赖箭头 components ──► domain 合法）。
-与 graph_reader.py 的只读薄委托不同，本实现承载编辑用例的机械语义：
+两个实现均以 ``@injectable(as_type=...)`` 绑定协议（定义在
+``services/domain/memory/ports.py``，依赖箭头 components ──► domain 合法），
+供管理侧 HTTP 端点（/memory/...）与维护 CLI 消费：
 
-- 取代式纠正 = ``replace_statement`` 单事务复合写（旧行 SUPERSEDED + 新行
-  MANUAL ACTIVE 同成同败），新行 summary 按抽取侧同一规范句式重组——
-  summary 是向量嵌入源，客体改名不重写会留下语义错位的向量；
-- 实体身份纠错（合并/拆分/孤立清理）= 仓储复合事务（身份追改允许追溯
-  改写归属，含历史行防悬挂 FK）+ 定向向量同步（改挂行 summary 重组后
-  覆盖嵌入、消失实体删除档案向量）；
-- 向量同步是方法内聚动作：SQL 提交后 best-effort 执行，失败不上抛
-  （SQL 是事实源，``rebuild-index`` CLI 可兜底对账）；
-- MANUAL 来源在此产生：人工事实享受裁决层全链路保护（LLM 恒 SKIP）。
+- ``MemoryRepositoryEditor`` 承载编辑用例的机械语义：
+  - 取代式纠正 = ``replace_statement`` 单事务复合写（旧行 SUPERSEDED + 新行
+    MANUAL ACTIVE 同成同败），新行 summary 按抽取侧同一规范句式重组——
+    summary 是向量嵌入源，客体改名不重写会留下语义错位的向量；
+  - 实体身份纠错（合并/拆分/孤立清理）= 仓储复合事务（身份追改允许追溯
+    改写归属，含历史行防悬挂 FK）+ 定向向量同步（改挂行 summary 重组后
+    覆盖嵌入、消失实体删除档案向量）；
+  - 向量同步是方法内聚动作：SQL 提交后 best-effort 执行，失败不上抛
+    （SQL 是事实源，``rebuild-index`` CLI 可兜底对账）；
+  - MANUAL 来源在此产生：人工事实享受裁决层全链路保护（LLM 恒 SKIP）。
+- ``MemoryRepositoryGraphReader`` 是只读薄委托：把「领域层拿得到只读面」
+  与「数据访问收敛在组件仓储」两个约束同时满足——不复制任何查询逻辑。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
 from wireup import injectable
 
-from app.components.memory import resolution
+from app.components.memory.internal import resolution
+from app.components.memory.internal.vocab import fact_summary
 from app.components.memory.repositories import MemoryRepository
-from app.components.memory.vocab import fact_summary
 from app.exceptions.memory import (
     MemoryConstraintConflictError,
     MemoryInvalidParamError,
@@ -55,6 +58,7 @@ from app.services.domain.memory.ports import (
     EntitySplitSpec,
     FactWrite,
     MemoryEditor,
+    MemoryGraphReader,
     StatementMutation,
 )
 
@@ -62,10 +66,26 @@ from app.services.domain.memory.ports import (
 @injectable(as_type=MemoryEditor)
 @dataclass
 class MemoryRepositoryEditor:
-    """编辑用例实现：仓储复合写 + 定向向量同步。"""
+    """编辑用例实现：仓储复合写 + 定向向量同步。
+
+    注入实例无作用域（维护 CLI 兜底）；HTTP 管理链经 ``for_user(uid)`` 取
+    绑定用户的视图——仓储与向量索引同步切作用域，编辑操作不可能越权触达
+    他人记忆（他人行在作用域仓储一律视为不存在 → 3xxx 业务异常）。
+    """
 
     memory_repo: MemoryRepository
     vector_index: MemoryVectorIndex
+    # 作用域标记：不进 __init__（init=False），wireup 不感知；单例恒 None（维护
+    # CLI 兜底），作用域视图由 for_user 构造后回填。
+    user_id: UUID | None = field(default=None, init=False, compare=False)
+
+    def for_user(self, user_id: UUID) -> "MemoryRepositoryEditor":
+        scoped = MemoryRepositoryEditor(
+            memory_repo=self.memory_repo.for_user(user_id),
+            vector_index=self.vector_index.for_user(user_id),
+        )
+        scoped.user_id = user_id
+        return scoped
 
     # ---------------- 查询面（领域服务校验用） ----------------
 
@@ -474,3 +494,35 @@ class MemoryRepositoryEditor:
 def _naive_utc(value: datetime) -> datetime:
     """aware → naive UTC（库值约定）；naive 原样返回。"""
     return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+
+@injectable(as_type=MemoryGraphReader)
+@dataclass
+class MemoryRepositoryGraphReader:
+    memory_repo: MemoryRepository
+    user_id: UUID | None = field(default=None, init=False, compare=False)
+
+    def for_user(self, user_id: UUID) -> "MemoryRepositoryGraphReader":
+        scoped = MemoryRepositoryGraphReader(memory_repo=self.memory_repo.for_user(user_id))
+        scoped.user_id = user_id
+        return scoped
+
+    def list_entities(self, limit: int | None = None) -> list[MemoryEntity]:
+        return self.memory_repo.list_entities(limit)
+
+    def get_entities(self, entity_ids: list[int]) -> dict[int, MemoryEntity]:
+        return self.memory_repo.get_entities(entity_ids)
+
+    def list_active_statements(self, limit: int | None = None) -> list[MemoryStatement]:
+        return self.memory_repo.list_active_statements(limit)
+
+    def statements_valid_at(
+        self, moment: datetime, subject_ids: list[int] | None = None
+    ) -> list[MemoryStatement]:
+        return self.memory_repo.statements_valid_at(moment, subject_ids)
+
+    def list_episodes(self, limit: int | None = None) -> list[MemoryEpisode]:
+        return self.memory_repo.list_episodes(limit)
+
+    def links_for_episodes(self, episode_ids: list[int]) -> dict[int, list[MemoryEpisodeLink]]:
+        return self.memory_repo.links_for_episodes(episode_ids)

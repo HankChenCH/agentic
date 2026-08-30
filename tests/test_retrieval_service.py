@@ -3,10 +3,9 @@
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-import pytest
 from sqlmodel import Session
 
-from app.components.knowledge.service import KnowledgeRetrievalService
+from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService
 from app.services.domain.knowledge.vector_index import VectorHit
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import (
@@ -17,6 +16,7 @@ from app.models.domain.knowledge import (
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from tests.conftest import TEST_USER_ID
 
 EMBEDDING = "ollama-embedding"
 
@@ -35,7 +35,9 @@ class StubVectorIndex:
 
 def make_kb(engine, name, status=KnowledgeStatus.ENABLED, embedding_model=EMBEDDING):
     with Session(engine) as session:
-        kb = KnowledgeBase(name=name, embedding_model=embedding_model, status=status)
+        kb = KnowledgeBase(
+            user_id=TEST_USER_ID, name=name, embedding_model=embedding_model, status=status
+        )
         session.add(kb)
         session.commit()
         session.refresh(kb)

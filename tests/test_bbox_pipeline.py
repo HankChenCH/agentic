@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from langchain_core.documents import Document
 
-from app.components.knowledge import build_knowledge_tools
-from app.components.knowledge.service import RetrievalHit
+from app.components.knowledge import KnowledgeComponent
+from app.components.knowledge.ability.retrieval import RetrievalHit
 from app.services.domain.knowledge.vector_index import KnowledgeVectorIndex
 from app.infrastructures.document_parser import ParsedDocument
 from app.infrastructures.document_parser.mineru_cloud_provider import _normalize_blocks
@@ -59,8 +59,8 @@ def test_bbox_flows_from_content_list_to_tool_json():
                 [],
             )
 
-    tools = {t.__name__: t for t in build_knowledge_tools(StubRetrieval(), "builtin:demo")}
-    payload = json.loads(tools["knowledge_search"]("如何安装"))
+    tools = {t.name: t for t in KnowledgeComponent(retrieval=StubRetrieval()).tools("builtin:demo")}
+    payload = json.loads(tools["knowledge_search"].invoke({"query": "如何安装"}))
     source = payload["sources"][0]
     assert source["bboxes"][0] == [0, 0.07, 0.13, 0.56, 0.16]
     assert source["page_start"] == 0 and source["page_end"] == 1

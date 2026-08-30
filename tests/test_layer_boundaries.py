@@ -13,6 +13,15 @@ APP_DIR = pathlib.Path(__file__).resolve().parent.parent / "app"
 
 # 文件所在包（origin）→ 禁止 import 的目标包前缀（dotted）
 FORBIDDEN_EDGES = {
+    "app.packages": [
+        "app.services",  # 能力库层领域无关，禁向上依赖（含 orchestration/domain）
+        "app.components",
+        "app.agents",
+        "app.api",
+        "app.tasks",
+        "app.repositories",
+        "app.models",
+    ],
     "app.services.domain": [
         "app.services.orchestration",  # 领域不得向上依赖编排
         "app.components",
@@ -45,8 +54,9 @@ FORBIDDEN_EDGES = {
 }
 
 # origin 前缀按最长匹配；命中即取其禁边表，未命中（core/models/repositories/
-# infrastructures/app.cmd 等下层）不做限制。services 根 __init__ 是聚合导出面，
-# 豁免检查（orchestration/domain 各自内部导入属同层，天然不会命中禁边）。
+# infrastructures/app.cmd 等下层）不做限制——packages 已单列禁边（库层禁向上）。
+# services 根 __init__ 是聚合导出面，豁免检查（orchestration/domain 各自内部
+# 导入属同层，天然不会命中禁边）。
 SKIP_FILES = {APP_DIR / "services" / "__init__.py"}
 
 

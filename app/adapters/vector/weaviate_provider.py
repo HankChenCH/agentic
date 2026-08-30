@@ -5,7 +5,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from langchain_weaviate import WeaviateVectorStore
 
-from app.core.config import VectorDBProviderEntry, WeaviateDBProviderEntry
+from app.core.config import WeaviateDBProviderEntry
 from app.infrastructures.vector.vector_db_provider import VectorDBBuilder, VectorDBProvider, register
 
 

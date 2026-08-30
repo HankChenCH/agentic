@@ -17,10 +17,10 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
-from app.components.memory import renderer, resolution
-from app.components.memory.extraction import resolve_time_hint
+from app.components.memory.internal import renderer, resolution
+from app.components.memory.internal.extraction import resolve_time_hint
 from app.components.memory.repositories import MemoryRepository
-from app.components.memory.scoring import ScoreWeights, ScorableItem, score_item
+from app.components.memory.internal.scoring import ScoreWeights, ScorableItem, score_item
 from app.services.domain.memory import KIND_EPISODE, MemoryVectorIndex
 
 # 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（惯例同 api/exception_handlers）
@@ -80,17 +80,21 @@ class MemoryRecallService:
 
     # ==================== 快速注入 ====================
 
-    def build_fast_context(self, query: str, thread_id: UUID) -> str:
-        """快速回忆块：纯 SQL 直读评分截断，零 LLM/embedding。寒暄不注入。"""
+    def build_fast_context(self, query: str, user_id: UUID, thread_id: UUID) -> str:
+        """快速回忆块：纯 SQL 直读评分截断，零 LLM/embedding。寒暄不注入。
+
+        user_id 决定记忆作用域（用户级隔离），thread_id 仅用于会话内投喂去重。
+        """
         if not self.app_config.memory.enabled or _is_smalltalk(query):
             return ""
         now = datetime.now(timezone.utc)
         weights = self._weights()
         half_life = self.app_config.memory.score.recency_half_life_days
         seen = self.inject_registry.seen(thread_id)
+        repo = self.memory_repo.for_user(user_id)
 
         scored = []
-        for row in self.memory_repo.list_active_statements():
+        for row in repo.list_active_statements():
             if f"s:{row.id}" in seen:
                 continue
             value = score_item(_item_of(row, None), weights, half_life, now)
@@ -102,46 +106,50 @@ class MemoryRecallService:
 
         rows = [row for _score, row in top]
         ent_ids = {r.subject_id for r in rows} | {r.object_entity_id for r in rows if r.object_entity_id}
-        ents = self.memory_repo.get_entities(sorted(ent_ids))
+        ents = repo.get_entities(sorted(ent_ids))
         lines = [renderer.statement_topology_line(r, ents, now=now) for r in rows]
 
         self.inject_registry.mark(thread_id, [f"s:{r.id}" for r in rows])
-        self.memory_repo.bump_access([r.id for r in rows], [], sorted(ents), now)
+        repo.bump_access([r.id for r in rows], [], sorted(ents), now)
         return renderer.brief_context(now, lines)
 
     # ==================== 深度三件套 ====================
 
-    def timeline(self, query: str, thread_id: UUID) -> str:
+    def timeline(self, query: str, user_id: UUID, thread_id: UUID) -> str:
         """深度·情节检索：episode 向量命中 → 分片渲染（仅增量）。"""
         now = datetime.now(timezone.utc)
         cfg = self.app_config.memory
-        hits = self.vector_index.search(query, kinds=(KIND_EPISODE,), top_k=cfg.recall.top_k, alpha=cfg.recall.alpha)
+        repo = self.memory_repo.for_user(user_id)
+        index = self.vector_index.for_user(user_id)
+        hits = index.search(query, kinds=(KIND_EPISODE,), top_k=cfg.recall.top_k, alpha=cfg.recall.alpha)
         fresh = [(h.ref_id, h.score) for h in hits if f"e:{h.ref_id}" not in self.inject_registry.seen(thread_id)]
-        episodes = self.memory_repo.episodes_by_ids([ref for ref, _score in fresh])
+        episodes = repo.episodes_by_ids([ref for ref, _score in fresh])
         by_id = {ep.id: ep for ep in episodes}
         eps_scored = [(by_id[ref], score) for ref, score in fresh if ref in by_id]
         if not eps_scored:
             return renderer.fragments_output(now, [])
 
-        links = self.memory_repo.links_for_episodes([ep.id for ep, _s in eps_scored])
+        links = repo.links_for_episodes([ep.id for ep, _s in eps_scored])
         ent_ids = sorted({lk.entity_id for bundle in links.values() for lk in bundle})
-        entities = self.memory_repo.get_entities(ent_ids)
+        entities = repo.get_entities(ent_ids)
         fragments = renderer.assemble_fragments([], eps_scored, links, entities, now=now)[
             : cfg.render.max_fragments
         ]
 
         self.inject_registry.mark(thread_id, [f"e:{ep.id}" for ep, _s in eps_scored])
-        self.memory_repo.bump_access(
+        repo.bump_access(
             [], [ep.id for ep, _s in eps_scored], sorted(entities.keys()), now
         )
         return renderer.fragments_output(now, fragments)
 
-    def expand(self, entity_ref: str, thread_id: UUID) -> str:
+    def expand(self, entity_ref: str, user_id: UUID, thread_id: UUID) -> str:
         """深度·图扩散：命中实体的邻域陈述 + 关联事件（1-hop）。"""
         now = datetime.now(timezone.utc)
         cfg = self.app_config.memory
+        repo = self.memory_repo.for_user(user_id)
+        index = self.vector_index.for_user(user_id)
         anchor = resolution.find_entity_by_ref(
-            entity_ref, self.memory_repo, self.vector_index,
+            entity_ref, repo, index,
             cfg.resolution.similarity_threshold,
         )
         if anchor is None:
@@ -149,11 +157,11 @@ class MemoryRecallService:
         seen = self.inject_registry.seen(thread_id)
 
         statements = [
-            r for r in self.memory_repo.find_active_statements([anchor.id])
+            r for r in repo.find_active_statements([anchor.id])
             if f"s:{r.id}" not in seen
         ]
         episodes = [
-            e for e in self.memory_repo.episodes_for_entities([anchor.id], cfg.recall.expansion_limit)
+            e for e in repo.episodes_for_entities([anchor.id], cfg.recall.expansion_limit)
             if f"e:{e.id}" not in seen
         ]
         if not statements and not episodes:
@@ -162,14 +170,14 @@ class MemoryRecallService:
         weights, half_life = self._weights(), cfg.score.recency_half_life_days
         s_scored = [(r, score_item(_item_of(r, None), weights, half_life, now)) for r in statements]
         e_scored = [(e, score_item(_item_of(e, None), weights, half_life, now)) for e in episodes]
-        links = self.memory_repo.links_for_episodes([e.id for e, _s in e_scored])
+        links = repo.links_for_episodes([e.id for e, _s in e_scored])
 
         ent_ids = set()
         for r in statements:
             ent_ids.update({r.subject_id, r.object_entity_id} - {None})
         for bundle in links.values():
             ent_ids.update(lk.entity_id for lk in bundle)
-        entities = self.memory_repo.get_entities(sorted(ent_ids))
+        entities = repo.get_entities(sorted(ent_ids))
 
         fragments = renderer.assemble_fragments(
             s_scored, e_scored, links, entities, now=now
@@ -178,13 +186,13 @@ class MemoryRecallService:
         self.inject_registry.mark(
             thread_id, [f"s:{r.id}" for r in statements] + [f"e:{e.id}" for e, _s in e_scored]
         )
-        self.memory_repo.bump_access(
+        repo.bump_access(
             [r.id for r in statements], [e.id for e, _s in e_scored],
             sorted(set(entities) | {anchor.id}), now,
         )
         return renderer.fragments_output(now, fragments)
 
-    def state_at(self, moment_hint: str, thread_id: UUID) -> str:
+    def state_at(self, moment_hint: str, user_id: UUID, thread_id: UUID) -> str:
         """深度·时点回放：某时刻的世界状态切片（含 SUPERSEDED 历史值）。"""
         now = datetime.now(timezone.utc)
         parsed = resolve_time_hint(moment_hint, now)
@@ -194,17 +202,18 @@ class MemoryRecallService:
         moment = parsed if (parsed.hour or parsed.minute or len(moment_hint.strip()) > 10) \
             else parsed.replace(hour=23, minute=59, second=59)
         limit = self.app_config.memory.recall.expansion_limit * 2
+        repo = self.memory_repo.for_user(user_id)
         rows = sorted(
-            self.memory_repo.statements_valid_at(moment)[:limit],
+            repo.statements_valid_at(moment)[:limit],
             key=lambda r: (r.valid_from or moment, r.id),
         )
         if not rows:
             return f"（{parsed.strftime('%Y-%m-%d')} 时点暂无任何在效记录）"
         ent_ids = {r.subject_id for r in rows} | {r.object_entity_id for r in rows if r.object_entity_id}
-        entities = self.memory_repo.get_entities(sorted(ent_ids))
+        entities = repo.get_entities(sorted(ent_ids))
         lines = [renderer.statement_topology_line(r, entities, now=now) for r in rows]
         self.inject_registry.mark(thread_id, [f"s:{r.id}" for r in rows])
-        self.memory_repo.bump_access([r.id for r in rows], [], sorted(entities), now)
+        repo.bump_access([r.id for r in rows], [], sorted(entities), now)
         head = f"## 时点回放 · {moment.strftime('%Y-%m-%d %H:%M')} 在效事实"
         numbered = [f"{i}. {line}" for i, line in enumerate(lines, start=1)]
         return "\n".join([head, *numbered])

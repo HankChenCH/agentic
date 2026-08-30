@@ -36,6 +36,10 @@ class LLMProviderEntry(BaseModel):
         description="API key；本地部署的供应商（如 ollama）可省略",
     )
     model: str = Field(description="模型名，eg: deepseek-v4-flash")
+    timeout: float = Field(
+        default=120.0,
+        description="单次请求超时（秒），防止上游模型/网关无响应时调用方无限挂起",
+    )
 
 
 class LLMConfig(BaseModel):

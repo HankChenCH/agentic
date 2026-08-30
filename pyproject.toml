@@ -28,13 +28,24 @@ dependencies = [
     "httpx>=0.28.0",
     "typer>=0.27.2",
     "alembic>=1.19.1",
+    # 用户域：JWT 签发/验签（密码哈希用 stdlib pbkdf2，不引 passlib）
+    "pyjwt>=2.10.0",
+    "prometheus-client>=0.21",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3"]
+dev = ["pytest>=8.3", "ruff>=0.16.5"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# 明确选最小高信号规则集（E4/E7/E9 + pyflakes），不随 ruff 默认集变化漂移；
+# isort/pyupgrade 等风格规则未启用（存量代码未按此整形，避免 CI 噪音）
+select = ["E4", "E7", "E9", "F"]
 
 [tool.uv]
 # cryptography 49+ 不再发布 Intel macOS wheel（macosx 仅剩 arm64），Intel mac 上

@@ -16,7 +16,8 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
 )
-from conftest import FakeCancelSignalStore
+from app.packages.signal.memory_signal_store import InMemorySignalStore
+from conftest import TEST_USER_ID
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.orchestration.turn_finalizer import TurnFinalizer
@@ -96,19 +97,46 @@ class ExplodingStoreTurnRepo:
         return getattr(self._inner, name)
 
 
-def make_finalizer(repo, title_generator=None, memory=None):
+class FakeUserNodeSync:
+    """UserNodeSyncPort 替身：记录同步调用。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def sync_user_node(self, user_id, username, nickname):
+        self.calls.append((user_id, username, nickname))
+
+
+class FakeUserService:
+    """UserService 替身：get_user 回放预置用户，可注入失败。"""
+
+    def __init__(self, user=None, error=None):
+        self._user = user
+        self._error = error
+
+    def get_user(self, user_id):
+        if self._error is not None:
+            raise self._error
+        return self._user
+
+
+def make_finalizer(repo, title_generator=None, memory=None, user_service=None, user_node_sync=None):
     factory = RecordingLoggerFactory()
     # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML（open_turn 才会读到）
     conversations = ConversationService(
         conversation_repo=repo,
         app_config=SimpleNamespace(default_agentic_id="builtin:demo"),
-        cancel_signal_store=FakeCancelSignalStore(),
+        signal_store=InMemorySignalStore(),
         logger_factory=factory,
     )
     finalizer = TurnFinalizer(
         title_generator=title_generator or FakeTitleGenerator(),
         conversations=conversations,
         memory=memory or FakeMemory(),
+        users=user_service or FakeUserService(user=SimpleNamespace(
+            id=TEST_USER_ID, username="tester", nickname="",
+        )),
+        memory_user_node=user_node_sync or FakeUserNodeSync(),
         logger_factory=factory,
     )
     return finalizer, factory.logger
@@ -139,7 +167,7 @@ def stored_turn(engine, thread_id) -> AgenticConversationTurn:
 def seeded(engine):
     """一条空标题会话 + 一个 RUNNING 轮次。"""
     repo = ConversationRepository(engine=engine)
-    conversation = repo.init_conversation(thread_id=uuid4(), agentic_id="builtin:demo")
+    conversation = repo.init_conversation(user_id=TEST_USER_ID, thread_id=uuid4(), agentic_id="builtin:demo")
     turn = repo.create_conversation_turn(conversation=conversation, run_id="run-1", turn_id=uuid4())
     return repo, conversation, turn
 
@@ -154,7 +182,7 @@ def test_first_turn_fills_title_then_never_again(seeded):
     ]
 
     finalizer.run(conversation, turn, messages, "你好")
-    assert repo.get_conversation(conversation.thread_id).conversation_title == "智能体设计"
+    assert repo.get_conversation(conversation.thread_id, TEST_USER_ID).conversation_title == "智能体设计"
     assert generator.calls == 1
 
     # 标题已有：不再调生成器
@@ -173,7 +201,7 @@ def test_existing_title_not_overwritten(seeded):
     finalizer.run(conversation, turn, [], "你好")
 
     assert generator.calls == 0
-    assert repo.get_conversation(conversation.thread_id).conversation_title == "已有"
+    assert repo.get_conversation(conversation.thread_id, TEST_USER_ID).conversation_title == "已有"
 
 
 def test_title_failure_swallowed_and_retriable(seeded):
@@ -185,7 +213,7 @@ def test_title_failure_swallowed_and_retriable(seeded):
     finalizer.run(conversation, turn, [], "你好")
 
     assert generator.calls == 1
-    assert repo.get_conversation(conversation.thread_id).conversation_title == ""
+    assert repo.get_conversation(conversation.thread_id, TEST_USER_ID).conversation_title == ""
     assert any(level == "error" for level, _ in logger.events)
 
 
@@ -213,6 +241,34 @@ def test_memory_failure_does_not_break_token_write(engine, seeded):
     assert any(level == "error" for level, _ in logger.events)
 
 
+def test_user_node_synced_before_remember(engine, seeded):
+    repo, conversation, turn = seeded
+    sync = FakeUserNodeSync()
+    memory = FakeMemory()
+    finalizer, _ = make_finalizer(repo, memory=memory, user_node_sync=sync)
+
+    finalizer.run(conversation, turn, [], "你好")
+
+    # 每轮收尾都会用最新账号 profile 自愈刷新用户节点，且先于 remember
+    assert sync.calls == [(TEST_USER_ID, "tester", "")]
+
+
+def test_user_node_sync_failure_does_not_break_remember(engine, seeded):
+    repo, conversation, turn = seeded
+
+    class BoomSync:
+        def sync_user_node(self, *args, **kwargs):
+            raise RuntimeError("node down")
+
+    memory = FakeMemory()
+    finalizer, logger = make_finalizer(repo, memory=memory, user_node_sync=BoomSync())
+
+    finalizer.run(conversation, turn, [], "你好")
+
+    assert len(memory.remembered) == 1                     # 节点同步失败不影响 remember
+    assert any(level == "error" and "sync memory user node failed" in msg for level, msg in logger.events)
+
+
 def test_outer_catchall_swallows_repo_failure(seeded):
     repo, conversation, turn = seeded
     exploding = ExplodingStoreTurnRepo(repo)
@@ -223,5 +279,5 @@ def test_outer_catchall_swallows_repo_failure(seeded):
     finalizer.run(conversation, turn, [], "你好")
 
     assert generator.calls == 1
-    assert repo.get_conversation(conversation.thread_id).conversation_title == "智能体设计"
+    assert repo.get_conversation(conversation.thread_id, TEST_USER_ID).conversation_title == "智能体设计"
     assert any(level == "error" and "after chat post-processing failed" in msg for level, msg in logger.events)

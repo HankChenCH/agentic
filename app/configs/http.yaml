@@ -1,0 +1,28 @@
+# HTTP 入口边缘策略：CORS 白名单 / 限流 / 请求体大小上限
+# 模型见 app/core/config/http.py，中间件实现见 app/api/middleware.py（路由作用域在
+# app/cmd/http/main.py 接线）。限流与请求体上限均为进程内实现，不依赖中间件栈。
+
+cors:
+  # 浏览器源白名单（精确匹配 scheme+host+port）。默认覆盖 Vite dev server 的两种
+  # loopback 形态（localhost/127.0.0.1 是不同源，需分别登记）；部署环境用
+  # CORS_ORIGINS 以逗号分隔整体覆盖，如 https://app.example.com,https://admin.example.com
+  origins: ${CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  allow_credentials: ${CORS_ALLOW_CREDENTIALS:true}
+
+rate_limit:
+  # 按客户端 IP 的滑动窗口；仅放行请求计入窗口。客户端识别取直连地址——
+  # 反代部署需 uvicorn --proxy-headers 让 X-Forwarded-For 覆写 client，
+  # 否则所有请求按代理 IP 合并限流
+  chat:
+    requests: ${CHAT_RATE_LIMIT:30}
+    window_seconds: ${CHAT_RATE_WINDOW_SECONDS:60}
+  upload:
+    requests: ${UPLOAD_RATE_LIMIT:10}
+    window_seconds: ${UPLOAD_RATE_WINDOW_SECONDS:60}
+
+max_body_bytes:
+  # chat 为纯 JSON（含前端回放的历史消息），1 MiB 足够宽裕；
+  # 上传为 multipart：服务层单文件上限 50 MiB（support.MAX_UPLOAD_BYTES），
+  # 此处 64 MiB 含 multipart 表单开销
+  chat: ${CHAT_MAX_BODY_BYTES:1048576}
+  upload: ${UPLOAD_MAX_BODY_BYTES:67108864}

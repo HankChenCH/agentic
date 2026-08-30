@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from app.components.memory.extraction import (
+from app.components.memory.internal.extraction import (
     ExtractedFact,
     FactDecision,
     adjudicate_facts,
@@ -86,7 +86,8 @@ def test_resolve_time_hint_variants():
 
 
 def test_adjudicate_aligns_partial_decisions():
-    llm = CannedLLM('[{"index": 0, "action": "SKIP"}, {"index": 2, "action": "REPLACE", "replace_id": 9}]')
+    llm = CannedLLM('{"decisions": [{"index": 0, "action": "SKIP"},'
+                    ' {"index": 2, "action": "REPLACE", "replace_id": 9}]}')
     facts = [
         ExtractedFact(subject_key="user", predicate="职业", object_text="A"),
         ExtractedFact(subject_key="user", predicate="偏好", object_text="B"),
@@ -104,3 +105,31 @@ def test_adjudicate_aligns_partial_decisions():
 
 def test_adjudicate_returns_none_on_garbage():
     assert adjudicate_facts(CannedLLM("模型跑题了"), [ExtractedFact("u", "偏好", object_text="x")], []) is None
+
+
+def test_adjudicate_normalizes_lenient_actions():
+    """小写归一；未知 action 连同 replace_id 归为 ADD（同旧坏条目丢弃语义）。"""
+    llm = CannedLLM('{"decisions": [{"index": 0, "action": "skip"},'
+                    ' {"index": 1, "action": "DEPRECATE", "replace_id": 9}]}')
+    facts = [
+        ExtractedFact(subject_key="user", predicate="职业", object_text="A"),
+        ExtractedFact(subject_key="user", predicate="偏好", object_text="B"),
+    ]
+    assert adjudicate_facts(llm, facts, []) == [
+        FactDecision("SKIP"),
+        FactDecision("ADD"),
+    ]
+
+
+class _NoToolCallingLLM:
+    """with_structured_output 直接失败的替身（模拟不支持 tool calling 的网关）。"""
+
+    def with_structured_output(self, schema, method=None, **kwargs):
+        raise NotImplementedError("provider does not support tool calling")
+
+
+def test_structured_output_unsupported_degrades():
+    assert extract_structure(_NoToolCallingLLM(), "x", NOW).is_empty()
+    assert adjudicate_facts(
+        _NoToolCallingLLM(), [ExtractedFact("u", "偏好", object_text="x")], []
+    ) is None

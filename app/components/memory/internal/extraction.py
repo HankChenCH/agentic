@@ -1,24 +1,31 @@
-"""解析块：巩固管线的 LLM 输入组装、两次裸模型调用与裁决输出解析。
+"""解析块：巩固管线的 LLM 输入组装、两次结构化输出调用与结果清洗。
 
-风格延续 v1 抽取器：手工 JSON 截取解析、任何解析/校验失败都静默降级
-不上抛——抽取返回空结果、裁决返回 None，由服务层决定兜底路径。
-prompt 携带「当前时间」作时间锚，让模型把“昨天/上个月”落到可解析的
-``time_hint``；无法归一时的原文进 ``time_remark`` 保信息量。
+两次 LLM 调用均走 ``with_structured_output(method="function_calling")``：
+输出形状由 pydantic wire 模型（``_*Payload``）表达，不再依赖 prompt 内联
+JSON 示例；宽松清洗层保留——截断/clamp/溯源引用过滤/保留键/条数上限，
+坏条目整条丢弃，模型输出在语义上仍不可信。任何调用/校验失败都告警降级
+不上抛：抽取返回空结果、裁决返回 None，由服务层决定兜底路径。prompt 携带
+「当前时间」作时间锚，让模型把“昨天/上个月”落到可解析的 ``time_hint``；
+无法归一时的原文进 ``time_remark`` 保信息量。
 """
 
-import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Literal
 from uuid import UUID
 
 from langchain.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
+from pydantic import BaseModel, Field, model_validator
 
-from app.components.memory.renderer import is_internal_ref
-from app.components.memory.vocab import cardinality
+from app.components.memory.internal.renderer import is_internal_ref, strip_internal_refs
+from app.components.memory.internal.vocab import cardinality
 from app.models.domain.agentic import AgenticConversationMessage, AgenticMessageType
 from app.models.domain.memory import MemoryEntity
+
+# 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（惯例同 consolidation）
+logger = logging.getLogger(__name__)
 
 # 单实体抽取上限与证据摘录长度保护（防 transcript 失控膨胀）
 _MAX_ENTITIES = 20
@@ -26,11 +33,7 @@ _MAX_FACTS = 30
 _MAX_EPISODES = 10
 _MAX_EVIDENCE_LEN = 80
 
-_EXTRACTION_SYSTEM_PROMPT = """你是一个对话记忆抽取器，从一轮对话中提取值得跨轮长期记住的结构化信息。只输出一个 JSON 对象，无任何其他文字或代码块标记：
-
-{"entities": [{"key": "zhangwei", "type": "PERSON", "name": "张伟", "aliases": [], "importance": 0.5}],
- "episodes": [{"summary": "发布会时间与回款节点起冲突的谈判", "time_hint": "2026-08-25", "scene": "商业谈判", "links": [{"key": "zhangwei", "role": "参与者"}]}],
- "facts": [{"subject_key": "user", "predicate": "职业", "object_text": "后端开发", "time_hint": "", "time_remark": "", "confidence": 0.8, "evidence": "原话摘录"}]}
+_EXTRACTION_SYSTEM_PROMPT = """你是一个对话记忆抽取器，从一轮对话中提取值得跨轮长期记住的结构化信息。通过返回结构化结果作答：
 
 规则：
 1. entities 是稳定对象节点。type 取 PERSON/OBJECT/PLACE/ORG/CONCEPT/OTHER；name 必须纯专名，禁止把职衔等关系写进 name。"user" 固定指代用户本人（已存在，无需为其建实体）；
@@ -38,19 +41,80 @@ _EXTRACTION_SYSTEM_PROMPT = """你是一个对话记忆抽取器，从一轮对�
 3. 时间锚以【当前时间】为准：“昨天/上个月”等换算成 YYYY-MM-DD 放 time_hint；无法确定日期的表述原文放 time_remark；两者都没有就省略；
 4. evidence 只摘对话中最能佐证该事实的一句原话（不超过50字），没有可省略；
 5. 只提取跨轮有价值的稳定信息：身份/背景/偏好/目标/重要事件脉络；忽略寒暄、临时上下文、与用户无关的水内容；
-6. importance/confidence 用 0~1 小数。全部无新增时输出 {"entities":[],"episodes":[],"facts":[]}。"""
+6. importance/confidence 用 0~1 小数。全部无新增时各数组返回空列表。"""
 
-_ADJUDICATION_SYSTEM_PROMPT = """你是记忆裁决器。输入一批候选新事实和某主体的既有 ACTIVE 陈述（带数据库 id）。逐条判定每条新事实该执行什么操作，只输出一个 JSON 数组：
-
-[{"index": 0, "action": "ADD", "replace_id": null},
- {"index": 1, "action": "REPLACE", "replace_id": 17},
- {"index": 2, "action": "SKIP", "replace_id": null}]
+_ADJUDICATION_SYSTEM_PROMPT = """你是记忆裁决器。输入一批候选新事实和某主体的既有 ACTIVE 陈述（带数据库 id）。逐条判定每条新事实该执行什么操作，通过结构化结果返回 decisions 列表；只需包含你需要明确表态的条目，未提及的条目按 ADD 处理：
 
 规则：
 1. REPLACE：该断言使某条既有陈述过时（典型：单值谓词如 职业/居住地 出现了不同的新值），replace_id 填被取代陈述的 id；
 2. SKIP：与某条既有陈述语义相同或近似重复；
 3. 其余一律 ADD。origin 为 MANUAL 的既有陈述绝对不可作为 replace_id（人工事实神圣不可自动取代，认为冲突只能 SKIP）；
 4. 不确定时选 ADD。"""
+
+
+# ---- 结构化输出 wire schema（pydantic v2）----
+# 字段与 prompt 的“可省略”规则对齐（全部带默认）；schema 只保证形状合法，
+# 语义清洗在 _sanitize_extraction / 裁决对齐处进行。
+
+
+class _EntityPayload(BaseModel):
+    key: str
+    name: str
+    type: str = "OTHER"
+    aliases: list[str] = Field(default_factory=list)
+    importance: float = 0.5
+
+
+class _EpisodeLinkPayload(BaseModel):
+    key: str
+    role: str = ""
+
+
+class _EpisodePayload(BaseModel):
+    summary: str
+    time_hint: str | None = None
+    scene: str | None = None
+    links: list[_EpisodeLinkPayload] = Field(default_factory=list)
+
+
+class _FactPayload(BaseModel):
+    subject_key: str
+    predicate: str
+    object_key: str | None = None
+    object_text: str | None = None
+    time_hint: str | None = None
+    time_remark: str | None = None
+    confidence: float = 0.7
+    evidence: str | None = None
+
+
+class _ExtractionPayload(BaseModel):
+    entities: list[_EntityPayload] = Field(default_factory=list)
+    episodes: list[_EpisodePayload] = Field(default_factory=list)
+    facts: list[_FactPayload] = Field(default_factory=list)
+
+
+class _DecisionPayload(BaseModel):
+    index: int = -1  # 模型未给索引按 -1 处理：对齐期忽略，等价缺省 ADD
+    action: Literal["ADD", "REPLACE", "SKIP"] = "ADD"
+    replace_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_action(cls, data):
+        # 宽松语义同旧解析：小写归一；未知 action 连同 replace_id 归为 ADD
+        # （与旧“坏条目丢弃 → 缺索引补 ADD”的结果等价）
+        if isinstance(data, dict) and "action" in data:
+            action = str(data["action"]).strip().upper()
+            if action in ("ADD", "REPLACE", "SKIP"):
+                return {**data, "action": action}
+            return {**data, "action": "ADD", "replace_id": None}
+        return data
+
+
+class _AdjudicationPayload(BaseModel):
+    # 裁决输出包一层对象：function calling 的工具参数必须是 object
+    decisions: list[_DecisionPayload] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -114,12 +178,17 @@ class PairedFact:
 
 
 def extract_structure(model: BaseChatModel, transcript: str, now: datetime) -> ExtractionResult:
-    """第❶步结构化抽取；任何解析异常降级为空结果（调用方放弃本轮写入）。"""
-    response = model.invoke([
-        SystemMessage(content=_EXTRACTION_SYSTEM_PROMPT),
-        HumanMessage(content=f"【当前时间】{now.strftime('%Y-%m-%d %H:%M')}\n\n【本轮对话】\n{transcript}"),
-    ])
-    return _build_extraction_result(response.content if isinstance(response.content, str) else str(response.content))
+    """第❶步结构化抽取；结构化输出失败告警降级为空结果（调用方放弃本轮写入）。"""
+    try:
+        result = model.with_structured_output(_ExtractionPayload, method="function_calling").invoke([
+            SystemMessage(content=_EXTRACTION_SYSTEM_PROMPT),
+            HumanMessage(content=f"【当前时间】{now.strftime('%Y-%m-%d %H:%M')}\n\n【本轮对话】\n{transcript}"),
+        ])
+        payload = result if isinstance(result, _ExtractionPayload) else _ExtractionPayload.model_validate(result)
+    except Exception:
+        logger.warning("记忆抽取结构化输出失败，本轮按无新增处理", exc_info=True)
+        return ExtractionResult()
+    return _sanitize_extraction(payload)
 
 
 def adjudicate_facts(
@@ -129,8 +198,8 @@ def adjudicate_facts(
 ) -> list[FactDecision] | None:
     """第❸步陈述裁决。``active_statements`` 为 [{id,summary,...}] 摘要字典。
 
-    返回按 facts 顺序的决策列表；LLM 调用失败或解析失败返回 None，
-    由调用方执行程序化降级规则。
+    返回按 facts 顺序的决策列表（缺索引补 ADD）；LLM 调用/校验失败返回
+    None（告警日志），由调用方执行程序化降级规则。
     """
     if not facts:
         return []
@@ -144,18 +213,80 @@ def adjudicate_facts(
         for i, f in enumerate(facts)
     )
     try:
-        response = model.invoke([
+        result = model.with_structured_output(_AdjudicationPayload, method="function_calling").invoke([
             SystemMessage(content=_ADJUDICATION_SYSTEM_PROMPT),
             HumanMessage(content=f"【既有 ACTIVE 陈述】\n{existing_block}\n\n【候选新事实】\n{new_block}"),
         ])
+        payload = result if isinstance(result, _AdjudicationPayload) else _AdjudicationPayload.model_validate(result)
     except Exception:
+        logger.warning("记忆裁决结构化输出失败，降级为程序化规则", exc_info=True)
         return None
-    decisions = _parse_decisions(response.content if isinstance(response.content, str) else str(response.content))
-    if decisions is None:
-        return None
+    decisions = {
+        d.index: FactDecision(action=d.action, replace_id=d.replace_id)
+        for d in payload.decisions if d.index >= 0
+    }
     # 补齐缺失索引为 ADD（部分覆盖视为其余默认新增）
-    aligned = [decisions.get(i, FactDecision("ADD")) for i in range(len(facts))]
-    return aligned
+    return [decisions.get(i, FactDecision("ADD")) for i in range(len(facts))]
+
+
+def _sanitize_extraction(payload: _ExtractionPayload) -> ExtractionResult:
+    """宽松清洗：截断/clamp/过滤溯源引用与保留键；坏条目整条丢弃。"""
+    entities = {}
+    for raw in payload.entities[:_MAX_ENTITIES]:
+        key, name = _clip(raw.key, 40), _clip(raw.name, 60)
+        if not key or not name or key == "user" or is_internal_ref(name):
+            continue  # user 键由系统保留；内部溯源引用（#S13 等）不是实体名
+        aliases = tuple(
+            a.strip() for a in raw.aliases
+            if a.strip() and not is_internal_ref(a)
+        )
+        entities[key] = ExtractedEntity(
+            key=key, name=name,
+            entity_type=str(raw.type or "OTHER").upper()[:16],
+            aliases=aliases, importance=_as_float(raw.importance, 0.5),
+        )
+
+    episodes = []
+    for raw in payload.episodes[:_MAX_EPISODES]:
+        summary = _clip(raw.summary, 500)
+        if not summary:
+            continue
+        links = tuple(
+            (link.key, _clip(link.role, 20))
+            for link in raw.links
+            if link.key
+        )
+        episodes.append(ExtractedEpisode(
+            summary=summary,
+            time_hint=_clip(raw.time_hint, 32),
+            scene=_clip(raw.scene, 24),
+            links=links,
+        ))
+
+    facts = []
+    for raw in payload.facts[:_MAX_FACTS]:
+        predicate, subject_key = _clip(raw.predicate, 24), _clip(raw.subject_key, 40)
+        object_key, object_text = _clip(raw.object_key, 40), _clip(raw.object_text, 120)
+        if not predicate or not subject_key or (not object_key and not object_text):
+            continue
+        facts.append(ExtractedFact(
+            subject_key=subject_key, predicate=predicate,
+            object_key=object_key, object_text=object_text,
+            time_hint=_clip(raw.time_hint, 32),
+            time_remark=_clip(raw.time_remark, 48),
+            confidence=_as_float(raw.confidence, 0.7),
+            evidence=_clip(raw.evidence, _MAX_EVIDENCE_LEN),
+        ))
+
+    result = ExtractionResult(
+        entities=tuple(entities.values()), episodes=tuple(episodes), facts=tuple(facts)
+    )
+    if result.is_empty() and (payload.entities or payload.episodes or payload.facts):
+        logger.warning(
+            "记忆抽取结果清洗后全部丢弃（原始 entities=%d episodes=%d facts=%d）",
+            len(payload.entities), len(payload.episodes), len(payload.facts),
+        )
+    return result
 
 
 def resolve_time_hint(hint: str | None, now: datetime) -> datetime | None:
@@ -196,7 +327,7 @@ def build_transcript(query: str, turn_messages: List[AgenticConversationMessage]
     助手侧剥离内部溯源引用（#S13/§E3 等）——防止被复读的编号经抽取吸回实体档案。
     """
     assistant_text = "\n".join(
-        renderer.strip_internal_refs(part.get("text", ""))
+        strip_internal_refs(part.get("text", ""))
         for msg in turn_messages
         if msg.message_type == AgenticMessageType.MESSAGE
         for part in msg.content
@@ -254,17 +385,6 @@ def _try_iso(text: str):
         return None
 
 
-def _parse_json_object(content: str) -> dict | None:
-    start, end = content.find("{"), content.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        data = json.loads(content[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
-
-
 def _clip(value, limit: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -278,95 +398,6 @@ def _as_float(value, default: float) -> float:
         return min(max(number, 0.0), 1.0)
     except (TypeError, ValueError):
         return default
-
-
-def _build_extraction_result(content: str) -> ExtractionResult:
-    data = _parse_json_object(content)
-    if data is None:
-        return ExtractionResult()
-
-    entities = {}
-    for raw in (data.get("entities") or [])[:_MAX_ENTITIES]:
-        if not isinstance(raw, dict):
-            continue
-        key, name = _clip(raw.get("key"), 40), _clip(raw.get("name"), 60)
-        if not key or not name or key == "user" or is_internal_ref(name):
-            continue  # user 键由系统保留；内部溯源引用（#S13 等）不是实体名
-        aliases = tuple(
-            a.strip() for a in raw.get("aliases") or []
-            if isinstance(a, str) and a.strip() and not is_internal_ref(a)
-        )
-        entities[key] = ExtractedEntity(
-            key=key, name=name,
-            entity_type=str(raw.get("type") or "OTHER").upper()[:16],
-            aliases=aliases, importance=_as_float(raw.get("importance"), 0.5),
-        )
-
-    episodes = []
-    for raw in (data.get("episodes") or [])[:_MAX_EPISODES]:
-        if not isinstance(raw, dict):
-            continue
-        summary = _clip(raw.get("summary"), 500)
-        if not summary:
-            continue
-        links = tuple(
-            (l.get("key", ""), _clip(l.get("role"), 20))
-            for l in (raw.get("links") or [])
-            if isinstance(l, dict) and isinstance(l.get("key"), str) and l["key"]
-        )
-        episodes.append(ExtractedEpisode(
-            summary=summary,
-            time_hint=_clip(raw.get("time_hint"), 32),
-            scene=_clip(raw.get("scene"), 24),
-            links=links,
-        ))
-
-    facts = []
-    for raw in (data.get("facts") or [])[:_MAX_FACTS]:
-        if not isinstance(raw, dict):
-            continue
-        predicate, subject_key = _clip(raw.get("predicate"), 24), _clip(raw.get("subject_key"), 40)
-        object_key, object_text = _clip(raw.get("object_key"), 40), _clip(raw.get("object_text"), 120)
-        if not predicate or not subject_key or (not object_key and not object_text):
-            continue
-        facts.append(ExtractedFact(
-            subject_key=subject_key, predicate=predicate,
-            object_key=object_key if object_key in entities else object_key,
-            object_text=object_text,
-            time_hint=_clip(raw.get("time_hint"), 32),
-            time_remark=_clip(raw.get("time_remark"), 48),
-            confidence=_as_float(raw.get("confidence"), 0.7),
-            evidence=_clip(raw.get("evidence"), _MAX_EVIDENCE_LEN),
-        ))
-
-    return ExtractionResult(
-        entities=tuple(entities.values()), episodes=tuple(episodes), facts=tuple(facts)
-    )
-
-
-def _parse_decisions(content: str) -> dict[int, FactDecision] | None:
-    start, end = content.find("["), content.rfind("]")
-    if start == -1 or end <= start:
-        return None
-    try:
-        data = json.loads(content[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, list):
-        return None
-    decisions: dict[int, FactDecision] = {}
-    for raw in data:
-        if not isinstance(raw, dict):
-            continue
-        action = str(raw.get("action", "")).upper()
-        if action not in ("ADD", "REPLACE", "SKIP"):
-            continue
-        replace_id = raw.get("replace_id")
-        decisions[int(raw.get("index", -1))] = FactDecision(
-            action=action,
-            replace_id=int(replace_id) if isinstance(replace_id, int) else None,
-        )
-    return decisions
 
 
 def _manual_tag(statement: dict) -> str:

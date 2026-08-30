@@ -3,7 +3,8 @@
 process_document 由 Celery 任务调用（也会被未来的定时对账等后台入口
 复用），因此存在性/状态校验与 HTTP 路径完全一致（require_kb /
 require_document）：库被并发删除时任务日志拿到的是 4001 而非含糊的
-4004，可正确追踪失败原因。
+4004，可正确追踪失败原因。后台入口没有用户身份，归属校验只在 HTTP
+侧的 retry_document 做（require_owned_kb）。
 """
 
 import posixpath
@@ -25,7 +26,13 @@ from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
 from .document_chunker import SegmentDraft, chunk_document
 from .object_store import KnowledgeObjectStore
-from .support import ERROR_MESSAGE_MAX, RETRY_ALLOWED, require_document, require_kb
+from .support import (
+    ERROR_MESSAGE_MAX,
+    RETRY_ALLOWED,
+    require_document,
+    require_kb,
+    require_owned_kb,
+)
 
 
 @injectable
@@ -70,9 +77,12 @@ class DocumentIngestionService:
             raise KnowledgeDocumentNotFoundError(f"knowledge document not found: {doc_id}")
         return result
 
-    def retry_document(self, kb_id: UUID, doc_id: UUID) -> KnowledgeDocument:
-        """重试校验：仅 failed/pending 可补发处理任务，处理中/就绪拒绝。"""
-        require_kb(self.kb_repo, kb_id)
+    def retry_document(self, kb_id: UUID, user_id: UUID, doc_id: UUID) -> KnowledgeDocument:
+        """重试校验：仅 failed/pending 可补发处理任务，处理中/就绪拒绝。
+
+        仅 HTTP 端点调用：写路径语义，仅属主可补发（require_owned_kb）。
+        """
+        require_owned_kb(self.kb_repo, kb_id, user_id)
         doc = require_document(self.document_repo, kb_id, doc_id)
         if doc.status not in RETRY_ALLOWED:
             raise KnowledgeDocumentStatusError(

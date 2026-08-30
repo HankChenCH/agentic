@@ -52,7 +52,9 @@ def setup_logging() -> None:
     # 门面/桥接经 bind(logger_name=...) 显式声明归属；patcher 镜像到 record.name，
     # 使格式 token {name} 与 JSON 序列化字段都不依赖调用帧推导
     _loguru.configure(
-        extra={"logger_name": "app"},
+        # request_id 默认 "-"：由 api.middleware.RequestIDMiddleware 在请求期覆盖，
+        # 格式串/JSON 序列化统一引用，避免 extra 缺 key 报错
+        extra={"logger_name": "app", "request_id": "-"},
         patcher=lambda record: record.__setitem__(
             "name", record["extra"].get("logger_name") or record["name"]
         ),

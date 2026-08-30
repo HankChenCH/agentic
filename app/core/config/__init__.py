@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from wireup import injectable
 
 from .llm import LLMConfig, LLMProviderEntry, ModelTaskType
+from .auth import AuthConfig
 from .db import DBConfig, DBProviderEntry, PostgresDBProviderEntry, SQLiteDBProviderEntry
 from .document_parser import DocumentParserConfig, DocumentParserProviderEntry, MineruCloudEntry
 from .vector_db import VectorDBConfig, VectorDBProviderEntry, WeaviateDBProviderEntry
@@ -13,9 +14,11 @@ from .filesystem import (
     LocalFilesystemEntry,
     S3FilesystemEntry,
 )
+from .http import CorsConfig, HttpConfig, MaxBodyConfig, RateLimitConfig, RateLimitRule
 from .loader import ConfigError, load_section, read_config
 from .logging import ConsoleSinkConfig, FileSinkConfig, LoggingConfig, SinkConfig
 from .memory import MemoryConfig
+from .metrics import MetricsConfig
 from .redis import RedisConfig, RedisProviderEntry, StandaloneRedisProviderEntry
 from .task import TaskConfig, TaskConnectionRef, resolve_url
 
@@ -26,6 +29,7 @@ __all__ = [
     "LLMConfig",
     "LLMProviderEntry",
     "ModelTaskType",
+    "AuthConfig",
     "DBConfig",
     "DBProviderEntry",
     "SQLiteDBProviderEntry",
@@ -40,11 +44,17 @@ __all__ = [
     "FilesystemProviderEntry",
     "LocalFilesystemEntry",
     "S3FilesystemEntry",
+    "CorsConfig",
+    "HttpConfig",
+    "MaxBodyConfig",
+    "RateLimitConfig",
+    "RateLimitRule",
     "LoggingConfig",
     "ConsoleSinkConfig",
     "FileSinkConfig",
     "SinkConfig",
     "MemoryConfig",
+    "MetricsConfig",
     "RedisConfig",
     "RedisProviderEntry",
     "StandaloneRedisProviderEntry",
@@ -103,6 +113,14 @@ class AppConfig(BaseModel):
         description="运行环境 dev/test/prod：异常响应等信息按环境区分详略（可用环境变量 APP_ENV 覆盖）。",
         default_factory=get_environment,
     )
+    http: HttpConfig = Field(
+        description="HTTP 入口边缘策略：CORS 白名单、限流与请求体大小上限（装配见 app.cmd.http）。",
+        default_factory=lambda: load_section("http.yaml", HttpConfig),
+    )
+    auth: AuthConfig = Field(
+        description="认证配置：JWT 签发/验签参数（用户注册/登录）。",
+        default_factory=lambda: load_section("auth.yaml", AuthConfig),
+    )
     llm: LLMConfig = Field(
         description="LLM 基建配置：模型供应商实例表，供所有模型调用方共用。",
         default_factory=lambda: load_section("llm.yaml", LLMConfig),
@@ -138,4 +156,8 @@ class AppConfig(BaseModel):
     task: TaskConfig = Field(
         description="任务队列配置：Celery broker/backend（入口见 app.cmd.task_executor）。",
         default_factory=lambda: load_section("task.yaml", TaskConfig),
+    )
+    metrics: MetricsConfig = Field(
+        description="运维监控指标配置：/metrics 采集端点与 worker 指标端口（实现见 app.api.metrics）。",
+        default_factory=lambda: load_section("metrics.yaml", MetricsConfig),
     )

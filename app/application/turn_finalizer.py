@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from uuid import UUID
 
 from wireup import injectable
 
@@ -7,6 +6,8 @@ from app.components.memory import MemoryConsolidationService
 from app.core.logging import LoggerFactory
 from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.domain.conversation.title_generator import ConversationTitleGenerator
+from app.services.domain.user.ports import UserNodeSyncPort
+from app.services.domain.user.user_service import UserService
 
 from app.models.domain.agentic import (
     AgenticConversation,
@@ -30,6 +31,8 @@ class TurnFinalizer:
     title_generator: ConversationTitleGenerator
     conversations: ConversationService
     memory: MemoryConsolidationService
+    users: UserService
+    memory_user_node: UserNodeSyncPort
     logger_factory: LoggerFactory
 
     def __post_init__(self):
@@ -57,7 +60,22 @@ class TurnFinalizer:
             self.conversations.record_turn_usage(turn, turn_messages)
 
             try:
-                self.memory.remember(query=query, turn_messages=turn_messages, thread_id=conversation.thread_id, turn_id=turn.turn_id)
+                # 自愈刷新记忆「用户」节点的账号信息（资料变更/历史缺失都在
+                # 此补齐）；失败不影响 remember
+                try:
+                    user = self.users.get_user(conversation.user_id)
+                    self.memory_user_node.sync_user_node(
+                        user.id, user.username, user.nickname,
+                    )
+                except Exception:
+                    self.logger.exception("sync memory user node failed")
+                self.memory.remember(
+                    query=query,
+                    turn_messages=turn_messages,
+                    user_id=conversation.user_id,
+                    thread_id=conversation.thread_id,
+                    turn_id=turn.turn_id,
+                )
             except Exception:
                 self.logger.exception("memory remember failed")
         except Exception:

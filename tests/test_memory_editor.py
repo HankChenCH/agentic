@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.components.memory.editor import MemoryRepositoryEditor
+from app.components.memory.admin import MemoryRepositoryEditor
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.exceptions.memory import (
     MemoryInvalidParamError,
@@ -16,11 +16,11 @@ from app.models.domain.memory import MemoryEntity, MemoryOrigin, StatementState
 from app.models.schema.request.memory import (
     EntityUpdateRequest,
     StatementCorrectRequest,
-    StatementCreateRequest,
 )
 from app.services.domain.memory import MemoryAdminService
 from app.services.domain.memory.ports import FactWrite
 
+from conftest import TEST_USER_ID
 from fakes_memory import FakeMemoryVectorIndex
 
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
@@ -28,7 +28,8 @@ LATER = datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc)
 
 
 def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine)
+    # 作用域视图：插入行自动钉归属（与用户侧行程一致的全局算子禁入语义）
+    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:
@@ -147,7 +148,7 @@ def test_correct_partial_request_keeps_unspecified_fields(engine):
     _, old = _seed_fact(engine)
     svc = _service(engine)
 
-    result = svc.correct_statement(
+    result = svc.correct_statement(TEST_USER_ID, 
         f"s:{old.id}", StatementCorrectRequest(summary="用户当前职业为教师"))
 
     assert result["new"]["objectText"] == "教师"  # 未提供的字段保持原值
@@ -159,9 +160,9 @@ def test_correct_identical_values_rejected_as_no_change(engine):
     _, old = _seed_fact(engine)
     svc = _service(engine)
     with pytest.raises(MemoryNoChangeError):
-        svc.correct_statement(f"s:{old.id}", StatementCorrectRequest(objectText="教师"))
+        svc.correct_statement(TEST_USER_ID, f"s:{old.id}", StatementCorrectRequest(objectText="教师"))
     with pytest.raises(MemoryNoChangeError):
-        svc.correct_statement(f"s:{old.id}", StatementCorrectRequest(note="只想补个备注"))
+        svc.correct_statement(TEST_USER_ID, f"s:{old.id}", StatementCorrectRequest(note="只想补个备注"))
 
 
 def test_correct_rejects_missing_and_non_active_targets(engine):
@@ -178,11 +179,11 @@ def test_ref_parsing_accepts_snapshot_shape_and_rejects_garbage(engine):
     _, old = _seed_fact(engine)
     svc = _service(engine)
     with pytest.raises(MemoryObjectNotFoundError):
-        svc.archive_statement("s:9999")  # 形态合法、目标不存在
+        svc.archive_statement(TEST_USER_ID, "s:9999")  # 形态合法、目标不存在
     with pytest.raises(MemoryInvalidParamError):
-        svc.archive_statement("e:1")  # 跨种类引用
+        svc.archive_statement(TEST_USER_ID, "e:1")  # 跨种类引用
     with pytest.raises(MemoryInvalidParamError):
-        svc.archive_statement("not-a-ref")
+        svc.archive_statement(TEST_USER_ID, "not-a-ref")
 
 
 # ---------------- 归档 ----------------
@@ -220,17 +221,17 @@ def test_update_entity_replaces_aliases_and_rewrites_entity_vector(engine):
 def test_update_entity_name_conflicts_with_other_entity_name_or_alias(engine):
     editor = _editor(engine)
     mine = editor.memory_repo.upsert_entity(_entity(name="禹通"))
-    other = editor.memory_repo.upsert_entity(_entity(name="极星科技", aliases=["极星"]))
+    editor.memory_repo.upsert_entity(_entity(name="极星科技", aliases=["极星"]))
     svc = _service(engine)
 
     with pytest.raises(MemoryNameConflictError):
-        svc.update_entity(f"e:{mine.id}", EntityUpdateRequest(name="极星科技"))
+        svc.update_entity(TEST_USER_ID, f"e:{mine.id}", EntityUpdateRequest(name="极星科技"))
     with pytest.raises(MemoryNameConflictError):
-        svc.update_entity(f"e:{mine.id}", EntityUpdateRequest(name="极星"))
+        svc.update_entity(TEST_USER_ID, f"e:{mine.id}", EntityUpdateRequest(name="极星"))
     with pytest.raises(MemoryNameConflictError):
-        svc.update_entity(f"e:{mine.id}", EntityUpdateRequest(aliases=["极星"]))
+        svc.update_entity(TEST_USER_ID, f"e:{mine.id}", EntityUpdateRequest(aliases=["极星"]))
     # 撞自己的名字/别名不报错（原名入别名、别名去重属正常收敛）
-    row = svc.update_entity(f"e:{mine.id}", EntityUpdateRequest(name="禹通互联网", aliases=["禹通", "禹通互联网"]))
+    row = svc.update_entity(TEST_USER_ID, f"e:{mine.id}", EntityUpdateRequest(name="禹通互联网", aliases=["禹通", "禹通互联网"]))
     assert row["name"] == "禹通互联网"
 
 
@@ -240,11 +241,11 @@ def test_update_entity_validates_type_and_missing_target(engine):
     svc = _service(engine)
 
     with pytest.raises(MemoryInvalidParamError):
-        svc.update_entity(f"e:{entity.id}", EntityUpdateRequest(entityType="COMPANY"))
+        svc.update_entity(TEST_USER_ID, f"e:{entity.id}", EntityUpdateRequest(entityType="COMPANY"))
     with pytest.raises(MemoryObjectNotFoundError):
-        svc.update_entity("e:9999", EntityUpdateRequest(name="x"))
+        svc.update_entity(TEST_USER_ID, "e:9999", EntityUpdateRequest(name="x"))
 
-    row = svc.update_entity(f"e:{entity.id}", EntityUpdateRequest(entityType="ORG"))
+    row = svc.update_entity(TEST_USER_ID, f"e:{entity.id}", EntityUpdateRequest(entityType="ORG"))
     assert row["entityType"] == "ORG"
 
 

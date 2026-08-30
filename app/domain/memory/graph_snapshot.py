@@ -31,14 +31,19 @@ _MAX_LIMIT = 2000
 @injectable
 @dataclass
 class MemoryGraphService:
-    """管理侧记忆图快照：只读、无状态、可任意次重放。"""
+    """管理侧记忆图快照：只读、无状态、可任意次重放。
+
+    快照作用域为当前用户（记忆是用户级数据）：经 ``reader.for_user`` 取
+    绑定用户的只读视图后取数。
+    """
 
     reader: MemoryGraphReader
 
-    def graph_snapshot(self, at_iso: str | None = None, limit: int | None = None) -> dict:
+    def graph_snapshot(self, user_id: UUID, at_iso: str | None = None, limit: int | None = None) -> dict:
+        reader = self.reader.for_user(user_id)
         cap = min(max(limit or _DEFAULT_LIMIT, 1), _MAX_LIMIT)
         at = self._parse_at(at_iso)
-        snapshot = self._slice(at, cap) if at is not None else self._current(cap)
+        snapshot = self._slice(reader, at, cap) if at is not None else self._current(reader, cap)
         snapshot["at"] = _iso(at)
         snapshot["generatedAt"] = _iso(datetime.now(timezone.utc))
         snapshot["stats"] = {
@@ -51,16 +56,16 @@ class MemoryGraphService:
 
     # ---------------- 视图构建 ----------------
 
-    def _current(self, cap: int) -> dict:
-        entities = {e.id: e for e in self.reader.list_entities(cap)}
-        statements = self.reader.list_active_statements(cap)
-        episodes = self.reader.list_episodes(cap)
-        links = self.reader.links_for_episodes([ep.id for ep in episodes])
+    def _current(self, reader: MemoryGraphReader, cap: int) -> dict:
+        entities = {e.id: e for e in reader.list_entities(cap)}
+        statements = reader.list_active_statements(cap)
+        episodes = reader.list_episodes(cap)
+        links = reader.links_for_episodes([ep.id for ep in episodes])
 
         # 补齐被 cap 截漏、但被边引用的实体节点（不截断图的连通性）
         missing = _referenced_entity_ids(statements) - set(entities)
         if missing:
-            entities.update(self.reader.get_entities(sorted(missing)))
+            entities.update(reader.get_entities(sorted(missing)))
 
         return {
             "nodes": [_entity_node(e) for e in entities.values()]
@@ -69,16 +74,16 @@ class MemoryGraphService:
             + _link_edges(links),
         }
 
-    def _slice(self, at: datetime, cap: int) -> dict:
-        statements = self.reader.statements_valid_at(at)[:cap]
+    def _slice(self, reader: MemoryGraphReader, at: datetime, cap: int) -> dict:
+        statements = reader.statements_valid_at(at)[:cap]
         involved = _referenced_entity_ids(statements)
-        entities = self.reader.get_entities(sorted(involved))
+        entities = reader.get_entities(sorted(involved))
         # 情节只取已发生的（occurred_at ≤ at）；库值为 naive UTC，与锚比较前归一
         episodes = [
-            ep for ep in self.reader.list_episodes(cap * 2)
+            ep for ep in reader.list_episodes(cap * 2)
             if _aware(ep.occurred_at) <= at
         ][:cap]
-        links = self.reader.links_for_episodes([ep.id for ep in episodes])
+        links = reader.links_for_episodes([ep.id for ep in episodes])
 
         return {
             "nodes": [_entity_node(e) for e in entities.values()]

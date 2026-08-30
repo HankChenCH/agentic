@@ -13,13 +13,16 @@ from app.models.domain.agentic import AgenticConversation, AgenticConversationTu
 class ConversationRepository:
     engine: Engine
 
-    def list_conversations(self, page: int, page_size: int) -> Tuple[List[AgenticConversation], int]:
-        # 分页 offset 必须按页大小计算：(page-1) * page_size
+    def list_conversations(self, user_id: UUID, page: int, page_size: int) -> Tuple[List[AgenticConversation], int]:
+        # 归属过滤在查询条件内强制：非本人会话不出现在列表与计数中
         offset = (page - 1) * page_size
         with Session(self.engine, expire_on_commit=False) as session:
-            total = session.exec(select(func.count()).select_from(AgenticConversation)).one()
+            total = session.exec(
+                select(func.count()).select_from(AgenticConversation).where(AgenticConversation.user_id == user_id)
+            ).one()
             statement = (
                 select(AgenticConversation)
+                .where(AgenticConversation.user_id == user_id)
                 .offset(offset)
                 .limit(page_size)
                 .order_by(col(AgenticConversation.id).desc())
@@ -29,17 +32,21 @@ class ConversationRepository:
 
         return list(result), int(total)
 
-    def get_conversation(self, thread_id: UUID) -> AgenticConversation | None:
-        # 纯查询，不创建（describe 只读语义）
+    def get_conversation(self, thread_id: UUID, user_id: UUID) -> AgenticConversation | None:
+        # 纯查询（describe 只读语义）；非本人会话与不存在同返回 None，由上层统一 404
         with Session(self.engine, expire_on_commit=False) as session:
             conversation = session.exec(
-                select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+                select(AgenticConversation)
+                .where(AgenticConversation.thread_id == thread_id)
+                .where(AgenticConversation.user_id == user_id)
             ).first()
             session.commit()
         return conversation
 
-    def init_conversation(self, thread_id: UUID, agentic_id: str) -> AgenticConversation:
-        # get-or-create：仅用于 chat() 的隐式建会话（describe 不应再走这里）
+    def init_conversation(self, user_id: UUID, thread_id: UUID, agentic_id: str) -> AgenticConversation:
+        # get-or-create：仅用于 chat() 的隐式建会话（describe 不应再走这里）。
+        # 已存在时不校验归属——他人会话的拦截是业务规则，由上层
+        # （ConversationService.open_turn）比对 user_id 后统一 404。
         # expire_on_commit=False：commit 后对象属性不失效，离开 session（detached）
         # 也能被上层安全访问，避免 DetachedInstanceError。
         with Session(self.engine, expire_on_commit=False) as session:
@@ -47,7 +54,7 @@ class ConversationRepository:
                 select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
             ).first()
             if conversation is None:
-                conversation = AgenticConversation(thread_id=thread_id, agentic_id=agentic_id, conversation_title="")
+                conversation = AgenticConversation(user_id=user_id, thread_id=thread_id, agentic_id=agentic_id, conversation_title="")
                 session.add(conversation)
 
             session.commit()
@@ -63,13 +70,15 @@ class ConversationRepository:
 
         return conversation
 
-    def delete_conversation(self, thread_id: UUID) -> AgenticConversation | None:
-        # 硬删除：会话+轮次+消息单事务清空；不存在返回 None（由上层决定 404）。
-        # 三表间无外键级联，须按 thread_id 显式删；messages 先于 turns（message
-        # 有 FK 指向 turn，postgres 下先删父行会违反约束）。
+    def delete_conversation(self, thread_id: UUID, user_id: UUID) -> AgenticConversation | None:
+        # 硬删除：会话+轮次+消息单事务清空；非本人会话与不存在同返回 None（由上层
+        # 决定 404）。三表间无外键级联，须按 thread_id 显式删；messages 先于 turns
+        # （message 有 FK 指向 turn，postgres 下先删父行会违反约束）。
         with Session(self.engine, expire_on_commit=False) as session:
             conversation = session.exec(
-                select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+                select(AgenticConversation)
+                .where(AgenticConversation.thread_id == thread_id)
+                .where(AgenticConversation.user_id == user_id)
             ).first()
             if conversation is None:
                 return None
@@ -110,6 +119,8 @@ class ConversationRepository:
         return conversation_turn    
 
     def list_conversation_history_turns(self, thread_id: UUID, offset: int | None, limit: int) -> Tuple[List[AgenticConversationTurn], int]:
+        # 归属由调用方先行校验（list_history_messages 先 describe 再进来），此处按
+        # thread_id 取数即可
         with Session(self.engine, expire_on_commit=False) as session:
             total = session.exec(
                 select(func.count()).select_from(AgenticConversationTurn).where(AgenticConversationTurn.thread_id == thread_id)
@@ -149,6 +160,7 @@ class ConversationRepository:
         多轮上下文以库为准（服务端权威）：取最近 turn_limit 个 COMPLETED 轮次
         （排除 exclude_turn_id 指定的当前进行中轮次；FAILED/CANCELED 及悬挂
         RUNNING 轮次的半截数据不回放），行→模型消息的组装由上层负责。
+        thread_id 的归属已由 open_turn（get-or-create + 归属比对）确立。
         """
         with Session(self.engine, expire_on_commit=False) as session:
             turns = session.exec(
@@ -166,4 +178,3 @@ class ConversationRepository:
             # 轮内按 sequence_num 排序（StorageTranslator 的严格递增计数器，忠实还原流顺序）
             messages.extend(sorted(turn.messages, key=lambda m: m.sequence_num))
         return messages
-

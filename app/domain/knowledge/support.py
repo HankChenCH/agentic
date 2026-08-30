@@ -18,7 +18,7 @@ from app.models.domain.knowledge import (
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
 
-# 上传文件大小上限：当前实现全量读入内存计算 sha256，先挡住超大文件
+# 上传文件大小上限：可 seek 的流零拷贝探长预检，转存途中按实读字节兜底
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 # 上传格式白名单：解析流水线当前仅接 PDF（MinerU 主路径）
@@ -61,9 +61,33 @@ def page_envelope(items: list, total: int, page: int, page_size: int) -> dict:
 
 
 def require_kb(kb_repo: KnowledgeBaseRepository, kb_id: UUID) -> KnowledgeBase:
-    """父资源存在性锚定：文档是知识库的子资源，404 语义才能区分 4001/4004。"""
+    """父资源存在性锚定（无身份上下文）：文档是知识库的子资源，404 语义才能
+    区分 4001/4004。供绑定管理与 Celery 后台流水线使用——后者没有用户身份，
+    按端点透传的可信 id 直接操作。"""
     kb = kb_repo.get_kb(kb_id)
     if kb is None:
+        raise KnowledgeNotFoundError("knowledge base not found")
+    return kb
+
+
+def require_visible_kb(
+    kb_repo: KnowledgeBaseRepository, kb_id: UUID, user_id: UUID
+) -> KnowledgeBase:
+    """读路径可见性锚定：属主或公开库可见，他人私有库按 404 不泄露存在性
+    （与会话归属同一口径）。"""
+    kb = kb_repo.get_kb(kb_id)
+    if kb is None or (kb.user_id != user_id and not kb.is_public):
+        raise KnowledgeNotFoundError("knowledge base not found")
+    return kb
+
+
+def require_owned_kb(
+    kb_repo: KnowledgeBaseRepository, kb_id: UUID, user_id: UUID
+) -> KnowledgeBase:
+    """写路径归属锚定：仅属主可写——公开只让渡可见性，不让渡管理权；
+    他人库（含公开库）一律 404 不泄露存在性。"""
+    kb = kb_repo.get_kb(kb_id)
+    if kb is None or kb.user_id != user_id:
         raise KnowledgeNotFoundError("knowledge base not found")
     return kb
 

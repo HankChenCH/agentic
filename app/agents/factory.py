@@ -7,8 +7,6 @@ from app.agents.toolbox import AgentToolbox
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.infrastructures.llm import ModelFactory
-from app.components.knowledge import KnowledgeRetrievalService
-from app.components.memory import MemoryRecallService
 
 import app.agents.builtin  # noqa: F401  触发内置智能体的 @register_agent 注册
 
@@ -23,12 +21,14 @@ class AgentFactory:
 
     智能体的 prompt/tools 为构建期静态，图在实例化时编译一次；实例按 agentic_id
     缓存复用（langgraph 图支持以不同 thread_id 并发运行），多次 create 不重复建图。
+
+    组件能力经注入的 ``AgentToolbox`` 获取（组件装配在 toolbox 完成，本类
+    不感知具体组件）。
     """
 
     model_factory: ModelFactory
     app_config: AppConfig
-    memory: MemoryRecallService
-    knowledge: KnowledgeRetrievalService
+    toolbox: AgentToolbox
     logger_factory: LoggerFactory
 
     def __post_init__(self):
@@ -45,7 +45,7 @@ class AgentFactory:
             model = self.model_factory.create(agent_cls.preferred_provider)
             self._agent_cache[agent_cls.agentic_id] = agent_cls(
                 model=model,
-                toolbox=AgentToolbox(memory=self.memory, knowledge=self.knowledge),
+                toolbox=self.toolbox,
             )
         return self._agent_cache[agent_cls.agentic_id]
 
