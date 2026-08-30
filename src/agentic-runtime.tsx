@@ -1,6 +1,7 @@
 
 import { useMemo } from "react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
@@ -15,16 +16,49 @@ import { conversationService } from "@/services/conversation-service";
 import { getToken, useAuthStore } from "@/stores/auth-store";
 
 /**
- * SSE 流式请求的认证包装：每次发请求实时读 token（agent 实例 useMemo 一次
- * 创建，闭包捕获会陈旧，必须请求时现读）；401（令牌缺失/过期）时清会话并
- * 跳登录——SSE 端点在 200 流式头之后不走全局异常处理器，401 只能在 fetch
- * 层拦截，与 lib/http.ts 的 REST 拦截器口径一致。
+ * 把流链路上的各类异常翻译成用户可读的一句话：
+ * - 非长连接网络故障（发请求就失败 / 流中途断链）：`Failed to fetch` 等浏览器
+ *   原始文案 → 网络中断提示；
+ * - HTTP 非 2xx：HttpAgent 自拼 `HTTP 500: {原始响应体}` —— 我们在
+ *   authenticatedFetch 里已拦截并抛干净错误，这里兜底按状态码归类；
+ * - 服务端 RUN_ERROR 事件：后端给的 message 本身可读，原样透出。
+ */
+const friendlyStreamError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/failed to fetch|networkerror|load failed|network/i.test(message)) {
+    return "网络连接中断，请检查网络后重试";
+  }
+  const statusMatch = /^HTTP (\d{3})/.exec(message);
+  if (statusMatch) {
+    const status = Number(statusMatch[1]);
+    if (status === 401) return "登录已过期，请重新登录";
+    if (status === 403) return "没有权限执行该操作";
+    if (status === 429) return "请求太频繁了，请稍后再试";
+    if (status >= 500) return "服务器开小差了，请稍后重试";
+  }
+  return message || "对话流异常中断，请重试";
+};
+
+/**
+ * SSE 流式请求的认证与错误包装：每次发请求实时读 token（agent 实例 useMemo
+ * 一次创建，闭包捕获会陈旧，必须请求时现读）。两类拦截：
+ * - 401（令牌缺失/过期）：清会话并跳登录 —— SSE 端点在 200 流式头之后不走
+ *   全局异常处理器，只能在 fetch 层拦截，与 lib/http.ts 的 REST 拦截器口径一致；
+ * - 其余非 2xx：解析响应信封取 error_message（业务错误），5xx/解析失败给
+ *   归类提示，抛出干净 Error —— 避免 HttpAgent 把 `HTTP 500: {原始JSON}`
+ *   整段怼进聊天气泡。
  */
 const authenticatedFetch: typeof fetch = async (input, init) => {
   const token = getToken();
   const headers = new Headers(init?.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(input, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(input, { ...init, headers });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new Error("网络连接中断，请检查网络后重试");
+  }
   if (response.status === 401) {
     useAuthStore.getState().logout();
     if (
@@ -35,6 +69,24 @@ const authenticatedFetch: typeof fetch = async (input, init) => {
         `/login?next=${encodeURIComponent(window.location.pathname)}`,
       );
     }
+    return response;
+  }
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const text = await response.text();
+      const body = JSON.parse(text) as { error_message?: unknown };
+      detail =
+        typeof body?.error_message === "string" && body.error_message
+          ? body.error_message
+          : null;
+    } catch {
+      // 非 JSON 响应体（如网关 HTML 错误页），走状态码兜底
+    }
+    if (response.status >= 500) {
+      throw new Error(detail ?? "服务器开小差了，请稍后重试");
+    }
+    throw new Error(detail ?? `请求失败（HTTP ${response.status}）`);
   }
   return response;
 };
@@ -64,11 +116,21 @@ export const AgenticRuntimeProvider = ({
     isLoadingMore,
     loadMoreConversations,
     currentThreadId,
+    error: listError,
+    refreshConversations,
   } = useConversationList(agent);
 
   const runtime = useAgUiRuntime({
     agent,
     adapters: { threadList: threadListAdapter },
+    // 流异常的友好输出：runtime 把本轮错误同时写进助手消息的错误框（聊天气泡
+    // 内联展示 friendlyStreamError 归类后的一句话）并回调到这里；toast 让
+    // 错误离开消息流仍可见。401 时页面即将跳登录，不弹。
+    onError: (error) => {
+      const message = friendlyStreamError(error);
+      if (/^HTTP 401\b/.test(error.message)) return;
+      toast.error(message);
+    },
     // 「停止生成」双通道取消：
     // 1) REST 置服务端取消标志——断链事件可能被代理/缓冲吞掉，且工具执行中
     //    的生成器无法被断链打断，标志由流式循环在节流边界与工具入口感知收口；
@@ -91,8 +153,10 @@ export const AgenticRuntimeProvider = ({
       hasMore,
       isLoadingMore,
       currentThreadId,
+      listError,
+      refreshConversations,
     }),
-    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId],
+    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId, listError, refreshConversations],
   );
 
   return (

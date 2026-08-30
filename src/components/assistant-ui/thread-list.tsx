@@ -2,11 +2,19 @@
 import { useState, type FC } from "react";
 
 import { ThreadListPrimitive, ThreadListItemPrimitive, useAuiState } from "@assistant-ui/react";
-import { ChevronsDownIcon, Loader2Icon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronsDownIcon,
+  Loader2Icon,
+  PlusIcon,
+  RefreshCwIcon,
+  TriangleAlertIcon,
+  Trash2Icon,
+} from "lucide-react";
 
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { useConversationActions } from "@/hooks/use-conversation-list";
+import { BizError } from "@/lib/http";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,9 +30,10 @@ import { cn } from "@/lib/utils";
  *     触发 adapter.onDelete，没有确认步骤，硬删除场景不能裸用）→ 先弹
  *     ConfirmDialog 确认，再调 useConversationActions().deleteConversation
  *
- * 当前选中态：assistant-ui 不在 item 上暴露 data-state，按官方注释用
- * `s.threads.mainThreadId === s.threadListItem.id` 比较（见
- * @assistant-ui/core ThreadListItemEvents 注释）。
+ * 当前选中态：external-store 模式下 `s.threads.mainThreadId` 不随会话切换
+ * 变化，不能用作高亮数据源 —— 改用 use-conversation-list 维护的
+ * `currentThreadId` 镜像三态判定：`string` = 高亮该会话，`null`（新会话）
+ * 与 `undefined`（启动初态）= 不高亮任何一项。
  */
 
 /** 待删除会话（渲染确认弹窗用） */
@@ -36,8 +45,14 @@ interface DeletingThread {
 export const ThreadList: FC<{ onRequestClose?: () => void }> = ({
   onRequestClose,
 }) => {
-  const { deleteConversation, hasMore, isLoadingMore, loadMoreConversations } =
-    useConversationActions();
+  const {
+    deleteConversation,
+    hasMore,
+    isLoadingMore,
+    loadMoreConversations,
+    listError,
+    refreshConversations,
+  } = useConversationActions();
   const [deleting, setDeleting] = useState<DeletingThread | null>(null);
 
   return (
@@ -61,6 +76,33 @@ export const ThreadList: FC<{ onRequestClose?: () => void }> = ({
         <PlusIcon className="size-4" />
         <span>新建对话</span>
       </ThreadListPrimitive.New>
+
+      {/* 加载失败横幅：初始加载/手动刷新失败时给出明确提示与重试入口，
+          替代静默空白列表；文案优先取后端业务错误（BizError） */}
+      {listError && (
+        <div
+          data-slot="aui_thread-list-error"
+          className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5"
+        >
+          <div className="flex items-start gap-2 text-xs leading-relaxed text-destructive">
+            <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              {listError instanceof BizError
+                ? listError.message
+                : "会话列表加载失败，请检查网络后重试"}
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 justify-center gap-1.5 text-xs"
+            onClick={() => void refreshConversations()}
+          >
+            <RefreshCwIcon className="size-3.5" />
+            重试
+          </Button>
+        </div>
+      )}
 
       {/* 会话列表：Items 用 children render-prop 逐条渲染 */}
       <div
@@ -126,13 +168,13 @@ const ThreadListRow: FC<ThreadListRowProps> = ({
   onRequestDelete,
   onRequestClose,
 }) => {
-  // 当前激活的会话 id 与本 item 的 id 比较，决定高亮态。
+  // 当前激活的会话 id（三态镜像，见 ConversationActions.currentThreadId 注释）
+  // 与本 item 的 id 比较，决定高亮态：null/undefined（新会话/启动初态）不高亮。
   // useAuiState 必须在 ThreadListItem 上下文内调用（Row 由 Items render-prop 渲染）。
-  const isActive = useAuiState(
-    (s) => s.threads.mainThreadId === s.threadListItem.id,
-  );
+  const { currentThreadId } = useConversationActions();
   const itemId = useAuiState((s) => s.threadListItem.id);
   const itemTitle = useAuiState((s) => s.threadListItem.title);
+  const isActive = currentThreadId != null && currentThreadId === itemId;
 
   return (
     // Root 包裹单条会话。relative 给 Delete 按钮做绝对定位锚点。

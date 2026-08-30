@@ -62,6 +62,13 @@ export interface ConversationActions {
   hasMore: boolean;
   isLoadingMore: boolean;
   /**
+   * 会话列表加载失败（初始加载/手动刷新的网络与业务异常），null = 无错误。
+   * 侧栏据此渲染失败横幅 + 重试入口；追加加载的失败已有 toast，不走这里。
+   */
+  listError: Error | null;
+  /** 重新加载会话列表第 1 页（失败横幅的「重试」动作） */
+  refreshConversations: () => Promise<void>;
+  /**
    * 当前会话 id 镜像（agent.threadId 的 React 化影子），供路由同步消费：
    * `undefined` = 尚未同步（应用启动初态，不产生任何导航）；
    * `null` = 新会话（未发消息、后端未落库，无 id 可上 URL）；
