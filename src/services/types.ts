@@ -9,6 +9,7 @@
 export interface BackendConversation {
   id: number;
   agentic_id: string;
+  user_id: string;
   thread_id: string;
   current_turn_id?: string | null;
   conversation_title: string;

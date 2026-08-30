@@ -90,7 +90,8 @@ export const PdfSourcePanel = () => {
       data-slot="pdf-source-panel"
       aria-label="检索来源预览"
       className={cn(
-        "fixed inset-y-0 right-0 z-40 flex w-[min(620px,44vw)] flex-col border-l bg-background shadow-xl transition-transform duration-200 ease-out",
+        // 移动端全屏（44vw 在窄屏只剩 ~170px 不可用），sm 起恢复右侧滑出面板
+        "fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l bg-background shadow-xl transition-transform duration-200 ease-out sm:w-[min(620px,44vw)]",
         entered ? "translate-x-0" : "translate-x-full",
       )}
     >

@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, type FC } from "react";
 
@@ -34,7 +33,9 @@ interface DeletingThread {
   title: string;
 }
 
-export const ThreadList: FC = () => {
+export const ThreadList: FC<{ onRequestClose?: () => void }> = ({
+  onRequestClose,
+}) => {
   const { deleteConversation, hasMore, isLoadingMore, loadMoreConversations } =
     useConversationActions();
   const [deleting, setDeleting] = useState<DeletingThread | null>(null);
@@ -44,12 +45,13 @@ export const ThreadList: FC = () => {
       data-slot="aui_thread-list-root"
       className="aui-thread-list-root flex h-full w-full flex-col gap-2 p-2"
     >
-      {/* 新建会话：触发 adapter.onSwitchToNewThread */}
+      {/* 新建会话：触发 adapter.onSwitchToNewThread；移动端抽屉里选中后收起 */}
       <ThreadListPrimitive.New
         render={
           <Button
             variant="outline"
             className="aui-thread-list-new w-full justify-start gap-2 border-dashed border-border/80 text-muted-foreground hover:border-primary/50 hover:bg-card hover:text-foreground"
+            onClick={() => onRequestClose?.()}
           >
             <PlusIcon className="size-4" />
             <span>新建对话</span>
@@ -69,6 +71,7 @@ export const ThreadList: FC = () => {
           {() => (
             <ThreadListRow
               onRequestDelete={(id, title) => setDeleting({ id, title })}
+              onRequestClose={onRequestClose}
             />
           )}
         </ThreadListPrimitive.Items>
@@ -115,9 +118,14 @@ export const ThreadList: FC = () => {
 interface ThreadListRowProps {
   /** 点击删除按钮：由 ThreadList 托管确认弹窗状态 */
   onRequestDelete: (id: string, title: string) => void;
+  /** 选中会话后回调（移动端抽屉收起），桌面端不传 */
+  onRequestClose?: () => void;
 }
 
-const ThreadListRow: FC<ThreadListRowProps> = ({ onRequestDelete }) => {
+const ThreadListRow: FC<ThreadListRowProps> = ({
+  onRequestDelete,
+  onRequestClose,
+}) => {
   // 当前激活的会话 id 与本 item 的 id 比较，决定高亮态。
   // useAuiState 必须在 ThreadListItem 上下文内调用（Row 由 Items render-prop 渲染）。
   const isActive = useAuiState(
@@ -136,13 +144,15 @@ const ThreadListRow: FC<ThreadListRowProps> = ({ onRequestDelete }) => {
         isActive && "bg-card shadow-sm ring-1 ring-border/70",
       )}
     >
-      {/* 点击切换会话 → adapter.onSwitchToThread */}
+      {/* 点击切换会话 → adapter.onSwitchToThread；onClick 附加回调供移动端抽屉收起
+         （primitive 的事件与 render 元素自身 handler 会串联执行，互不影响） */}
       <ThreadListItemPrimitive.Trigger
         render={
           <div
             tabIndex={0}
             role="button"
-            className="aui-thread-list-item-trigger flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 outline-none transition-colors hover:bg-accent/60"
+            onClick={() => onRequestClose?.()}
+            className="aui-thread-list-item-trigger flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 outline-none transition-colors hover:bg-accent/60 max-md:pe-9"
           >
             <span className="aui-thread-list-item-title truncate text-sm text-foreground">
               {/* Title 只渲染纯文本（无 className 支持），用 span 包一层做截断 */}
@@ -152,12 +162,12 @@ const ThreadListRow: FC<ThreadListRowProps> = ({ onRequestDelete }) => {
         }
       />
 
-      {/* 删除：hover/focus 时显示。点击弹确认框，确认后走
-          useConversationActions().deleteConversation（见文件头注释）。
-          垂直定位用固定 top-1 而非 top-1/2 -translate-y-1/2：Button 基类的
-          active:translate-y-px 与 -translate-y-1/2 同写 --tw-translate-y
-          变量，按下时 active 规则胜出会让按钮瞬移半个身位逃出光标，
-          click 落到外层 Trigger 上变成切换会话 */}
+      {/* 删除：桌面 hover/focus 时显示；触屏无 hover，md 以下常显。
+          点击弹确认框，确认后走 useConversationActions().deleteConversation
+          （见文件头注释）。垂直定位用固定 top-1 而非 top-1/2 -translate-y-1/2：
+          Button 基类的 active:translate-y-px 与 -translate-y-1/2 同写
+          --tw-translate-y 变量，按下时 active 规则胜出会让按钮瞬移半个身位
+          逃出光标，click 落到外层 Trigger 上变成切换会话 */}
       <Button
         variant="ghost"
         size="icon-sm"
@@ -165,6 +175,7 @@ const ThreadListRow: FC<ThreadListRowProps> = ({ onRequestDelete }) => {
           "aui-thread-list-item-delete",
           "absolute end-1 top-1 opacity-0 transition-opacity",
           "group-hover/item:opacity-100 focus-visible:opacity-100",
+          "max-md:top-0.5 max-md:size-8 max-md:opacity-100",
         )}
         aria-label="Delete conversation"
         onClick={() => onRequestDelete(itemId, itemTitle ?? "New Chat")}

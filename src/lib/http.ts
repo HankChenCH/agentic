@@ -2,6 +2,7 @@ import axios from "axios";
 import type { AxiosRequestConfig } from "axios";
 
 import { REST_BASE } from "@/lib/config";
+import { getToken, useAuthStore } from "@/stores/auth-store";
 
 /**
  * 后端 REST 响应统一信封（见 server Response.success）。
@@ -57,6 +58,32 @@ export const http = axios.create({
 const isBinaryResponse = (config: AxiosRequestConfig | undefined) =>
   config?.responseType === "arraybuffer" || config?.responseType === "blob";
 
+/**
+ * 401 统一处理：清会话并跳登录页（带 next 回跳参数）。
+ * /auth/* 自身的 401（用户名或密码错误）属于业务错误，交给调用方在
+ * 表单上展示，不做登出跳转。
+ */
+function handleUnauthorized(url: string | undefined) {
+  if (url?.startsWith("/auth/")) return;
+  useAuthStore.getState().logout();
+  if (
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/login")
+  ) {
+    window.location.assign(
+      `/login?next=${encodeURIComponent(window.location.pathname)}`,
+    );
+  }
+}
+
+// 请求拦截器：注入 Authorization: Bearer <token>（token 实时读 store，
+// 登录/登出后无需重建实例）
+http.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
 /** 二进制错误 body（ArrayBuffer）解码回信封结构，拿不到就返回 undefined */
 function decodeBinaryEnvelope(data: unknown): ApiResponse | undefined {
   if (!(data instanceof ArrayBuffer)) return undefined;
@@ -87,6 +114,11 @@ http.interceptors.response.use(
     const body =
       (decodeBinaryEnvelope(error?.response?.data) as ApiResponse | undefined) ??
       (error?.response?.data as ApiResponse | undefined);
+    // 令牌缺失/过期：除 /auth/* 外统一登出并回登录页（SSE 流式端点不走
+    // 这里的 axios 实例，其 401 在 agentic-runtime 的 fetch 覆盖里处理）
+    if (error?.response?.status === 401) {
+      handleUnauthorized(error?.config?.url as string | undefined);
+    }
     if (
       body &&
       typeof body === "object" &&

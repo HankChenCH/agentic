@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -21,6 +20,7 @@ import { conversationService } from "@/services/conversation-service";
 import { toThreadMessages } from "@/services/translators/thread-message-translator";
 import type { BackendConversation } from "@/services/types";
 import { BizError } from "@/lib/http";
+import { useAuthStore } from "@/stores/auth-store";
 
 // ===========================================================================
 // Hook —— 会话列表的状态管理 + runtime adapter 装配
@@ -61,6 +61,13 @@ export interface ConversationActions {
   loadMoreConversations: () => Promise<void>;
   hasMore: boolean;
   isLoadingMore: boolean;
+  /**
+   * 当前会话 id 镜像（agent.threadId 的 React 化影子），供路由同步消费：
+   * `undefined` = 尚未同步（应用启动初态，不产生任何导航）；
+   * `null` = 新会话（未发消息、后端未落库，无 id 可上 URL）；
+   * `string` = 正在查看的会话 thread_id。
+   */
+  currentThreadId: string | null | undefined;
 }
 
 export const ConversationActionsContext =
@@ -103,6 +110,8 @@ export interface UseConversationListResult {
   isLoadingMore: boolean;
   loadMoreConversations: () => Promise<void>;
   deleteConversation: (threadId: string) => Promise<boolean>;
+  /** 当前会话 id 镜像（语义见 ConversationActions.currentThreadId） */
+  currentThreadId: string | null | undefined;
 }
 
 /**
@@ -141,6 +150,13 @@ export function useConversationList(
   const [activeThreadId, setActiveThreadId] = useState<string | undefined>(
     undefined,
   );
+
+  // 会话身份镜像（见 ConversationActions.currentThreadId 注释）。agent 是
+  // 普通对象、threadId 变更不触发渲染，这里在每个变更点同步推一份 state，
+  // 供 thread-route-sync 做 URL ↔ runtime 双向绑定。
+  const [currentThreadId, setCurrentThreadId] = useState<
+    string | null | undefined
+  >(undefined);
 
   const refreshConversations = useCallback(async () => {
     setIsLoading(true);
@@ -193,9 +209,14 @@ export function useConversationList(
     }
   }, [page, pageSize]);
 
+  // 初始加载按登录态门控：AgenticRuntimeProvider 包在路由外层（跨页保活），
+  // 未登录挂载时也会走到这里——RequireAuth 会跳登录页，但不能先发一记必
+  // 401 的列表请求；登录后 token 变化触发首次加载。
+  const token = useAuthStore((s) => s.token);
   useEffect(() => {
+    if (!token) return;
     void refreshConversations();
-  }, [refreshConversations]);
+  }, [refreshConversations, token]);
 
   // ── 轮次结束后的标题回填 ────────────────────────────────────────
   // conversations 的 ref 镜像：订阅回调闭包里要读"最新"列表判断标题是否
@@ -244,6 +265,14 @@ export function useConversationList(
     // stopped 随订阅生命周期存在：卸载/重订阅后让进行中的轮询循环尽快退出
     const stopped = { current: false };
     const { unsubscribe } = agent.subscribe({
+      onRunStartedEvent: () => {
+        // 新会话（镜像为 null/undefined）首条消息发出后，agent.threadId 才是
+        // 后端 get-or-create 落库的会话真身 —— 此刻把镜像推进到具体 id，
+        // 驱动路由落到 /chat/:threadId；既有会话内发消息镜像已一致，不动。
+        setCurrentThreadId((prev) =>
+          prev === agent.threadId ? prev : agent.threadId,
+        );
+      },
       onRunFinishedEvent: ({ outcome, input }) => {
         if (outcome !== "success") return; // interrupt 不是完整轮次
         void pollConversationTitle(input.threadId, () => stopped.current);
@@ -272,6 +301,7 @@ export function useConversationList(
     // 切换时更新它 —— 新建会话必须换一个新 threadId，否则第一条消息仍会
     // get-or-create 到旧会话（后端无显式建会话接口，id 由前端决定）。
     agent.threadId = randomUUID();
+    setCurrentThreadId(null);
     // 后端 init_conversation 是 chat 时 get-or-create，无需显式建会话。
     // 新会话在第一次发消息时才落库；切回列表时 refresh 即可看到它。
     // TODO(可选): 若后端将来支持 POST /conversation 显式建空会话，在此调用
@@ -284,6 +314,9 @@ export function useConversationList(
     ): Promise<{ messages: readonly ThreadMessage[] }> => {
       // 同上：把选中会话的 thread_id 同步给 agent，后续消息才会发往该会话。
       agent.threadId = threadId;
+      // 镜像在 await 之前同步推进：连续快速切换时最后点击者胜出，
+      // URL 不会停留在先决会话上。
+      setCurrentThreadId(threadId);
       // 切换会话 = 加载历史：
       //   conversationService.listConversationHistory → translator.toThreadMessages
       //   → fromThreadMessageLike 规整成 ThreadMessage[]（统一 complete）
@@ -328,6 +361,8 @@ export function useConversationList(
       if (agent.threadId === threadId) {
         agent.threadId = randomUUID();
         setActiveThreadId(agent.threadId);
+        // 路由镜像回到"新会话"语义，thread-route-sync 会把地址栏送回 /
+        setCurrentThreadId(null);
       }
       await refreshConversations();
       toast.success("会话已删除");
@@ -374,5 +409,6 @@ export function useConversationList(
     isLoadingMore,
     loadMoreConversations,
     deleteConversation,
+    currentThreadId,
   };
 }

@@ -1,4 +1,3 @@
-"use client";
 
 import { useMemo } from "react";
 import type { ReactNode } from "react";
@@ -13,6 +12,32 @@ import {
 } from "@/hooks/use-conversation-list";
 import { SSE_URL } from "@/lib/config";
 import { conversationService } from "@/services/conversation-service";
+import { getToken, useAuthStore } from "@/stores/auth-store";
+
+/**
+ * SSE 流式请求的认证包装：每次发请求实时读 token（agent 实例 useMemo 一次
+ * 创建，闭包捕获会陈旧，必须请求时现读）；401（令牌缺失/过期）时清会话并
+ * 跳登录——SSE 端点在 200 流式头之后不走全局异常处理器，401 只能在 fetch
+ * 层拦截，与 lib/http.ts 的 REST 拦截器口径一致。
+ */
+const authenticatedFetch: typeof fetch = async (input, init) => {
+  const token = getToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(input, { ...init, headers });
+  if (response.status === 401) {
+    useAuthStore.getState().logout();
+    if (
+      typeof window !== "undefined" &&
+      !window.location.pathname.startsWith("/login")
+    ) {
+      window.location.assign(
+        `/login?next=${encodeURIComponent(window.location.pathname)}`,
+      );
+    }
+  }
+  return response;
+};
 
 export const AgenticRuntimeProvider = ({
   children,
@@ -23,7 +48,10 @@ export const AgenticRuntimeProvider = ({
   // requestInit 会把整个 RunAgentInput（含 threadId/runId/messages）作为 POST body 发出。
   // 注意：runtime 每次发消息都从 agent.threadId 取值，但库不会在切换会话时更新它，
   // 同步逻辑在 useConversationList 的 onSwitchToThread/onSwitchToNewThread 里。
-  const agent = useMemo(() => new HttpAgent({ url: SSE_URL }), []);
+  const agent = useMemo(
+    () => new HttpAgent({ url: SSE_URL, fetch: authenticatedFetch }),
+    [],
+  );
 
   // 会话列表的加载 / 切换 / 历史回放都封装在 hook 里（agent 传入用于
   // 订阅 RunFinished：轮次结束后轮询标题并刷新列表）。
@@ -35,6 +63,7 @@ export const AgenticRuntimeProvider = ({
     hasMore,
     isLoadingMore,
     loadMoreConversations,
+    currentThreadId,
   } = useConversationList(agent);
 
   const runtime = useAgUiRuntime({
@@ -53,10 +82,17 @@ export const AgenticRuntimeProvider = ({
   });
 
   // 删除、加载更多等会话操作与分页状态经 context 下发给侧栏等
-  // runtime 之外的组件（确认弹窗 / 加载更多按钮入口）
+  // runtime 之外的组件（确认弹窗 / 加载更多按钮入口）；currentThreadId
+  // 供 thread-route-sync 做 URL ↔ runtime 双向绑定
   const actions = useMemo(
-    () => ({ deleteConversation, loadMoreConversations, hasMore, isLoadingMore }),
-    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore],
+    () => ({
+      deleteConversation,
+      loadMoreConversations,
+      hasMore,
+      isLoadingMore,
+      currentThreadId,
+    }),
+    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId],
   );
 
   return (
