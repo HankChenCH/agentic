@@ -1,4 +1,4 @@
-"""检索工具：溯源结构化 JSON、空结果与非法 kb_ids 容错。"""
+"""检索工具：溯源结构化 JSON、空结果与非法 kb_ids 容错、config 身份透传。"""
 
 import json
 from types import SimpleNamespace
@@ -14,11 +14,12 @@ class StubRetrieval:
         self.result = result
         self.captured = None
 
-    def list_knowledge_for_agent(self, agentic_id):
+    def list_visible_knowledge(self, user_id):
+        self.captured = user_id
         return self.kbs
 
-    def search_for_agent(self, agentic_id, query, kb_ids=None, top_k=4):
-        self.captured = (agentic_id, query, kb_ids, top_k)
+    def search_for_user(self, user_id, query, kb_ids=None, top_k=4):
+        self.captured = (user_id, query, kb_ids, top_k)
         return self.result
 
 
@@ -83,23 +84,29 @@ def test_knowledge_search_empty_result_and_notes():
 def test_knowledge_list_output():
     kb = SimpleNamespace(
         name="产品手册", id=uuid4(), doc_num=3, status=SimpleNamespace(value="enabled"),
-        description="安装与配置",
+        is_public=True, description="安装与配置",
     )
     output = tools_from(StubRetrieval(kbs=[kb]))["knowledge_list"].invoke({})
     assert "产品手册" in output and "3 篇文档" in output and "enabled" in output
+    assert "公开" in output
     assert "安装与配置" in output
 
 
 def test_invalid_kb_ids_dropped_not_fatal():
     stub = StubRetrieval()
     valid = uuid4()
-    tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": [str(valid), "not-a-uuid"]})
-    agentic_id, _query, kb_ids, _top_k = stub.captured
-    assert agentic_id == "builtin:demo"
+    user_id = uuid4()
+    tools_from(stub)["knowledge_search"].invoke(
+        {"query": "问题", "kb_ids": [str(valid), "not-a-uuid"]},
+        config={"configurable": {"user_id": str(user_id)}},
+    )
+    captured_user_id, _query, kb_ids, _top_k = stub.captured
+    assert captured_user_id == user_id  # 可运行 config 注入的 user_id（字符串 → UUID）
     assert kb_ids == [valid]  # 非法项剔除，合法项保留
 
 
 def test_none_kb_ids_passes_through():
     stub = StubRetrieval()
     tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": None})
+    assert stub.captured[0] is None  # 直调无 config → 无身份
     assert stub.captured[2] is None  # 缺省 = 全部可用库

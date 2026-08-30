@@ -11,6 +11,19 @@ from wireup import injectable
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 
 
+def _visible_clause(user_id: UUID | None):
+    """可见性谓词：私有库仅属主可见，公开库所有人可见。
+
+    user_id 缺失（无身份上下文）按匿名处理——只看公开库，不泄露他人私有库。
+    """
+    if user_id is None:
+        return col(KnowledgeBase.is_public)
+    return or_(
+        col(KnowledgeBase.user_id) == user_id,
+        col(KnowledgeBase.is_public),
+    )
+
+
 @injectable
 @dataclass
 class KnowledgeBaseRepository:
@@ -67,10 +80,7 @@ class KnowledgeBaseRepository:
         # deleting 资源视同已删除：列表与计数都不返回（详情接口仍可查到）
         # 可见性：属主本人或公开库；他人私有库不出现在列表与计数中
         offset = (page - 1) * page_size
-        visible = or_(
-            col(KnowledgeBase.user_id) == user_id,
-            col(KnowledgeBase.is_public),
-        )
+        visible = _visible_clause(user_id)
         with Session(self.engine, expire_on_commit=False) as session:
             total = session.exec(
                 select(func.count())
@@ -92,3 +102,17 @@ class KnowledgeBaseRepository:
             ).all()
             session.commit()
         return list(result), int(total)
+
+    def list_visible_kbs(self, user_id: UUID | None) -> List[KnowledgeBase]:
+        # 检索组件用的非分页口径：与 list_kbs 同一可见性谓词与排序
+        with Session(self.engine, expire_on_commit=False) as session:
+            result = session.exec(
+                select(KnowledgeBase)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    _visible_clause(user_id),
+                )
+                .order_by(col(KnowledgeBase.weight).desc(), col(KnowledgeBase.created_at).desc())
+            ).all()
+            session.commit()
+        return list(result)

@@ -1,15 +1,6 @@
 from app.agents.base import BaseAgent, register_agent
 
 
-def get_weather(city: str, date: str):
-    """
-    查询对应城市的天气情况
-    city: 城市名称, eg: 中山
-    date: 日期，eg: 2026-01-01
-    """
-    return f"{city} {date} 天气晴朗，气温33度，湿度60%"
-
-
 @register_agent
 class DemoAgent(BaseAgent):
     """内置演示智能体：通用助手 + 天气查询 + 记忆召回 + 知识库检索工具。"""
@@ -30,6 +21,5 @@ class DemoAgent(BaseAgent):
             """
 
     def build_tools(self) -> list:
-        # 组件能力（记忆三件套 + 知识双工具）经 toolbox 按注册表装配；
-        # get_weather 是智能体自带工具，不属组件能力
-        return [get_weather, *self.toolbox.tools(self.agentic_id)]
+        # 全部工具（记忆三件套 + 知识双工具 + 演示工具 get_weather）经 toolbox 按注册表装配
+        return self.toolbox.tools(self.agentic_id)

@@ -1,7 +1,7 @@
 """memory 组件清单：能力声明（spec）+ 工具构造 + 装配器。
 
 能力导出 = 深度回忆三件套（timeline/expand/state_at）；快速回忆不走
-工具——会话开始前由 ChatOrchestrator 自动注入（见 ability.recall 的
+工具——会话开始前由 AgenticService 自动注入（见 ability.recall 的
 build_fast_context）。三件套均需当前会话 thread 做去重登记与访问强化。
 
 thread 的传递方式：不能闭包捕获（agent 实例按 agentic_id 跨会话缓存），
@@ -16,14 +16,19 @@ user_id 决定记忆作用域（用户级隔离），thread_id 仅用于会话�
 """
 
 from dataclasses import dataclass
-from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from wireup import injectable
 
-from app.components.base import ComponentSpec, ToolSpec, register_component
+from app.components.base import (
+    ComponentSpec,
+    ToolSpec,
+    configurable_thread,
+    configurable_user,
+    register_component,
+)
 from app.components.memory.ability.recall import MemoryRecallService
 
 
@@ -45,29 +50,11 @@ class StateAtArgs(BaseModel):
     time: str = Field(description="要回放的日期，YYYY-MM-DD 格式")
 
 
-def _thread(config: RunnableConfig) -> UUID | None:
-    """从注入的运行配置取当前会话 thread；缺失（如单测直调）返回 None。"""
-    return _uuid_of(config, "thread_id")
-
-
-def _user(config: RunnableConfig) -> UUID | None:
-    """从注入的运行配置取当前用户（记忆作用域）；缺失（如单测直调）返回 None。"""
-    return _uuid_of(config, "user_id")
-
-
-def _uuid_of(config: RunnableConfig, key: str) -> UUID | None:
-    raw = (config or {}).get("configurable", {}).get(key)
-    if raw is None:
-        return None
-    try:
-        return raw if isinstance(raw, UUID) else UUID(str(raw))
-    except ValueError:
-        return None
-
-
 def _build_timeline_tool(memory_service: MemoryRecallService) -> StructuredTool:
     def timeline(query: str, config: RunnableConfig) -> str:
-        return memory_service.timeline(query=query, user_id=_user(config), thread_id=_thread(config))
+        return memory_service.timeline(
+            query=query, user_id=configurable_user(config), thread_id=configurable_thread(config)
+        )
 
     return StructuredTool.from_function(
         name="timeline",
@@ -84,7 +71,9 @@ def _build_timeline_tool(memory_service: MemoryRecallService) -> StructuredTool:
 
 def _build_expand_tool(memory_service: MemoryRecallService) -> StructuredTool:
     def expand(entity: str, config: RunnableConfig) -> str:
-        return memory_service.expand(entity_ref=entity, user_id=_user(config), thread_id=_thread(config))
+        return memory_service.expand(
+            entity_ref=entity, user_id=configurable_user(config), thread_id=configurable_thread(config)
+        )
 
     return StructuredTool.from_function(
         name="expand",
@@ -101,7 +90,9 @@ def _build_expand_tool(memory_service: MemoryRecallService) -> StructuredTool:
 
 def _build_state_at_tool(memory_service: MemoryRecallService) -> StructuredTool:
     def state_at(time: str, config: RunnableConfig) -> str:
-        return memory_service.state_at(moment_hint=time, user_id=_user(config), thread_id=_thread(config))
+        return memory_service.state_at(
+            moment_hint=time, user_id=configurable_user(config), thread_id=configurable_thread(config)
+        )
 
     return StructuredTool.from_function(
         name="state_at",

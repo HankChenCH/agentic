@@ -144,6 +144,20 @@ def test_list_knowledge_scoped_to_owner_plus_public(engine):
     assert theirs["total"] == 3
 
 
+def test_list_visible_kbs_non_paged(engine):
+    # 检索组件用的非分页口径：与 list_kbs 同一可见性谓词，无身份时仅公开库
+    repo = KnowledgeBaseRepository(engine=engine)
+    make_kb(engine, "我的私有", user_id=TEST_USER_ID, is_public=False)
+    make_kb(engine, "我的公开", user_id=TEST_USER_ID, is_public=True)
+    make_kb(engine, "他人私有", user_id=OTHER_USER_ID, is_public=False)
+    make_kb(engine, "他人公开", user_id=OTHER_USER_ID, is_public=True)
+
+    assert sorted(kb.name for kb in repo.list_visible_kbs(TEST_USER_ID)) == [
+        "他人公开", "我的公开", "我的私有",
+    ]
+    assert sorted(kb.name for kb in repo.list_visible_kbs(None)) == ["他人公开", "我的公开"]
+
+
 # ---------- 详情：公开库他人可读，私有库他人 404 ----------
 
 

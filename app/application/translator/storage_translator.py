@@ -146,10 +146,41 @@ class StorageTranslator:
     # tools
     # ------------------------------------------------------------------
     def _translate_tools(self, payload: dict[str, Any]) -> None:
-        """tools 投影给出 tool 的执行结果（ToolsTransformer 归一化后的契约）。"""
+        """tools 投影给出 tool 的执行情况（归一化后的 tools 通道契约）。
+
+        TOOL_CALL 行的落库来源有二：模型发起的调用由 messages 路径按
+        ``stream.tool_calls`` 落库（先于 tool-started 处理，按 tool_call_id
+        去重）；图节点自造的工具步骤（无模型 tool_call，如 builtin:rag 的
+        检索节点）由 tool-started 在此补齐，args 取事件携带的可选字段。
+        tool-result 只落 TOOL_RESULT 行并关联父 TOOL_CALL；tool-finished /
+        tool-error 不落库（结果在 tool-result，错误无结果可存）。
+        """
         event_type = payload.get("event")
+        if event_type == "tool-started":
+            tool_call_id = payload.get("tool_call_id", "")
+            if not tool_call_id or tool_call_id in self._tool_call_msg_ids:
+                return
+            tc_id = uuid4()
+            self._tool_call_msg_ids[tool_call_id] = tc_id
+            self._append(AgenticConversationMessage(
+                thread_id=self.thread_id,
+                turn_id=self.turn_id,
+                message_id=tc_id,
+                parent_message_id=None,
+                sequence_num=self._next_seq(),
+                role=AgenticMessageRole.ASSISTANT,
+                message_type=AgenticMessageType.TOOL_CALL,
+                content=[{
+                    "type": "tool_call",
+                    "tool_call_id": tool_call_id,
+                    "name": payload.get("tool_name", ""),
+                    "args": payload.get("args", {}),
+                }],
+                token_usage={},
+                latency_ms=0,
+            ))
+            return
         if event_type != "tool-result":
-            # tool-started / tool-finished / tool-error 不落库（结果在 tool-result）
             return
 
         tool_call_id = payload.get("tool_call_id", "")

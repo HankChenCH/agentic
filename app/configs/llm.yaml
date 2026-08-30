@@ -29,3 +29,9 @@ providers:
     task_type: embedding
     api_url: http://127.0.0.1:11434
     model: bge-m3
+  ollama-reranker:
+    type: ollama
+    task_type: rerank
+    api_url: http://127.0.0.1:11434
+    model: qllama/bge-reranker-v2-m3:q8_0
+

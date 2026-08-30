@@ -26,7 +26,7 @@ class MemoryRepository(ABC):
         作用域语义：视图内所有读操作仅命中该用户的行（id 直取命中他人行
         一律视为不存在），写操作把归属钉到该用户。注入的实例是**无作用域**
         （全局算子视角），仅供维护 CLI（repair / rebuild-index）与 for_user
-        工厂使用——用户侧行程（chat 收尾/召回/管理端点链）必须先 for_user，
+        工厂使用——用户侧行程（run 收尾/召回/管理端点链）必须先 for_user，
         这是记忆用户级隔离的强制点。
         """
         raise NotImplementedError

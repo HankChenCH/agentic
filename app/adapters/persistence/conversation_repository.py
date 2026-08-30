@@ -44,7 +44,7 @@ class ConversationRepository:
         return conversation
 
     def init_conversation(self, user_id: UUID, thread_id: UUID, agentic_id: str) -> AgenticConversation:
-        # get-or-create：仅用于 chat() 的隐式建会话（describe 不应再走这里）。
+        # get-or-create：仅用于 run() 的隐式建会话（describe 不应再走这里）。
         # 已存在时不校验归属——他人会话的拦截是业务规则，由上层
         # （ConversationService.open_turn）比对 user_id 后统一 404。
         # expire_on_commit=False：commit 后对象属性不失效，离开 session（detached）

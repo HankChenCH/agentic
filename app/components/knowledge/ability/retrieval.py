@@ -1,8 +1,10 @@
-"""知识库检索能力（knowledge 唯一能力模块）：绑定解析 → 状态/模型守卫 →
+"""知识库检索能力（knowledge 唯一能力模块）：可见性圈定 → 状态/模型守卫 →
 向量扇出融合 → 命中组装。
 
 消费方是 manifest 的 agent 工具：LLM 先经 knowledge_list
 了解可用知识库，再按需以 kb_ids 自选库检索（缺省检索全部可用库）。
+可用口径是归属可见性：私有库仅属主可见，公开库所有人可见（与
+knowledge_base.user_id/is_public 的管理侧读路径同规则）。
 状态收敛规则：知识库须为 enabled、文档须为 enabled 才可被召回——管理
 侧的启停开关即检索开关。
 """
@@ -18,7 +20,6 @@ from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
 
 
@@ -38,7 +39,6 @@ class RetrievalHit:
 @injectable
 @dataclass
 class KnowledgeRetrievalService:
-    binding_repo: KnowledgeBindingRepository
     kb_repo: KnowledgeBaseRepository
     document_repo: KnowledgeDocumentRepository
     vector_index: KnowledgeVectorIndex
@@ -48,25 +48,25 @@ class KnowledgeRetrievalService:
     def __post_init__(self):
         self.logger = self.logger_factory.get_logger(__name__)
 
-    def list_knowledge_for_agent(self, agentic_id: str) -> List[KnowledgeBase]:
-        """agent 可用（已绑定且未在删除中）的知识库，供 knowledge_list 展示。"""
-        bindings = self.binding_repo.list_by_agent(agentic_id)
-        kbs = (self.kb_repo.get_kb(binding.kb_id) for binding in bindings)
-        return [kb for kb in kbs if kb is not None and kb.status != KnowledgeStatus.DELETING]
+    def list_visible_knowledge(self, user_id: UUID | None) -> List[KnowledgeBase]:
+        """当前用户可见（私有=属主本人 + 公开）且未在删除中的知识库，供 knowledge_list 展示。"""
+        return self.kb_repo.list_visible_kbs(user_id)
 
-    def search_for_agent(
+    def search_for_user(
         self,
-        agentic_id: str,
+        user_id: UUID | None,
         query: str,
         kb_ids: List[UUID] | None = None,
         top_k: int = DEFAULT_TOP_K,
+        alpha: float = 1.0,
     ) -> Tuple[List[RetrievalHit], List[str]]:
-        """agent 域检索：返回（命中列表, 跳过说明——工具会把说明附在结果尾部）。
+        """用户域检索：返回（命中列表, 跳过说明——工具会把说明附在结果尾部）。
 
-        编排：绑定解析 → LLM 自选库子集过滤 → 库级守卫（enabled + 嵌入
+        编排：可见性圈定 → LLM 自选库子集过滤 → 库级守卫（enabled + 嵌入
         模型一致）→ 多库扇出融合 → 文档级 enabled 后滤 → 溯源组装。
+        ``alpha`` 透传向量层（1.0 纯向量，<1 混合 BM25+向量）。
         """
-        kbs = self.list_knowledge_for_agent(agentic_id)
+        kbs = self.list_visible_knowledge(user_id)
         notes: List[str] = []
 
         selected = kbs
@@ -76,7 +76,7 @@ class KnowledgeRetrievalService:
             unknown = wanted - {kb.id for kb in kbs}
             if unknown:
                 notes.append(
-                    "未绑定或不存在的知识库已忽略: " + ", ".join(sorted(str(u) for u in unknown))
+                    "不可见或不存在的知识库已忽略: " + ", ".join(sorted(str(u) for u in unknown))
                 )
 
         usable: List[KnowledgeBase] = []
@@ -100,18 +100,21 @@ class KnowledgeRetrievalService:
 
         if not usable:
             return [], notes
-        hits = self.search([kb.id for kb in usable if kb.id], query, top_k=top_k)
+        hits = self.search([kb.id for kb in usable if kb.id], query, top_k=top_k, alpha=alpha)
         return hits, notes
 
-    def search(self, kb_ids: List[UUID], query: str, top_k: int = DEFAULT_TOP_K) -> List[RetrievalHit]:
-        """直连多库检索（管理/调试与未来预检索节点复用）。
+    def search(
+        self, kb_ids: List[UUID], query: str, top_k: int = DEFAULT_TOP_K, alpha: float = 1.0
+    ) -> List[RetrievalHit]:
+        """直连多库检索（管理/调试与 RAG 预检索节点复用）。
 
         过采样 + 文档 enabled 后滤：向量库不存文档状态，Python 侧过滤后
-        截断 top_k（当前规模下后滤代价可忽略）。
+        截断 top_k（当前规模下后滤代价可忽略）。``alpha`` 透传向量层
+        （1.0 纯向量语义检索，<1 开启 Weaviate 混合检索 BM25+向量）。
         """
         # hit.doc_id 是向量 metadata 里的字符串 id，统一为 str 比较
         allowed_doc_ids = {str(doc_id) for doc_id in self.document_repo.list_enabled_doc_ids(kb_ids)}
-        vector_hits: List[VectorHit] = self.vector_index.search_many(kb_ids, query, top_k=top_k * 2)
+        vector_hits: List[VectorHit] = self.vector_index.search_many(kb_ids, query, top_k=top_k * 2, alpha=alpha)
         filtered = [hit for hit in vector_hits if hit.doc_id in allowed_doc_ids][:top_k]
         if not filtered:
             return []

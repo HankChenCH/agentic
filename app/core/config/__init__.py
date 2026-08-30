@@ -14,7 +14,7 @@ from .filesystem import (
     LocalFilesystemEntry,
     S3FilesystemEntry,
 )
-from .http import CorsConfig, HttpConfig, MaxBodyConfig, RateLimitConfig, RateLimitRule
+from .http import CorsConfig, HttpConfig, MaxBodyConfig
 from .loader import ConfigError, load_section, read_config
 from .logging import ConsoleSinkConfig, FileSinkConfig, LoggingConfig, SinkConfig
 from .memory import MemoryConfig
@@ -47,8 +47,6 @@ __all__ = [
     "CorsConfig",
     "HttpConfig",
     "MaxBodyConfig",
-    "RateLimitConfig",
-    "RateLimitRule",
     "LoggingConfig",
     "ConsoleSinkConfig",
     "FileSinkConfig",
@@ -114,7 +112,7 @@ class AppConfig(BaseModel):
         default_factory=get_environment,
     )
     http: HttpConfig = Field(
-        description="HTTP 入口边缘策略：CORS 白名单、限流与请求体大小上限（装配见 app.cmd.http）。",
+        description="HTTP 入口边缘策略：CORS 白名单与请求体大小上限（装配见 app.cmd.http；限流为 fastapi-limiter 依赖，见 app.api.rate_limit）。",
         default_factory=lambda: load_section("http.yaml", HttpConfig),
     )
     auth: AuthConfig = Field(

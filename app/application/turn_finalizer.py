@@ -19,11 +19,11 @@ from app.models.domain.agentic import (
 @injectable
 @dataclass
 class TurnFinalizer:
-    """chat 一轮结束后的收尾加工（流收尾后由 ChatOrchestrator 在后台 daemon 线程调用）。
+    """agentic run 一轮结束后的收尾加工（流收尾后由 AgenticService 在后台 daemon 线程调用）。
 
     三步固定顺序执行，容错语义各不相同，故不做统一的阶段抽象：
     - 填标题：仅首轮（conversation_title 为空）调 LLM；失败只记日志，
-      标题留空、下次 chat 重试；
+      标题留空、下次 run 重试；
     - 聚合 token 用量并落库轮次行：必须成功，失败交给外层兜底；
     - 写长期记忆：失败不影响主链路（与标题同款容错策略）。
     """
@@ -54,7 +54,7 @@ class TurnFinalizer:
                     if title:
                         self.conversations.record_title(conversation, title)
                 except Exception:
-                    # 标题生成失败不影响 turn 落库；会话标题仍为空，下次 chat 会重试
+                    # 标题生成失败不影响 turn 落库；会话标题仍为空，下次 run 会重试
                     self.logger.exception("generate conversation_title failed")
 
             self.conversations.record_turn_usage(turn, turn_messages)
@@ -79,4 +79,4 @@ class TurnFinalizer:
             except Exception:
                 self.logger.exception("memory remember failed")
         except Exception:
-            self.logger.exception("after chat post-processing failed")
+            self.logger.exception("after run post-processing failed")

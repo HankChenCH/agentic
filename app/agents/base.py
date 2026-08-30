@@ -89,6 +89,8 @@ class BaseAgent(ABC):
     - ``build_system_prompt``（必须实现）：智能体人设；
     - ``build_tools``（默认无工具）：以组合方式装配能力（如记忆召回、知识库检索），
       能力依赖经构造注入的 ``toolbox`` 获取；
+    - ``build_graph``（默认预置 ReAct 循环）：自建 StateGraph 的智能体覆写，
+      并按需覆写 stream/invoke；
     - ``preferred_provider``（默认走全局配置）：智能体级模型路由，取值为
       ``LLMConfig.providers`` 的 entry key。
 
@@ -103,9 +105,18 @@ class BaseAgent(ABC):
 
     def __init__(self, model: BaseChatModel, toolbox: AgentToolbox):
         self.model = model
-        # toolbox 必须先于 build_tools() 赋值：后者在图编译时即被调用
+        # toolbox 必须先于 build_graph() 赋值：后者在图编译时即被调用
         self.toolbox = toolbox
-        self._graph = create_agent(
+        self._graph = self.build_graph()
+
+    def build_graph(self) -> CompiledStateGraph:
+        """编译智能体图（实例化时调用一次，stream/invoke 复用）。
+
+        默认实现 = langchain 预置的 model↔tools ReAct 循环；需要自建
+        StateGraph（自有节点与循环，如 RAG 智能体）的子类覆写本方法，
+        并按需覆写 stream/invoke 以适配自定义图的状态形状与流式语义。
+        """
+        return create_agent(
             name=self.agentic_id,
             system_prompt=self.build_system_prompt(),
             model=self.model,

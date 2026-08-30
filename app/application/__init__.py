@@ -1,16 +1,16 @@
-"""编排层（用户侧行程）：chat SSE 编排与轮次收尾。
+"""编排层（用户侧行程）：agentic run SSE 编排与轮次收尾。
 
 依赖方向：可调 domain / components / agents；禁止触碰 repositories
 （持久化一律经领域服务）、api 与向上反向调用。
 """
 
-from .chat_orchestrator import ChatOrchestrator
+from .agentic_service import AgenticService
 from .turn_finalizer import TurnFinalizer
 from .translator import AgUiTranslator, StorageTranslator
 
 __all__ = [
     "AgUiTranslator",
-    "ChatOrchestrator",
+    "AgenticService",
     "StorageTranslator",
     "TurnFinalizer",
 ]

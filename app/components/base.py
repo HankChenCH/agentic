@@ -1,4 +1,5 @@
-"""组件范式核心：声明式 ComponentSpec + 注册表 + 能力清单导出。
+"""组件范式核心：声明式 ComponentSpec + 注册表 + 能力清单导出 + 工具运行时
+注入辅助。
 
 能力范式（v1 能力集合仅 tools）：组件经 ``register_component`` 向注册表
 登记静态 spec——spec 是纯数据（可枚举、可校验、可序列化），不依赖任何
@@ -7,6 +8,15 @@ DI；装配是 DI 行为，由各组件 manifest 里的装配器（@injectable�
 同住 manifest.py，注册表（静态）与装配（DI）共用同一份声明，不会双源
 漂移。spec/装配分离让「组件导出什么能力」无需实例化服务即可回答
 （测试、调试与未来的能力清单端点直接读注册表）。
+
+运行时身份注入：agent 实例按 agentic_id 跨会话缓存，工具不能闭包捕获
+用户/会话身份，也不能用 ContextVar（sync 生成器跨 context 副本 + 工具跑
+在 langgraph 线程池，set/reset 跨不过边界）——统一走 langchain 的 config
+注入：工具函数声明 ``config: RunnableConfig`` 形参（StructuredTool 按显式
+args_schema 构造，该参数不进 LLM 工具 schema、运行时注入），langgraph 把
+``BaseAgent._config`` 的 ``configurable.thread_id / user_id`` 透传进来。
+``configurable_*`` 系列是各组件工具读取该注入的公共入口（缺失返回 None，
+如单测直调）。
 
 组件解剖学（结构范式，总纲见包 ``__init__`` docstring）::
 
@@ -26,8 +36,31 @@ DI；装配是 DI 行为，由各组件 manifest 里的装配器（@injectable�
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Callable
+from uuid import UUID
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
+
+
+def configurable_uuid(config: RunnableConfig | None, key: str) -> UUID | None:
+    """从注入的运行配置 configurable 取 UUID 身份；缺失（如单测直调）返回 None。"""
+    raw = (config or {}).get("configurable", {}).get(key)
+    if raw is None:
+        return None
+    try:
+        return raw if isinstance(raw, UUID) else UUID(str(raw))
+    except ValueError:
+        return None
+
+
+def configurable_user(config: RunnableConfig | None) -> UUID | None:
+    """当前用户（用户级作用域：记忆、知识库可见性）。"""
+    return configurable_uuid(config, "user_id")
+
+
+def configurable_thread(config: RunnableConfig | None) -> UUID | None:
+    """当前会话 thread（会话内去重与投喂登记）。"""
+    return configurable_uuid(config, "thread_id")
 
 
 @dataclass(frozen=True)

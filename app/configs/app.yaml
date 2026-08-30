@@ -2,4 +2,4 @@ name: ${APP_NAME:agentic-app}
 description: this is a framework for agentic app
 # 运行环境 dev/test/prod：决定异常响应详略（dev/test 附 detail+trace，prod 只回通用信息）
 environment: ${APP_ENV:dev}
-default_agentic_id: builtin:demo
+default_agentic_id: ${AGENTIC_DEFAULT_AGENT_ID:builtin:demo}

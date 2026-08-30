@@ -15,6 +15,7 @@ from langchain_core.tools import StructuredTool
 from wireup import injectable
 
 from app.components.base import ComponentSpec
+from app.components.demo import DemoComponent
 from app.components.knowledge import KnowledgeComponent
 from app.components.memory import MemoryComponent
 
@@ -26,6 +27,7 @@ class AgentToolbox:
 
     memory: MemoryComponent
     knowledge: KnowledgeComponent
+    demo: DemoComponent
 
     def __post_init__(self):
         specs = self.specs
@@ -55,5 +57,5 @@ class AgentToolbox:
         selected = self._components() if only is None else [c for c in self._components() if c.spec.name in only]
         return [tool for component in selected for tool in component.tools(agentic_id)]
 
-    def _components(self) -> tuple[MemoryComponent | KnowledgeComponent, ...]:
-        return (self.memory, self.knowledge)
+    def _components(self) -> tuple[MemoryComponent | KnowledgeComponent | DemoComponent, ...]:
+        return (self.memory, self.knowledge, self.demo)

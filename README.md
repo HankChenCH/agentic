@@ -1,12 +1,12 @@
 # agentic · server
 
 `agentic` 的 Python 3.12 后端:**FastAPI + Celery + LangChain/LangGraph**,通过
-[ag-ui 协议](https://docs.ag-ui.com/)(SSE 流)为 React 前端提供流式聊天能力,
+[ag-ui 协议](https://docs.ag-ui.com/)(SSE 流)为 React 前端提供流式 agentic run 能力,
 并附带会话管理与知识库(RAG)的 REST API。
 
 ## 功能一览
 
-- **流式聊天**:`POST /agentic/chat` 以 SSE 输出 ag-ui 事件(文本增量、推理过程、
+- **流式 Agentic run**:`POST /agentic/run` 以 SSE 输出 ag-ui 事件(文本增量、推理过程、
   工具调用),前端零适配映射到 assistant-ui。
 - **多轮会话**:历史由服务端权威落库(SQLite / PostgreSQL),每轮从 DB 重建 LLM
   上下文(含工具调用对的重放),而非信任客户端回传的 messages。
@@ -14,12 +14,17 @@
 - **知识库(RAG)**:PDF 上传 → MinerU 云端解析 → 分块 → bge-m3 嵌入 → Weaviate
   向量检索(支持混合检索);`knowledge_list` / `knowledge_search` 双工具装配给
   LLM,先列库再自选检索。
+- **builtin:rag 图智能体**:自建 LangGraph 状态图的 RAG 专用智能体(非工具循环):
+  查询理解(闲聊/知识分路 + 多轮凝练)→ 混合检索(分路直达,无需 LLM 自选工具)→
+  相关性过滤 → 带 [n] 引用生成,未命中自动改写重试一次后如实兜底;检索步骤以
+  工具事件流式呈现(`AGENTIC_DEFAULT_AGENT_ID=builtin:rag` 启用)。
 - **异步任务**:Celery + Redis 承载文档摄取流水线,上传接口即刻返回、文档状态
   经轮询收敛。
 
 ## 技术栈
 
-FastAPI · Celery · LangChain(`create_agent` + `stream_events`)· LangGraph ·
+FastAPI · Celery · LangChain(`create_agent` + `stream_events`，自建图智能体
+经 `BaseAgent.build_graph()` 扩展点)· LangGraph ·
 SQLModel · wireup(DI)· loguru · ag-ui-protocol · Weaviate(langchain-weaviate)·
 DeepSeek(默认聊天模型)· Ollama(本地嵌入 bge-m3)· MinerU(云端 PDF 解析)·
 rustfs/obstore(S3 兼容对象存储)· uv(包管理)
@@ -57,7 +62,7 @@ uv run uvicorn app.cmd.http.main:server --reload
 uv run celery -A app.cmd.task_executor.main worker
 ```
 
-HTTP 服务监听 `0.0.0.0:8000`,聊天端点即 `http://127.0.0.1:8000/agentic/chat`。
+HTTP 服务监听 `0.0.0.0:8000`,run 端点即 `http://127.0.0.1:8000/agentic/run`。
 
 ## 命令
 
@@ -88,14 +93,14 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | 文件 | 内容 |
 | --- | --- |
 | `app.yaml` | 应用名、运行环境(`APP_ENV: dev/test/prod`)、默认 agent |
-| `http.yaml` | HTTP 边缘策略:CORS 源白名单、chat/上传限流(按客户端 IP 滑动窗口)与请求体大小上限 |
+| `http.yaml` | HTTP 边缘策略:CORS 源白名单与请求体大小上限(限流不走本文件,见 `api/rate_limit.py`) |
 | `llm.yaml` | LLM 提供方注册表(deepseek / openai 兼容网关 / ollama),按 `task_type` 区分 chat / embedding;每个 entry 可配 `timeout`(单次请求超时,秒,默认 120) |
 | `db.yaml` | 数据库,默认 `sqlite`(`data/agentic.db`),可切 `postgres` |
 | `vector_db.yaml` | 向量库(weaviate)+ 顶层 `embedding` 指向 llm.yaml 的嵌入条目 |
 | `filesystem.yaml` | 对象存储,默认 `rustfs`(S3 兼容),亦有 `local` 磁盘实现 |
 | `document_parser.yaml` | MinerU 云端 PDF 解析(OCR / 公式 / 表格开关、轮询超时) |
 | `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend(驱动+key引用,指向 redis.yaml 的 entry)+ 任务 `time_limit`/`soft_time_limit`(硬/软超时,默认 600/540 秒) |
-| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储与 Celery 队列共用,后者经 task.yaml 引用);可配 `socket_timeout`(命令读写,默认 5 秒)与 `socket_connect_timeout`(建连,默认 3 秒) |
+| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储、限流计数与 Celery 队列共用,后者经 task.yaml 引用);可配 `socket_timeout`(命令读写,默认 5 秒)与 `socket_connect_timeout`(建连,默认 3 秒) |
 | `auth.yaml` | 认证:JWT 签发/验签(`AUTH_JWT_SECRET`、算法 HS256、`token_expire_minutes`,默认 7 天) |
 
 常用环境变量(`.env` 或进程环境均可):
@@ -108,11 +113,11 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `DB_DSN` | SQLite 数据库文件路径 | `data/agentic.db` |
 | `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
-| `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
+| `REDIS_URL` | Redis 连接(取消信号存储、限流计数与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
+| `AGENTIC_DEFAULT_AGENT_ID` | 会话默认智能体(当前内置:`builtin:demo` 通用助手、`builtin:rag` 知识库 RAG 图智能体) | `builtin:demo` |
 | `CORS_ORIGINS` | CORS 源白名单(逗号分隔整体覆盖) | `http://localhost:5173,http://127.0.0.1:5173` |
 | `AUTH_JWT_SECRET` | JWT 签名密钥(HS256 建议 ≥32 字节;生产必须显式设置) | `dev-only-secret-…`(仅开发) |
-| `CHAT_RATE_LIMIT` / `UPLOAD_RATE_LIMIT` | chat / 上传端点限流(窗口内次数) | `30` / `10`(窗口均 60 秒) |
-| `CHAT_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | chat / 上传请求体上限(字节) | 1 MiB / 64 MiB |
+| `RUN_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | run / 上传请求体上限(字节) | 1 MiB / 64 MiB |
 | `AGENTIC_LOG_LEVEL` / `AGENTIC_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
 | `METRICS_ENABLED` / `METRICS_WORKER_PORT` | 指标采集开关 / worker 指标端口 | `true` / `9091` |
 
@@ -128,7 +133,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | postgres 18 | `127.0.0.1:5432` | `agentic` / `agentic` / db `agentic` | 可选数据库(默认用 SQLite) |
 | weaviate 1.39 | `127.0.0.1:8080`(HTTP)+ `:50052`(gRPC,宿主侧) | 匿名访问 | 知识库向量存储 |
 | rustfs(S3 兼容) | `127.0.0.1:9000` | `agentic` / `agentic-secret` | 知识库文件存储(bucket `agentic` 由 `rustfs-init` 幂等创建) |
-| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 + 取消标志存储(独立 `redis.yaml`) |
+| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 + 取消标志存储 + 限流计数(独立 `redis.yaml`) |
 
 ## API 一览
 
@@ -142,10 +147,12 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 带属主与公开/私有标识(`isPublic`,缺省私有)——读(详情/列表/文档读)属主或
 公开库可见,写(更新/删除/启停/上传/文档写)仅属主可操作,越权访问与不存在同返回 404。
 
-边缘策略(`http.yaml`,中间件均为纯 ASGI、SSE 友好):CORS 收敛为源白名单
-(默认仅 Vite dev server 两种 loopback 形态,`CORS_ORIGINS` 覆盖);chat 前缀
-与文档上传端点按客户端 IP 滑动窗口限流,超限回 429 信封 + `Retry-After`;
-两作用域同时施加请求体字节上限(Content-Length 超限直回 413,分块/谎报
+边缘策略:CORS 收敛为源白名单(默认仅 Vite dev server 两种 loopback 形态,
+`CORS_ORIGINS` 覆盖,中间件为纯 ASGI、SSE 友好);限流为 fastapi-limiter 依赖
+按端点挂载——run / run-cancel 与文档上传按登录用户滑动窗口限流(fastapi-limiter
++ pyrate-limiter,Redis 共享计数,多实例额度合一;额度为代码常量 run 30/分、
+上传 10/分,见 `api/rate_limit.py`),超限回 429 信封 + `Retry-After`;run 与
+文档上传另受请求体字节上限约束(Content-Length 超限直回 413,分块/谎报
 长度在读取处拦截),上传转存为流式——边写对象存储边计数与 sha256 摘要,
 内存占用与文件大小无关。
 
@@ -166,8 +173,8 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `POST` | `/auth/register` | 注册(注册即登录:成功直接返回 token + 用户信息;重名 → 5001/409) |
 | `POST` | `/auth/login` | 登录(错用户名/错密码统一 5002/401,不泄露用户存在性) |
 | `GET` | `/auth/me` | 当前登录用户 |
-| `POST` | `/agentic/chat` | SSE 流式聊天(ag-ui 事件流) |
-| `POST` | `/agentic/chat/cancel` | 取消会话当前活跃轮次(幂等;触发 Redis 取消信号,流式边界与工具入口感知收口) |
+| `POST` | `/agentic/run` | SSE 流式 agentic run(ag-ui 事件流) |
+| `POST` | `/agentic/run/cancel` | 取消会话当前活跃轮次(幂等;触发 Redis 取消信号,流式边界与工具入口感知收口) |
 | `GET` | `/agentic/conversation` | 会话列表 |
 | `GET` | `/agentic/conversation/{thread_id}` | 会话详情 |
 | `GET` | `/agentic/conversation/{thread_id}/history` | 会话历史消息 |
@@ -211,7 +218,7 @@ server/
 ├── app/
 │   ├── cmd/               # 入口:http(FastAPI,async 容器)、task_executor(Celery,sync 容器)
 │   ├── api/               # HTTP 装配 + 全局异常处理(AOP);v1/endpoints/ 按领域分模块
-│   ├── services/          # 业务逻辑两层制:orchestration/(chat 行程编排)与 domain/(conversation、knowledge 领域服务)
+│   ├── services/          # 业务逻辑两层制:orchestration/(run 行程编排)与 domain/(conversation、knowledge 领域服务)
 │   ├── components/        # 自包含能力组件:memory(长期记忆)、knowledge(检索)
 │   ├── packages/          # 可复用能力库:signal(SignalStore 分布式 Event 契约 + Redis/InMemory 后端)
 │   ├── agents/            # BaseAgent 注册表 + AgentFactory + 内置 agent
@@ -230,7 +237,7 @@ server/
 
 - **分层**:`api → services{orchestration|domain} → components/repositories → infrastructures`,单向依赖;
   可复用能力库 `packages`(signal 信号库:契约+后端内聚一包)领域无关、禁向上依赖,被 services/components
-  向下消费;api 只做 HTTP 装配;services 两层制——orchestration 编排用户侧行程(chat),domain 承载
+  向下消费;api 只做 HTTP 装配;services 两层制——orchestration 编排用户侧行程(run),domain 承载
   领域服务(会话/知识库,管理侧端点与 Celery 任务直调);自包含能力(记忆、检索)在 components,
   写入型组件工具须经领域服务;检索组件消费领域向量适配器,走合法的 components→domain 边。
 - **DI**:wireup。共享注册在 `app/core/container.py`,HTTP 与 Celery 两个入口各建

@@ -65,7 +65,7 @@ def metrics():
 
 
 def _route_template(scope: Scope) -> str:
-    """匹配 Starlette 路由表返回路径模板（如 ``/agentic/chat/cancel``）；
+    """匹配 Starlette 路由表返回路径模板（如 ``/agentic/run/cancel``）；
     无路由上下文或未命中返回 ``unmatched``。"""
     app = scope.get("app")
     routes = getattr(app, "routes", None) if app is not None else None

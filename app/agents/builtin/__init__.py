@@ -1,4 +1,4 @@
 from .demo import DemoAgent
-from .summary import SummaryAgent
+from .rag import RagAgent
 
-__all__ = ["DemoAgent", "SummaryAgent"]
+__all__ = ["DemoAgent", "RagAgent"]

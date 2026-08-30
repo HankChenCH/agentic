@@ -2,22 +2,19 @@
 的缓冲包装；接线顺序见 ``app/cmd/http/main.py``）：
 
 - :class:`RequestIDMiddleware` — 每个请求生成/沿用 ``X-Request-ID`` 并注入日志上下文；
-- :class:`RateLimitMiddleware` — 按客户端 IP + 路由作用域的滑动窗口限流，
-  命中上限直接回 429 信封（不进路由）；
 - :class:`BodySizeLimitMiddleware` — 请求体字节上限：``Content-Length``
   超限不读体直接 413；传输中累计超限（分块传输/谎报长度）由 receive
   包装在读取处抛 ``HTTPException(413)``，经全局 ``http_exception_handler``
   统一为信封响应（multipart 解析器只捕 MultiPartException/OSError，
   ``Request.stream`` 不吞自定义异常，异常可穿透到 ExceptionMiddleware）。
+
+限流不经过边缘中间件：fastapi-limiter 依赖按端点挂载（Redis 共享计数），
+见 ``app/api/rate_limit.py``。
 """
 
 import logging
-import math
 import re
-import threading
-from collections import deque
 from dataclasses import dataclass
-from time import monotonic
 from typing import Sequence
 from uuid import uuid4
 
@@ -65,80 +62,6 @@ class RequestIDMiddleware:
         # 控制台格式串显式引用（见 logging.yaml）
         with logger.contextualize(request_id=request_id):
             await self.app(scope, receive, send_with_request_id)
-
-
-# ---------- 限流 ----------
-
-
-@dataclass(frozen=True)
-class RateLimitSpec:
-    """一条限流规则：方法 + 路径正则圈定作用域，滑动窗口限额。"""
-
-    methods: frozenset[str]
-    path_pattern: re.Pattern[str]
-    requests: int
-    window_seconds: float
-
-
-class RateLimitMiddleware:
-    """按客户端 IP 的滑动窗口限流（进程内实现，事件循环内访问；锁仅作
-    非 ASGI 调用方兜底）。
-
-    - 仅放行请求计入窗口：被拒请求不新增时间戳，拒绝态由既有记录决定，
-      持续重放不会放大窗口占用；
-    - 命中上限：直接以 Response 信封回 429 + ``Retry-After``，不进路由
-      （本中间件位于 ExceptionMiddleware 之外，抛异常只会变 500，只能直发响应）；
-    - 客户端识别取 ``scope["client"]`` 直连地址。反代部署需
-      ``uvicorn --proxy-headers`` 让 X-Forwarded-For 覆写 client，否则
-      所有请求按代理 IP 合并限流；
-    - 内存有界：每 (规则, IP) 至多 ``requests`` 个时间戳，总量随真实
-      客户端数线性增长（TCP 握手保证 IP 不可任意伪造）。
-    """
-
-    def __init__(self, app: ASGIApp, *, specs: Sequence[RateLimitSpec]) -> None:
-        self.app = app
-        self.specs = tuple(specs)
-        self._lock = threading.Lock()
-        self._windows: dict[tuple[RateLimitSpec, str], deque[float]] = {}
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        spec = _match_scope(self.specs, scope)
-        if spec is None:
-            await self.app(scope, receive, send)
-            return
-        client = scope.get("client")
-        client_ip = client[0] if client else "unknown"
-        retry_after = self._admit(spec, client_ip)
-        if retry_after is None:
-            await self.app(scope, receive, send)
-            return
-        _std_logger.warning(
-            "rate limit exceeded for %s on %s %s (limit %s/%ss)",
-            client_ip, scope["method"], scope["path"], spec.requests, spec.window_seconds,
-        )
-        await JSONResponse(
-            status_code=429,
-            content=Response.fail(429, "请求过于频繁，请稍后重试").to_dict(),
-            headers={"Retry-After": str(retry_after)},
-        )(scope, receive, send)
-
-    def _admit(self, spec: RateLimitSpec, client_ip: str) -> int | None:
-        """放行返回 None；拒绝返回建议等待秒数（Retry-After，向上取整且 ≥1）。"""
-        now = monotonic()
-        key = (spec, client_ip)
-        with self._lock:
-            hits = self._windows.setdefault(key, deque())
-            horizon = now - spec.window_seconds
-            while hits and hits[0] <= horizon:
-                hits.popleft()
-            if len(hits) >= spec.requests:
-                wait = hits[0] + spec.window_seconds - now
-                return max(1, math.ceil(wait))
-            hits.append(now)
-            return None
 
 
 # ---------- 请求体大小上限 ----------

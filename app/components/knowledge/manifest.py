@@ -2,7 +2,9 @@
 
 双工具设计：LLM 先经 knowledge_list 了解当前有哪些可用知识库，再按需
 自选库（kb_ids）检索——比单工具「盲搜全部库」多出显式的库选择能力，
-kb_ids 缺省时退化为全库检索。
+kb_ids 缺省时退化为全库检索。可用口径是归属可见性：私有库仅属主可见、
+公开库所有人可见（当前用户身份经 langgraph config 注入读取，见
+``components.base.configurable_user``）。
 
 knowledge_search 返回 JSON（``{"sources": [...], "notes": [...]}``），
 形状由 ``KnowledgeSearchResult`` 契约模型单源定义：LLM 依据 sources 的
@@ -15,11 +17,17 @@ import json
 from dataclasses import dataclass
 from uuid import UUID
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from wireup import injectable
 
-from app.components.base import ComponentSpec, ToolSpec, register_component
+from app.components.base import (
+    ComponentSpec,
+    ToolSpec,
+    configurable_user,
+    register_component,
+)
 from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService, RetrievalHit
 from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K
 
@@ -67,14 +75,17 @@ class KnowledgeSearchResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
-def _build_knowledge_list_tool(service: KnowledgeRetrievalService, agentic_id: str) -> StructuredTool:
-    def knowledge_list() -> str:
-        kbs = service.list_knowledge_for_agent(agentic_id)
+def _build_knowledge_list_tool(service: KnowledgeRetrievalService) -> StructuredTool:
+    # config 的类型注解必须是裸 RunnableConfig（langchain 按类型严格相等
+    # 识别注入参数，| None 会导致注入失效）；默认值只为语法/直调兜底
+    def knowledge_list(config: RunnableConfig = None) -> str:
+        kbs = service.list_visible_knowledge(configurable_user(config))
         if not kbs:
             return "当前没有可用的知识库"
         lines = []
         for index, kb in enumerate(kbs, start=1):
-            line = f"{index}. {kb.name}（id: {kb.id}，{kb.doc_num} 篇文档，{kb.status.value}）"
+            visibility = "公开" if kb.is_public else "私有"
+            line = f"{index}. {kb.name}（id: {kb.id}，{visibility}，{kb.doc_num} 篇文档，{kb.status.value}）"
             if kb.description:
                 line += f" — {kb.description}"
             lines.append(line)
@@ -83,7 +94,8 @@ def _build_knowledge_list_tool(service: KnowledgeRetrievalService, agentic_id: s
     return StructuredTool.from_function(
         name="knowledge_list",
         description=(
-            "列出当前可用的知识库（名称、id、描述、文档数、状态）。"
+            "列出当前用户可用的知识库（名称、id、公开/私有、文档数、状态）："
+            "自己的私有库与所有人可见的公开库。"
             "回答资料性/事实性问题前先调用本工具了解有哪些知识库，再用 knowledge_search 检索；"
             "只有「已启用（enabled）」状态的知识库可被检索。"
         ),
@@ -93,27 +105,15 @@ def _build_knowledge_list_tool(service: KnowledgeRetrievalService, agentic_id: s
     )
 
 
-def _build_knowledge_search_tool(service: KnowledgeRetrievalService, agentic_id: str) -> StructuredTool:
+def _build_knowledge_search_tool(service: KnowledgeRetrievalService) -> StructuredTool:
     def knowledge_search(
-        query: str, kb_ids: list[str] | None = None, top_k: int = DEFAULT_TOP_K
+        query: str, kb_ids: list[str] | None = None, top_k: int = DEFAULT_TOP_K, config: RunnableConfig = None
     ) -> str:
         selected = _parse_kb_ids(kb_ids)
-        hits, notes = service.search_for_agent(
-            agentic_id, query, kb_ids=selected, top_k=top_k if top_k > 0 else DEFAULT_TOP_K
+        hits, notes = service.search_for_user(
+            configurable_user(config), query, kb_ids=selected, top_k=top_k if top_k > 0 else DEFAULT_TOP_K
         )
-        if not hits:
-            message = "知识库中未检索到相关内容"
-            return "\n".join([message, *notes]) if notes else message
-        result = KnowledgeSearchResult(
-            sources=[_hit_source(index, hit) for index, hit in enumerate(hits, start=1)],
-            notes=notes,
-        )
-        payload = result.model_dump()
-        for source in payload["sources"]:
-            # 与契约一致：无 bbox 的来源整体省略该字段（前端降级为页码跳转）
-            if not source["bboxes"]:
-                del source["bboxes"]
-        return json.dumps(payload, ensure_ascii=False)
+        return render_search_result(hits, notes)
 
     return StructuredTool.from_function(
         name="knowledge_search",
@@ -133,7 +133,7 @@ def _build_knowledge_search_tool(service: KnowledgeRetrievalService, agentic_id:
 
 def _parse_kb_ids(kb_ids: list[str] | None) -> list[UUID] | None:
     # LLM 生成的 id 可能非法（幻觉/截断）：剔除无效项而非整体失败；
-    # 合法但不属于本 agent 的 id 由服务端归入「未绑定已忽略」说明
+    # 合法但当前用户不可见的 id 由服务端归入「不可见已忽略」说明
     if not kb_ids:
         return None
     valid = []
@@ -145,7 +145,30 @@ def _parse_kb_ids(kb_ids: list[str] | None) -> list[UUID] | None:
     return valid or None
 
 
-def _hit_source(index: int, hit: RetrievalHit) -> KnowledgeSource:
+def render_search_result(hits: list[RetrievalHit], notes: list[str]) -> str:
+    """检索结果 → 工具/图节点共用的结果串（KnowledgeSearchResult JSON 契约的唯一组装点）。
+
+    未命中返回人类可读的未检到说明（有跳过说明则附在尾部），命中返回
+    ``KnowledgeSearchResult`` 的 JSON（无 bbox 的来源整体省略该字段，
+    前端降级为页码跳转）。knowledge_search 工具与 builtin:rag 的检索节点
+    共用本函数，保证 LLM 与前端看到同一形状。
+    """
+    if not hits:
+        message = "知识库中未检索到相关内容"
+        return "\n".join([message, *notes]) if notes else message
+    result = KnowledgeSearchResult(
+        sources=[hit_source(index, hit) for index, hit in enumerate(hits, start=1)],
+        notes=notes,
+    )
+    payload = result.model_dump()
+    for source in payload["sources"]:
+        # 与契约一致：无 bbox 的来源整体省略该字段（前端降级为页码跳转）
+        if not source["bboxes"]:
+            del source["bboxes"]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def hit_source(index: int, hit: RetrievalHit) -> KnowledgeSource:
     """单条命中 → 结构化来源（LLM 引用与前端溯源卡片共用）。"""
     meta = hit.meta or {}
     return KnowledgeSource(
@@ -188,14 +211,14 @@ _SPEC = register_component(ComponentSpec(
     name="knowledge",
     title="知识库检索",
     description=(
-        "按 agent 绑定的知识库做 RAG 检索：先列出可用库再按需检索文档片段，"
-        "结果带文档名/页码/标题路径/原文位置框等溯源信息，供引用作答与前端"
-        "溯源卡片共用。"
+        "按当前用户可见的知识库（自己的私有库 + 公开库）做 RAG 检索：先列出"
+        "可用库再按需检索文档片段，结果带文档名/页码/标题路径/原文位置框等"
+        "溯源信息，供引用作答与前端溯源卡片共用。"
     ),
     tools=(
         ToolSpec(
             name="knowledge_list",
-            description="列出当前 agent 可用的知识库（名称、id、描述、文档数、状态）。",
+            description="列出当前用户可用的知识库（名称、id、公开/私有、文档数、状态）。",
             args_model=KnowledgeListArgs,
             build=_build_knowledge_list_tool,
         ),
@@ -212,10 +235,11 @@ _SPEC = register_component(ComponentSpec(
 @injectable
 @dataclass
 class KnowledgeComponent:
-    """knowledge 组件装配器：持检索门面服务，按 agent 身份实例化工具。
+    """knowledge 组件装配器：持检索门面服务，把 spec 声明实例化为可运行工具。
 
-    工具与 agent 身份绑定（检索范围 = 该 agent 绑定的知识库），故
-    ``tools(agentic_id)`` 每个智能体各产一套。
+    检索范围按当前用户可见性圈定（身份经 langgraph config 注入读取），与
+    agent 身份无关——``agentic_id`` 形参是与 ``MemoryComponent.tools`` 的
+    统一装配接口，此处不使用。
     """
 
     retrieval: KnowledgeRetrievalService
@@ -225,4 +249,4 @@ class KnowledgeComponent:
         return _SPEC
 
     def tools(self, agentic_id: str) -> list[StructuredTool]:
-        return [tool.build(self.retrieval, agentic_id) for tool in _SPEC.tools]
+        return [tool.build(self.retrieval) for tool in _SPEC.tools]

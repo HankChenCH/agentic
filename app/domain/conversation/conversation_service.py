@@ -35,7 +35,7 @@ _WARN_THROTTLE_SECONDS = 30.0
 class ConversationService:
     """会话聚合领域服务：持久化与业务规则的唯一门面。
 
-    消费方按受众分流：chat 用户侧行程经编排层（ChatOrchestrator /
+    消费方按受众分流：run 用户侧行程经编排层（AgenticService /
     TurnFinalizer）调用本服务；管理侧（会话增删查）与响应信封组装直接
     在此完成。存在性校验在服务内抛 ConversationNotFoundError——对齐
     知识域惯例，端点不再做 None 判断，HTTP 与后台拿到一致错误语义。
@@ -50,7 +50,7 @@ class ConversationService:
         self.logger = self.logger_factory.get_logger(__name__)
         self._last_warn_at = -_WARN_THROTTLE_SECONDS
 
-    # ---- chat 行程所需写路径（原 AgenticService 准备段 / 收尾段下沉）----
+    # ---- run 行程所需写路径（编排层准备段 / 收尾段下沉）----
 
     def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, query: str) -> Tuple[AgenticConversation, AgenticConversationTurn]:
         """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。

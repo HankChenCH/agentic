@@ -27,8 +27,8 @@ CANCEL_CHECK_INTERVAL_SECONDS = 0.5
 
 @injectable
 @dataclass
-class ChatOrchestrator:
-    """chat 用户侧行程编排：SSE 事件流、轮次生命周期与收尾触发的唯一归属。
+class AgenticService:
+    """agentic run 用户侧行程编排：SSE 事件流、轮次生命周期与收尾触发的唯一归属。
 
     只做行程控制，不触碰持久化——会话/轮次/消息的读写规则全部在领域层
     ``ConversationService``。流内异常收口策略见 _run_error_message，与全局
@@ -47,18 +47,18 @@ class ChatOrchestrator:
 
     def __post_init__(self):
         self.logger = self.logger_factory.get_logger(__name__)
-        # 在途对话流登记（thread_id → 并发流数）：优雅关闭的信号处理器据此为
-        # 所有在途流点亮取消标志（见 begin_shutdown）
+        # 在途 run 登记（thread_id → 并发 run 数）：优雅关闭的信号处理器据此为
+        # 所有在途 run 点亮取消标志（见 begin_shutdown）
         self._active_lock = threading.Lock()
         self._active_runs: Counter[UUID] = Counter()
 
-    def chat(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
-        """公共入口：登记在途流（供优雅关闭取消）后委托 _stream_chat 行程。
+    def run(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
+        """公共入口：登记在途 run（供优雅关闭取消）后委托 _stream_run 行程。
         finally 兜底注销——含 GeneratorExit/异常路径。"""
         with self._active_lock:
             self._active_runs[thread_id] += 1
         try:
-            yield from self._stream_chat(user_id, thread_id, run_id, query)
+            yield from self._stream_run(user_id, thread_id, run_id, query)
         finally:
             with self._active_lock:
                 self._active_runs[thread_id] -= 1
@@ -67,7 +67,7 @@ class ChatOrchestrator:
 
     def begin_shutdown(self) -> int:
         """进程收到 SIGTERM/SIGINT 时由 HTTP 入口的信号处理器调用：为所有在途
-        对话流点亮 thread 作用域取消标志（复用显式取消通道），流式循环在帧级
+        run 点亮 thread 作用域取消标志（复用显式取消通道），流式循环在帧级
         检查点（≤0.5s）静默收口——轮次置 CANCELED、半截消息不落库，与客户端
         断连/Stop 按钮同口径；随后 uvicorn 正常排空连接退出。信号处理器内
         只做标志写入（快路径），不触碰运行中的生成器。"""
@@ -79,10 +79,10 @@ class ChatOrchestrator:
             except Exception:
                 self.logger.exception("优雅关闭取消在途流失败 thread_id=%s", thread_id)
         if thread_ids:
-            self.logger.info("优雅关闭：已为 %d 个在途对话流发出取消标志", len(thread_ids))
+            self.logger.info("优雅关闭：已为 %d 个在途 run 发出取消标志", len(thread_ids))
         return len(thread_ids)
 
-    def _stream_chat(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
+    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
         now = datetime.fromtimestamp(time())
 
         # 双翻译共存于同一次 interleave 遍历：
@@ -132,7 +132,7 @@ class ChatOrchestrator:
             # 准备段异常兜底：轮次行可能已建（status=RUNNING），不收口会永远
             # 停在 RUNNING。先置 FAILED 落库、后发错误帧——yield 挂起期间
             # 客户端断连会向本生成器抛 GeneratorExit，yield 之后的代码不再执行
-            self._log_stream_error("chat 准备段异常", e)
+            self._log_stream_error("run 准备段异常", e)
             if turn is not None:
                 self._fail_turn_safely(turn)
             yield ag_ui_translator.error(self._run_error_message(e))
@@ -185,7 +185,7 @@ class ChatOrchestrator:
         except Exception as e:
             # 同准备段：先收口轮次状态，再发错误帧；对外消息按异常分级 +
             # 环境脱敏（不再透传裸 str(e)，策略见 _run_error_message）
-            self._log_stream_error("chat 流式段异常", e)
+            self._log_stream_error("run 流式段异常", e)
             self._fail_turn_safely(turn)
             yield ag_ui_translator.error(self._run_error_message(e))
 

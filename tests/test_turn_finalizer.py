@@ -280,4 +280,4 @@ def test_outer_catchall_swallows_repo_failure(seeded):
 
     assert generator.calls == 1
     assert repo.get_conversation(conversation.thread_id, TEST_USER_ID).conversation_title == "智能体设计"
-    assert any(level == "error" and "after chat post-processing failed" in msg for level, msg in logger.events)
+    assert any(level == "error" and "after run post-processing failed" in msg for level, msg in logger.events)

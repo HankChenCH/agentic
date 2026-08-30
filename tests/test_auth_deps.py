@@ -39,9 +39,11 @@ def test_valid_token_yields_principal():
         user_id=uuid4(), username="alice", secret=SECRET, algorithm="HS256",
         expires_minutes=5,
     )
-    principal = require_user(_request({"Authorization": f"Bearer {bundle.token}"}))
+    request = _request({"Authorization": f"Bearer {bundle.token}"})
+    principal = require_user(request)
     assert isinstance(principal, UserPrincipal)
     assert principal.username == "alice"
+    assert request.state.user_principal is principal  # 落 state 供限流标识等后续依赖读取
 
 
 def test_garbage_and_cross_secret_tokens_rejected():

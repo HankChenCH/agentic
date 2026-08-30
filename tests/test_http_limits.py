@@ -1,34 +1,37 @@
-"""HTTP 边缘策略：限流中间件、请求体上限中间件与 CORS 配置校验。
+"""HTTP 边缘策略：fastapi-limiter 限流依赖、请求体上限中间件与 CORS 配置校验。
 
-中间件均为纯 ASGI，直接以手工 scope/receive/send 驱动（不经完整应用）；
-信封/异常处理器联动用最小 FastAPI 应用 + TestClient 验证（httpx 依赖已有）。
+限流以 build_rate_limiter + PerKeyBucketFactory + InMemoryBucket（可注入时钟）
+驱动，不依赖 Redis；信封/异常处理器联动用最小 FastAPI 应用 + TestClient
+验证（httpx 依赖已有）。
 """
 
 import asyncio
 import json
 import re
 from typing import Sequence
+from uuid import UUID
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pyrate_limiter import AbstractClock, Duration, InMemoryBucket, Rate
 from starlette.exceptions import HTTPException
 from starlette.testclient import TestClient
 
-import app.api.middleware as middleware_module
+from app.api.deps import UserPrincipal
 from app.api.exception_handlers import register_exception_handlers
 from app.api.middleware import (
     BodySizeLimitMiddleware,
     BodySizeSpec,
-    RateLimitMiddleware,
-    RateLimitSpec,
 )
+from app.api.rate_limit import build_rate_limiter
 from app.core.config import CorsConfig
 
-CLIENT = ("203.0.113.7", 51234)
+USER_A = UUID("aaaaaaaa-0000-0000-0000-000000000001")
+USER_B = UUID("bbbbbbbb-0000-0000-0000-000000000002")
 
 
-def make_scope(method="POST", path="/agentic/chat", headers=(), client=CLIENT):
+def make_scope(method="POST", path="/agentic/run", headers=(), client=("203.0.113.7", 51234)):
     return {
         "type": "http",
         "asgi": {"version": "3.0"},
@@ -105,89 +108,124 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def rate_spec(requests=2, window=60.0):
-    return RateLimitSpec(
-        methods=frozenset({"POST"}),
-        path_pattern=re.compile(r"^/agentic/chat"),
-        requests=requests,
-        window_seconds=window,
-    )
-
-
-def body_spec(max_bytes=10):
-    return BodySizeSpec(
-        methods=frozenset({"POST"}),
-        path_pattern=re.compile(r"^/agentic/chat"),
-        max_bytes=max_bytes,
-    )
-
-
 async def call(middleware, scope, messages=()):
     send = SendRecorder()
     await middleware(scope, receive_from(messages), send)
     return send
 
 
-# ---------- RateLimitMiddleware ----------
+# ---------- 限流（fastapi-limiter 依赖） ----------
+
+
+class _FakeClock(AbstractClock):
+    """与注入时钟同源的桶内时钟。
+
+    桶的泄漏清理与计数必须共用同一时间轴（生产由 _wall_now_ms 对齐
+    RedisBucket.now() 保证）；内存桶默认走单调时钟，注入假时间戳时会被
+    泄漏线程立即当作过期清掉，故显式换钟。
+    """
+
+    def __init__(self, state: dict):
+        self._state = state
+
+    def now(self) -> int:
+        return int(self._state["ms"])
+
+
+def build_limited_app(*, rate=None, with_identity=True):
+    """最小限流应用：身份依赖先落 request.state，限流依赖后执行（同生产顺序）。
+
+    身份按 X-Test-User 头选用户，供跨用户独立计数断言；时钟可写（dict），
+    供窗口滑动断言。返回 (app, clock, limiter_dep)。
+    """
+    rate = rate or Rate(2, Duration.MINUTE)
+    clock = {"ms": 1_000_000}
+
+    def make_bucket(name):
+        bucket = InMemoryBucket([rate])
+        bucket._clock = _FakeClock(clock)
+        return bucket
+
+    limiter_dep = build_rate_limiter(
+        rate=rate,
+        make_bucket=make_bucket,
+        now_ms=lambda: clock["ms"],
+        scope="run",
+    )
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    def identity(request: Request) -> UserPrincipal:
+        user_id = USER_B if request.headers.get("x-test-user") == "b" else USER_A
+        principal = UserPrincipal(user_id=user_id, username="alice")
+        request.state.user_principal = principal
+        return principal
+
+    deps = [Depends(identity), Depends(limiter_dep)] if with_identity else [Depends(limiter_dep)]
+
+    @app.post("/agentic/run", dependencies=deps)
+    async def run_endpoint():
+        return {"ok": True}
+
+    return app, clock, limiter_dep
 
 
 def test_rate_limit_allows_within_window_then_rejects():
-    app = CapturingApp()
-    middleware = RateLimitMiddleware(app, specs=[rate_spec()])
-
+    app, _, dep = build_limited_app()
+    client = TestClient(app)
     for _ in range(2):
-        run(call(middleware, make_scope()))
-    assert app.calls == 2
+        assert client.post("/agentic/run").status_code == 200
 
-    send = run(call(middleware, make_scope()))
-    assert app.calls == 2  # 拒绝不进路由
-    assert send.status == 429
-    assert send.json_body()["error_code"] == 429
-    retry_after = send.header("Retry-After")
-    assert retry_after is not None and int(retry_after) >= 1
-
-
-def test_rate_limit_counts_clients_independently():
-    app = CapturingApp()
-    middleware = RateLimitMiddleware(app, specs=[rate_spec(requests=1)])
-    run(call(middleware, make_scope(client=("198.51.100.1", 1))))
-    send = run(call(middleware, make_scope(client=("198.51.100.2", 2))))
-    assert send.status == 200
-    run(call(middleware, make_scope(client=("198.51.100.2", 2))))
-    assert run(call(middleware, make_scope(client=("198.51.100.2", 2)))).status == 429
+    response = client.post("/agentic/run")
+    assert response.status_code == 429
+    assert response.json()["error_code"] == 429
+    assert response.json()["error_message"] == "请求过于频繁，请稍后重试"
+    assert int(response.headers["Retry-After"]) == 60  # 窗口长度上界
+    dep.limiter.close()
 
 
-def test_rate_limit_window_expiry_admits_again(monkeypatch):
-    clock = {"now": 0.0}
-    monkeypatch.setattr(middleware_module, "monotonic", lambda: clock["now"])
-    app = CapturingApp()
-    middleware = RateLimitMiddleware(app, specs=[rate_spec(requests=1, window=60.0)])
-
-    assert run(call(middleware, make_scope())).status == 200
-    assert run(call(middleware, make_scope())).status == 429
-    clock["now"] = 60.1  # 窗口滑出
-    assert run(call(middleware, make_scope())).status == 200
-
-
-def test_rate_limit_scopes_by_method_and_path():
-    app = CapturingApp()
-    middleware = RateLimitMiddleware(app, specs=[rate_spec(requests=1)])
-    assert run(call(middleware, make_scope())).status == 200
-    # 同路径他方法、他路径同方法均不在作用域内
-    assert run(call(middleware, make_scope(method="GET"))).status == 200
-    assert run(call(middleware, make_scope(path="/agentic/conversation"))).status == 200
-    assert run(call(middleware, make_scope())).status == 429
-    assert app.calls == 3
+def test_rate_limit_counts_users_independently():
+    app, _, dep = build_limited_app()
+    client = TestClient(app)
+    for _ in range(2):
+        assert client.post("/agentic/run", headers={"X-Test-User": "a"}).status_code == 200
+    assert client.post("/agentic/run", headers={"X-Test-User": "a"}).status_code == 429
+    # 用户 B 独立窗口（同时证明身份依赖先于限流依赖执行——否则按 IP 合并计数）
+    assert client.post("/agentic/run", headers={"X-Test-User": "b"}).status_code == 200
+    dep.limiter.close()
 
 
-def test_rate_limit_non_http_scope_passthrough():
-    app = CapturingApp()
-    middleware = RateLimitMiddleware(app, specs=[rate_spec()])
-    run(middleware({"type": "lifespan"}, receive_from([]), SendRecorder()))
-    assert app.calls == 1
+def test_rate_limit_falls_back_to_client_ip_without_identity():
+    """无身份（如未来挂在公开端点）回退客户端 IP，限流依旧生效。"""
+    app, _, dep = build_limited_app(with_identity=False)
+    client = TestClient(app)
+    for _ in range(2):
+        assert client.post("/agentic/run").status_code == 200
+    assert client.post("/agentic/run").status_code == 429
+    dep.limiter.close()
+
+
+def test_rate_limit_window_expiry_admits_again():
+    app, clock, dep = build_limited_app(rate=Rate(1, Duration.MINUTE))
+    client = TestClient(app)
+    assert client.post("/agentic/run").status_code == 200
+    assert client.post("/agentic/run").status_code == 429
+
+    clock["ms"] += Duration.MINUTE.value + 1  # 窗口滑出
+    assert client.post("/agentic/run").status_code == 200
+    dep.limiter.close()
 
 
 # ---------- BodySizeLimitMiddleware ----------
+
+
+def body_spec(max_bytes=10):
+    return BodySizeSpec(
+        methods=frozenset({"POST"}),
+        path_pattern=re.compile(r"^/agentic/run"),
+        max_bytes=max_bytes,
+    )
 
 
 def test_body_size_rejects_by_content_length_without_reading():
@@ -262,11 +300,7 @@ def build_edge_app() -> FastAPI:
     register_exception_handlers(app)
     app.add_middleware(
         BodySizeLimitMiddleware,
-        specs=[BodySizeSpec(methods=frozenset({"POST"}), path_pattern=re.compile(r"^/agentic/chat"), max_bytes=10)],
-    )
-    app.add_middleware(
-        RateLimitMiddleware,
-        specs=[RateLimitSpec(methods=frozenset({"POST"}), path_pattern=re.compile(r"^/agentic/chat"), requests=5, window_seconds=60.0)],
+        specs=[BodySizeSpec(methods=frozenset({"POST"}), path_pattern=re.compile(r"^/agentic/run"), max_bytes=10)],
     )
     app.add_middleware(
         CORSMiddleware,
@@ -276,8 +310,8 @@ def build_edge_app() -> FastAPI:
         allow_headers=["Content-Type", "X-Request-ID", "Authorization"],
     )
 
-    @app.post("/agentic/chat")
-    async def chat(request: Request):
+    @app.post("/agentic/run")
+    async def run(request: Request):
         return {"size": len(await request.body())}
 
     return app
@@ -285,10 +319,10 @@ def build_edge_app() -> FastAPI:
 
 def test_edge_app_body_limit_envelope():
     client = TestClient(build_edge_app())
-    assert client.post("/agentic/chat", content=b"12345").json() == {"size": 5}
+    assert client.post("/agentic/run", content=b"12345").json() == {"size": 5}
 
     # Content-Length 已知超限：中间件直发 413 信封
-    response = client.post("/agentic/chat", content=b"x" * 11)
+    response = client.post("/agentic/run", content=b"x" * 11)
     assert response.status_code == 413
     assert response.json()["error_code"] == 413
 
@@ -297,36 +331,26 @@ def test_edge_app_body_limit_envelope():
         yield b"x" * 6
         yield b"x" * 6
 
-    response = client.post("/agentic/chat", content=chunked())
+    response = client.post("/agentic/run", content=chunked())
     assert response.status_code == 413
     assert response.json()["error_code"] == 413
-
-
-def test_edge_app_rate_limit_envelope():
-    client = TestClient(build_edge_app())
-    for _ in range(5):
-        assert client.post("/agentic/chat", content=b"a").status_code == 200
-    response = client.post("/agentic/chat", content=b"a")
-    assert response.status_code == 429
-    assert response.json()["error_code"] == 429
-    assert int(response.headers["Retry-After"]) >= 1
 
 
 def test_edge_app_cors_whitelist():
     client = TestClient(build_edge_app())
     allowed = client.post(
-        "/agentic/chat", content=b"a", headers={"Origin": "http://localhost:5173"}
+        "/agentic/run", content=b"a", headers={"Origin": "http://localhost:5173"}
     )
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert allowed.headers["access-control-allow-credentials"] == "true"
 
     blocked = client.post(
-        "/agentic/chat", content=b"a", headers={"Origin": "http://evil.example"}
+        "/agentic/run", content=b"a", headers={"Origin": "http://evil.example"}
     )
     assert "access-control-allow-origin" not in blocked.headers
 
     preflight = client.options(
-        "/agentic/chat",
+        "/agentic/run",
         headers={
             "Origin": "http://localhost:5173",
             "Access-Control-Request-Method": "POST",
@@ -338,7 +362,7 @@ def test_edge_app_cors_whitelist():
 
     # 白名单外的请求方法在预检即被拒
     bad_method = client.options(
-        "/agentic/chat",
+        "/agentic/run",
         headers={
             "Origin": "http://localhost:5173",
             "Access-Control-Request-Method": "PUT",

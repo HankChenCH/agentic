@@ -29,5 +29,6 @@ app.core.container 扫描本包完成依赖装配。
 """
 
 # 触发各组件 manifest 的 import 期注册（风格同 app.agents.factory 触发内置智能体注册）
+import app.components.demo.manifest  # noqa: F401,E402
 import app.components.knowledge.manifest  # noqa: F401,E402
 import app.components.memory.manifest  # noqa: F401,E402

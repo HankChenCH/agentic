@@ -2,7 +2,8 @@
 
 > 状态：**设计共识已达成**（2026-08-27，与作者逐轮确认：建模深度、存储选型、
 > 作用域、遗忘机制、两级召回架构、渲染模板），并已对齐同日服务层重构
-> （`AgenticService`→`ChatOrchestrator`、后置处理抽提 `TurnFinalizer`、
+> （编排类 `AgenticService`→`ChatOrchestrator`；2026-08-30 语义升级正名回
+> `AgenticService`、`chat`→`run`。后置处理抽提 `TurnFinalizer`、
 > orchestration/domain 两层制、向量适配器归位领域层——提交 4bf10fb /
 > bfedf60 / ae241e0）。实现按 §9 文件清单执行，前置阅读 `server/AGENTS.md`
 > 「服务层两层制」。
@@ -118,7 +119,7 @@ unique(episode_id, entity_id, role))`
 
 ## 5. 写路径：巩固管线
 
-`ChatOrchestrator.chat` 流收尾后在守护线程中调 `TurnFinalizer.run(...)`
+`AgenticService.run` 流收尾后在守护线程中调 `TurnFinalizer.run(...)`
 （`app/services/orchestration/turn_finalizer.py`；三步固定顺序：填标题 →
 聚合 token 用量 → 写长期记忆）。本设计占用第三步，容错语义不变：
 remember 外层 try/except 全兜底，失败仅记日志。四步巩固管线：
@@ -142,8 +143,8 @@ sequenceDiagram
 
 ### 6.1 快速回忆（自动注入）
 
-- 注入点：`ChatOrchestrator.chat`（`app/services/orchestration/
-  chat_orchestrator.py`）在 `replay_history` 之后、`agent.stream(...)` 之前
+- 注入点：`AgenticService.run`（`app/services/orchestration/
+  agentic_service.py`）在 `replay_history` 之后、`agent.stream(...)` 之前
   （已持有 query），调 `MemoryRecallService.build_fast_context(query)` 拼入输入
   首部，不碰 ag-ui 流。编排层引用组件属合法依赖箭头
   （orchestration ──► components）。
@@ -288,8 +289,8 @@ vector_index.py`）：collection 命名与显式 schema 单一事实源、幂等
 `docs/memory-v2-design.md`（本文档）。
 
 **修改**：`app/components/memory/{service,tools,extraction}.py` 重写；
-`app/services/orchestration/chat_orchestrator.py`（replay_history 与
-agent.stream 之间增快速召回注入，替代原 AgenticService 位置）；
+`app/services/orchestration/agentic_service.py`（replay_history 与
+agent.stream 之间增快速召回注入）；
 `app/services/domain/conversation/conversation_service.py`
 （delete_conversation 的"长期记忆不随会话删除"注释与新表同步）；
 `app/agents/builtin/demo.py`（system prompt 更新三工具使用指引）；

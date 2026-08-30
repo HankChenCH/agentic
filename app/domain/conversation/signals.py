@@ -7,7 +7,7 @@ wait/is_fired 判僵死）照此扩展，不加类。
 
 取消信号（第一用途）：thread 作用域取消标志——一个会话同一时刻只有
 一个活跃轮次，标志按 thread 覆盖。生产端为 REST cancel 接口（经
-ChatOrchestrator 归属校验后写入），消费端为流式循环（帧级节流
+AgenticService 归属校验后写入），消费端为流式循环（帧级节流
 is_fired）与工具入口守卫；触发后保持到下一轮 open_turn 防御性 reset
 （TTL 为兜底上限）。
 """

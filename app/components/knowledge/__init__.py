@@ -14,7 +14,13 @@ infrastructures / repositories / models，以及领域层的向量适配器
 """
 
 from .ability.retrieval import KnowledgeRetrievalService, RetrievalHit
-from .manifest import KnowledgeComponent, KnowledgeSearchArgs, KnowledgeSearchResult, KnowledgeSource
+from .manifest import (
+    KnowledgeComponent,
+    KnowledgeSearchArgs,
+    KnowledgeSearchResult,
+    KnowledgeSource,
+    render_search_result,
+)
 
 __all__ = [
     "KnowledgeRetrievalService",
@@ -23,4 +29,5 @@ __all__ = [
     "KnowledgeSearchArgs",
     "KnowledgeSearchResult",
     "KnowledgeSource",
+    "render_search_result",
 ]

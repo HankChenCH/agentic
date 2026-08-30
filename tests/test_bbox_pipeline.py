@@ -50,7 +50,7 @@ def test_bbox_flows_from_content_list_to_tool_json():
 
     # 4) 工具 JSON：紧凑元组 [page, x0, y0, x1, y1]
     class StubRetrieval:
-        def search_for_agent(self, agentic_id, query, kb_ids=None, top_k=4):
+        def search_for_user(self, user_id, query, kb_ids=None, top_k=4):
             return (
                 [RetrievalHit(
                     content=hit.content, score=hit.score, kb_id="kb", doc_id="doc",

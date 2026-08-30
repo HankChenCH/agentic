@@ -8,10 +8,11 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.services import ChatOrchestrator, ConversationService
+from app.api.rate_limit import run_rate_limiter
+from app.services import AgenticService, ConversationService
 
 from app.models.schema.request.pagination import PaginationRequest
-from app.models.schema.request.chat import CancelRequest, ChatRequest
+from app.models.schema.request.run import CancelRequest, RunRequest
 from app.models.schema.response.biz_response import Response
 
 # router 级鉴权在 cmd/http/main.py 的 include_router 处统一挂载（无路径白名单）；
@@ -54,7 +55,7 @@ class ClosingStreamingResponse(StreamingResponse):
                 await aclose()
 
 # 受众分流：conversation 增删查是管理侧读路径，直接消费领域服务；
-# chat 是用户侧行程，经编排层。身份经 require_user 注入（JWT 无状态验签）；
+# run 是用户侧行程，经编排层。身份经 require_user 注入（JWT 无状态验签）；
 # 归属校验在领域层（仓储查询条件 / open_turn 比对），非本人会话统一 404。
 
 @router.get("/conversation")
@@ -94,25 +95,25 @@ def delete_conversation(
 ):
     return Response.success(conversations.delete_conversation(user_id=principal.user_id, thread_id=thread_id)).to_dict()
 
-@router.post("/chat")
-def chat(
-    orchestrator: Injected[ChatOrchestrator],
+@router.post("/run", dependencies=[Depends(run_rate_limiter)])
+def run(
+    service: Injected[AgenticService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
-    request: ChatRequest,
+    request: RunRequest,
 ):
-    # orchestrator.chat() 已输出 SSE 帧（"data: {...}\n\n"），endpoint 纯透传。
+    # service.run() 已输出 SSE 帧（"data: {...}\n\n"），endpoint 纯透传。
     # 多轮历史以服务端（库）为准：请求只取末条用户消息作为当前提问，payload 历史不回放。
-    events = orchestrator.chat(principal.user_id, request.threadId, request.runId, request.messages[-1].content)
+    events = service.run(principal.user_id, request.threadId, request.runId, request.messages[-1].content)
     return ClosingStreamingResponse(_stream_and_close(events), media_type="text/event-stream")
 
-@router.post("/chat/cancel")
-def cancel_chat(
-    orchestrator: Injected[ChatOrchestrator],
+@router.post("/run/cancel", dependencies=[Depends(run_rate_limiter)])
+def cancel_run(
+    service: Injected[AgenticService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     request: CancelRequest,
 ):
     # 显式取消通道：先过归属校验再置 Redis 取消标志即返回（幂等），运行中的流式
     # 循环在节流边界感知后收口。不等流结束——同步生成器无法从外部打断在执行的
     # next()，等待时长不可控；前端配合本地 abort 获得即时取消态。
-    orchestrator.cancel_run(principal.user_id, request.threadId)
+    service.cancel_run(principal.user_id, request.threadId)
     return Response.success({"canceled": True}).to_dict()

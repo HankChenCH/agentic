@@ -8,10 +8,14 @@ _DEEPSEEK_DEFAULT_API_URL = "https://api.deepseek.com"
 class ModelTaskType(str, Enum):
     """模型任务类型（类似 huggingface 的 task 分类）：entry 声明自身用途，
     工厂据此校验调用方式并路由到对应的构建方法。
+
+    ``rerank`` 仅为配置预留（声明条目用途、使校验放行）；工厂尚未支持
+    rerank 构建，消费方出现前不参与装配。
     """
 
     CHAT = "chat"
     EMBEDDING = "embedding"
+    RERANK = "rerank"
 
 
 class LLMProviderEntry(BaseModel):

@@ -11,7 +11,7 @@
 - 日志与响应脱敏无关：所有非业务异常都以完整堆栈落日志（``exc_info=exc``），
   业务异常按 warning 记录（预期内错误，不打堆栈噪音）。
 
-SSE 端点（POST /agentic/chat）不受 HTTP 异常处理器管辖：响应头一旦发出，
+SSE 端点（POST /agentic/run）不受 HTTP 异常处理器管辖：响应头一旦发出，
 流内错误只能以 ag-ui RunErrorEvent 形式返回——脱敏策略与本文一致，实现见
 :meth:`app.services.orchestration.agentic_service.AgenticService._run_error_message`
 （业务异常如实、其余 prod 统一「服务内部错误」）；两处需同步维护。
