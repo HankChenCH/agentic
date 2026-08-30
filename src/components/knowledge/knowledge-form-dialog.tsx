@@ -1,13 +1,11 @@
-import { useEffect, useState, type FC, type FormEvent } from "react";
-import { Loader2Icon } from "lucide-react";
+import { useEffect, useState, type FC } from "react";
 
-import { Button } from "@/components/ui/button";
+import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -55,7 +53,6 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
   const [weight, setWeight] = useState("0");
   const [nameError, setNameError] = useState<string | null>(null);
   const [weightError, setWeightError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   // 每次打开按 initial 重置表单（关闭时不清，避免输入闪烁）
   useEffect(() => {
@@ -67,9 +64,7 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
     setWeightError(null);
   }, [open, initial]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-
+  const { submitting, handleSubmit } = useDialogSubmit(async () => {
     const trimmedName = name.trim();
     const nextNameError = !trimmedName
       ? "请输入知识库名称"
@@ -84,20 +79,14 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
 
     setNameError(nextNameError);
     setWeightError(nextWeightError);
-    if (nextNameError || nextWeightError) return;
+    if (nextNameError || nextWeightError) return null;
 
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit({
-        name: trimmedName,
-        description: description.trim(),
-        weight: weightNum,
-      });
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    return onSubmit({
+      name: trimmedName,
+      description: description.trim(),
+      weight: weightNum,
+    });
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -163,15 +152,10 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
             </p>
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
-              取消
-            </DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              {isEdit ? "保存" : "创建"}
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            label={isEdit ? "保存" : "创建"}
+          />
         </form>
       </DialogContent>
     </Dialog>

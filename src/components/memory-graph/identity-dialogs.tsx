@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useState, type FC, type FormEvent } from "react";
-import { Loader2Icon } from "lucide-react";
+import { useEffect, useMemo, useState, type FC } from "react";
 
-import { Button } from "@/components/ui/button";
+import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -75,7 +73,6 @@ export const MergeEntityDialog: FC<MergeEntityDialogProps> = ({
 }) => {
   const { entity } = context;
   const [targetRef, setTargetRef] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   useResetOnOpen(open, () => setTargetRef(""));
 
   const candidates = entities.filter((e) => e.id !== entity.id);
@@ -84,17 +81,10 @@ export const MergeEntityDialog: FC<MergeEntityDialogProps> = ({
   );
   const target = candidates.find((e) => e.id === targetRef);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!targetRef) return;
-    setSubmitting(true);
-    try {
-      const result = await onSubmit(targetRef);
-      if (result !== null) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { submitting, handleSubmit } = useDialogSubmit(
+    () => (targetRef ? onSubmit(targetRef) : null),
+    onOpenChange,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -137,13 +127,7 @@ export const MergeEntityDialog: FC<MergeEntityDialogProps> = ({
             </div>
           )}
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={!targetRef || submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              合并
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter submitting={submitting} disabled={!targetRef} label="合并" />
         </form>
       </DialogContent>
     </Dialog>
@@ -183,7 +167,6 @@ export const SplitEntityDialog: FC<SplitEntityDialogProps> = ({
   const [pickedStatements, setPickedStatements] = useState<Set<string>>(new Set());
   const [pickedLinks, setPickedLinks] = useState<Set<string>>(new Set());
   const [pickedAliases, setPickedAliases] = useState<Set<string>>(new Set());
-  const [submitting, setSubmitting] = useState(false);
 
   useResetOnOpen(open, () => {
     setName("");
@@ -221,24 +204,17 @@ export const SplitEntityDialog: FC<SplitEntityDialogProps> = ({
   const totalCount = statementRows.length + participations.length + entity.aliases.length;
   const allPicked = totalCount > 0 && pickedCount === totalCount;
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const { submitting, handleSubmit } = useDialogSubmit(async () => {
     const trimmedName = name.trim();
-    if (!trimmedName || pickedCount === 0) return;
-    setSubmitting(true);
-    try {
-      const result = await onSubmit({
-        name: trimmedName,
-        entityType,
-        aliases: entity.aliases.filter((a) => pickedAliases.has(a)),
-        statementIds: [...pickedStatements],
-        episodeLinkIds: [...pickedLinks],
-      });
-      if (result !== null) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    if (!trimmedName || pickedCount === 0) return null;
+    return onSubmit({
+      name: trimmedName,
+      entityType,
+      aliases: entity.aliases.filter((a) => pickedAliases.has(a)),
+      statementIds: [...pickedStatements],
+      episodeLinkIds: [...pickedLinks],
+    });
+  }, onOpenChange);
 
   const CheckList: FC<{ rows: CheckRow[]; picked: Set<string>; onToggle: (id: string) => void }> =
     ({ rows, picked, onToggle }) => (
@@ -347,13 +323,11 @@ export const SplitEntityDialog: FC<SplitEntityDialogProps> = ({
             </div>
           )}
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={!name.trim() || pickedCount === 0 || submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              执行拆分
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            disabled={!name.trim() || pickedCount === 0}
+            label="执行拆分"
+          />
         </form>
       </DialogContent>
     </Dialog>

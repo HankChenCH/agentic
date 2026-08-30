@@ -1,13 +1,11 @@
-import { useEffect, useState, type FC, type FormEvent } from "react";
-import { Loader2Icon } from "lucide-react";
+import { useEffect, useState, type FC } from "react";
 
-import { Button } from "@/components/ui/button";
+import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -53,7 +51,6 @@ export const DocumentFormDialog: FC<DocumentFormDialogProps> = ({
   const [weight, setWeight] = useState("0");
   const [nameError, setNameError] = useState<string | null>(null);
   const [weightError, setWeightError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -64,9 +61,7 @@ export const DocumentFormDialog: FC<DocumentFormDialogProps> = ({
     setWeightError(null);
   }, [open, document]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-
+  const { submitting, handleSubmit } = useDialogSubmit(async () => {
     const trimmedName = name.trim();
     const nextNameError = !trimmedName
       ? "请输入文档名称"
@@ -81,20 +76,14 @@ export const DocumentFormDialog: FC<DocumentFormDialogProps> = ({
 
     setNameError(nextNameError);
     setWeightError(nextWeightError);
-    if (nextNameError || nextWeightError) return;
+    if (nextNameError || nextWeightError) return null;
 
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit({
-        name: trimmedName,
-        description: description.trim(),
-        weight: weightNum,
-      });
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    return onSubmit({
+      name: trimmedName,
+      description: description.trim(),
+      weight: weightNum,
+    });
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -147,15 +136,7 @@ export const DocumentFormDialog: FC<DocumentFormDialogProps> = ({
             )}
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>
-              取消
-            </DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              保存
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter submitting={submitting} label="保存" />
         </form>
       </DialogContent>
     </Dialog>

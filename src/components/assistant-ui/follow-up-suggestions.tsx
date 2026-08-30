@@ -1,4 +1,3 @@
-"use client";
 
 import { AuiIf, useAuiState, ThreadPrimitive } from "@assistant-ui/react";
 import type { FC } from "react";

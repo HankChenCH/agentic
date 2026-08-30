@@ -1,13 +1,13 @@
-import { useEffect, useState, type FC, type FormEvent } from "react";
+import { useEffect, useState, type FC } from "react";
 import { Loader2Icon, SearchIcon } from "lucide-react";
 
+import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -103,7 +103,6 @@ export const DayPurgeDialog: FC<DayPurgeDialogProps> = ({
   const [date, setDate] = useState(todayLocalDate());
   const [preview, setPreview] = useState<PurgePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -126,17 +125,10 @@ export const DayPurgeDialog: FC<DayPurgeDialogProps> = ({
     }
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!payload || !preview) return;
-    setSubmitting(true);
-    try {
-      const result = await onSubmit(payload);
-      if (result !== null) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { submitting, handleSubmit } = useDialogSubmit(
+    () => (payload && preview ? onSubmit(payload) : null),
+    onOpenChange,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -180,13 +172,12 @@ export const DayPurgeDialog: FC<DayPurgeDialogProps> = ({
 
           <PurgePreviewBox preview={preview} loading={previewing} />
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" variant="destructive" disabled={!preview || submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              {confirmText}
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            disabled={!preview}
+            destructive
+            label={confirmText}
+          />
         </form>
       </DialogContent>
     </Dialog>
@@ -221,7 +212,6 @@ export const ThreadForgetDialog: FC<ThreadForgetDialogProps> = ({
   const [threadId, setThreadId] = useState("");
   const [preview, setPreview] = useState<PurgePreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -256,17 +246,10 @@ export const ThreadForgetDialog: FC<ThreadForgetDialogProps> = ({
     }
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!threadId || !preview) return;
-    setSubmitting(true);
-    try {
-      const result = await onSubmit({ scope: "thread", threadId });
-      if (result !== null) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { submitting, handleSubmit } = useDialogSubmit(
+    () => (threadId && preview ? onSubmit({ scope: "thread", threadId }) : null),
+    onOpenChange,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -316,13 +299,12 @@ export const ThreadForgetDialog: FC<ThreadForgetDialogProps> = ({
 
           <PurgePreviewBox preview={preview} loading={previewing} />
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" variant="destructive" disabled={!preview || submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              {confirmText}
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            disabled={!preview}
+            destructive
+            label={confirmText}
+          />
         </form>
       </DialogContent>
     </Dialog>
@@ -347,7 +329,6 @@ export const ResetMemoryDialog: FC<ResetMemoryDialogProps> = ({
 }) => {
   const [confirmText, setConfirmText] = useState("");
   const [exportChecked, setExportChecked] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -358,17 +339,10 @@ export const ResetMemoryDialog: FC<ResetMemoryDialogProps> = ({
 
   const ready = confirmText.trim() === RESET_WORD;
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!ready) return;
-    setSubmitting(true);
-    try {
-      const ok = await onConfirm(exportChecked);
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { submitting, handleSubmit } = useDialogSubmit(
+    () => (ready ? onConfirm(exportChecked) : null),
+    onOpenChange,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -404,13 +378,12 @@ export const ResetMemoryDialog: FC<ResetMemoryDialogProps> = ({
             />
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" variant="destructive" disabled={!ready || submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              重置全部记忆
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            disabled={!ready}
+            destructive
+            label="重置全部记忆"
+          />
         </form>
       </DialogContent>
     </Dialog>

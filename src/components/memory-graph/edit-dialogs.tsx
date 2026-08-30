@@ -1,13 +1,12 @@
-import { useEffect, useState, type FC, type FormEvent } from "react";
-import { Loader2Icon } from "lucide-react";
+import { useEffect, useState, type FC } from "react";
 
+import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -78,7 +77,6 @@ export const FactEditDialog: FC<FactEditDialogProps> = ({
   const [summary, setSummary] = useState("");
   const [validFrom, setValidFrom] = useState("");
   const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
   // 客体候选：排除主体自身（自指事实无意义）
   const subjectId = statement?.source ?? anchorEntity?.id ?? null;
@@ -99,17 +97,16 @@ export const FactEditDialog: FC<FactEditDialogProps> = ({
     setNote("");
   }, [open, statement]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const { submitting, handleSubmit } = useDialogSubmit(async () => {
     const trimmedPredicate = predicate.trim();
-    if (!trimmedPredicate) return;
-    if (objectMode === "entity" && !objectEntityId) return;
-    if (objectMode === "literal" && !objectText.trim()) return;
+    if (!trimmedPredicate) return null;
+    if (objectMode === "entity" && !objectEntityId) return null;
+    if (objectMode === "literal" && !objectText.trim()) return null;
 
     const payload: StatementWritePayload = { predicate: trimmedPredicate };
     if (objectMode === "entity") {
       const ref = numRef(objectEntityId);
-      if (ref == null) return;
+      if (ref == null) return null;
       payload.objectEntityId = ref;
     } else {
       payload.objectText = objectText.trim();
@@ -120,14 +117,8 @@ export const FactEditDialog: FC<FactEditDialogProps> = ({
     const initialValidFrom = statement?.validFrom?.slice(0, 10) ?? "";
     if (validFrom && validFrom !== initialValidFrom) payload.validFrom = validFrom;
 
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit(payload);
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    return onSubmit(payload);
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -231,13 +222,10 @@ export const FactEditDialog: FC<FactEditDialogProps> = ({
             />
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              {isCorrect ? "提交纠正" : "补充"}
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter
+            submitting={submitting}
+            label={isCorrect ? "提交纠正" : "补充"}
+          />
         </form>
       </DialogContent>
     </Dialog>
@@ -261,7 +249,6 @@ export const EntityEditDialog: FC<EntityEditDialogProps> = ({
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [entityType, setEntityType] = useState("OTHER");
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -272,25 +259,18 @@ export const EntityEditDialog: FC<EntityEditDialogProps> = ({
     );
   }, [open, entity]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const { submitting, handleSubmit } = useDialogSubmit(() => {
     const trimmedName = name.trim();
-    if (!trimmedName) return;
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit({
-        name: trimmedName,
-        aliases: aliases
-          .split(/[,，、]/)
-          .map((a) => a.trim())
-          .filter(Boolean),
-        entityType,
-      });
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    if (!trimmedName) return null;
+    return onSubmit({
+      name: trimmedName,
+      aliases: aliases
+        .split(/[,，、]/)
+        .map((a) => a.trim())
+        .filter(Boolean),
+      entityType,
+    });
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -344,13 +324,7 @@ export const EntityEditDialog: FC<EntityEditDialogProps> = ({
             </Select>
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              保存
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter submitting={submitting} label="保存" />
         </form>
       </DialogContent>
     </Dialog>
@@ -376,7 +350,6 @@ export const EpisodeEditDialog: FC<EpisodeEditDialogProps> = ({
   const [summary, setSummary] = useState("");
   const [scene, setScene] = useState("");
   const [occurredAt, setOccurredAt] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const initialOccurredAt = episode.occurredAt?.slice(0, 10) ?? "";
 
   useEffect(() => {
@@ -386,20 +359,13 @@ export const EpisodeEditDialog: FC<EpisodeEditDialogProps> = ({
     setOccurredAt(episode.occurredAt?.slice(0, 10) ?? "");
   }, [open, episode]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const { submitting, handleSubmit } = useDialogSubmit(() => {
     const trimmed = summary.trim();
-    if (!trimmed) return;
+    if (!trimmed) return null;
     const payload: EpisodeUpdatePayload = { summary: trimmed, scene: scene.trim() };
     if (occurredAt && occurredAt !== initialOccurredAt) payload.occurredAt = occurredAt;
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit(payload);
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    return onSubmit(payload);
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -446,13 +412,7 @@ export const EpisodeEditDialog: FC<EpisodeEditDialogProps> = ({
             <p className="text-xs text-muted-foreground">改动后才会提交，留空保持原值。</p>
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              保存
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter submitting={submitting} label="保存" />
         </form>
       </DialogContent>
     </Dialog>
@@ -486,7 +446,6 @@ export const EpisodeLinkEditDialog: FC<EpisodeLinkEditDialogProps> = ({
 }) => {
   const [entityRef, setEntityRef] = useState(link.entityId);
   const [role, setRole] = useState(link.role ?? "");
-  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -499,22 +458,15 @@ export const EpisodeLinkEditDialog: FC<EpisodeLinkEditDialogProps> = ({
     candidates.map((e) => [e.id, e.name]),
   );
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const { submitting, handleSubmit } = useDialogSubmit(() => {
     const payload: EpisodeLinkUpdatePayload = { role: role.trim() };
     if (entityRef !== link.entityId) {
       const ref = numRef(entityRef);
-      if (ref == null) return;
+      if (ref == null) return null;
       payload.entityId = ref;
     }
-    setSubmitting(true);
-    try {
-      const ok = await onSubmit(payload);
-      if (ok) onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    return onSubmit(payload);
+  }, onOpenChange);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -558,13 +510,7 @@ export const EpisodeLinkEditDialog: FC<EpisodeLinkEditDialogProps> = ({
             />
           </div>
 
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={submitting}>
-              {submitting && <Loader2Icon className="animate-spin" />}
-              保存
-            </Button>
-          </DialogFooter>
+          <DialogFormFooter submitting={submitting} label="保存" />
         </form>
       </DialogContent>
     </Dialog>

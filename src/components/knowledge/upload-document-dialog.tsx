@@ -2,19 +2,17 @@ import { useCallback, useEffect, useState, type FC } from "react";
 import { useDropzone } from "react-dropzone";
 import {
   FileTextIcon,
-  Loader2Icon,
   Trash2Icon,
   UploadCloudIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { DialogFormFooter } from "@/components/shared/dialog-footer";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -170,20 +168,17 @@ export const UploadDocumentDialog: FC<UploadDocumentDialogProps> = ({
           </div>
         </div>
 
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>
-            取消
-          </DialogClose>
-          <Button
-            disabled={files.length === 0 || uploading}
-            onClick={() => void handleUpload()}
-          >
-            {uploading && <Loader2Icon className="animate-spin" />}
-            {uploading
+        <DialogFormFooter
+          submitting={uploading}
+          disabled={files.length === 0}
+          type="button"
+          onClick={() => void handleUpload()}
+          label={
+            uploading
               ? "上传中…"
-              : `上传${files.length > 0 ? `（${files.length}）` : ""}`}
-          </Button>
-        </DialogFooter>
+              : `上传${files.length > 0 ? `（${files.length}）` : ""}`
+          }
+        />
       </DialogContent>
     </Dialog>
   );
