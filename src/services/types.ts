@@ -117,10 +117,14 @@ export type KnowledgeStatus =
 /** 知识库实体（GET /knowledge、列表 items 元素） */
 export interface BackendKnowledgeBase {
   id: string;
+  /** 属主用户 id（公开库对全员可见，私有库仅属主可见） */
+  user_id: string;
   name: string;
   description: string;
   /** 建库时的嵌入模型标识（创建后不可改，前端只读展示） */
   embedding_model: string;
+  /** 公开或私有标识：true 公开（全员可见），false 私有（仅属主可见） */
+  is_public: boolean;
   weight: number;
   status: KnowledgeStatus;
   /** 文档数（后端冗余计数） */

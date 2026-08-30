@@ -71,15 +71,20 @@ All commands run with CWD = `client/agentic-client/` (this directory).
 tool-call part), so **do not** write an extra adapter layer on top of it. When
 changing either side, keep the event sequence/format consistent with the server.
 
-**REST 数据流**（知识库等管理功能）：`lib/http.ts`（axios 实例，拦截器把
-`{error_code, error_message, response}` 信封拆包，HTTP 4xx 的业务错误同样转
-`BizError`）→ `services/*-service.ts`（类型化方法，multipart 用 `postForm`）→
+**REST 数据流**（知识库等管理功能）：`lib/http.ts`（axios 实例，请求拦截器注
+Bearer；响应拦截器只在 `error_code !== 0` / HTTP 4xx 时抛 `BizError`——
+**不在拦截器里拆信封**（axios 1.19 的 `AxiosInterceptorFulfilled` 要求拦截器
+原样返回 `AxiosResponse`），拆包由 `getJson`/`postJson`/`patchJson`/
+`deleteJson`/`postForm`/`getBinary` 各 helper 取 `response` 字段完成）→
+`services/*-service.ts`（类型化方法，multipart 用 `postForm`）→
 `hooks/use-*.ts`（状态 + 条件轮询 + toast）→ 组件。新增管理页面沿用这套分层。
 
 **路由**：react-router（`createBrowserRouter`）。`AgenticRuntimeProvider` 在
 路由外层，保证聊天 runtime 状态在页面切换间不丢。`/login` 公开（已登录访问
 则重定向回 `/`），其余路由（聊天 + `/admin/*`）全部经 `RequireAuth` 守卫
-（未登录跳 `/login` 并带 next 回跳参数）；守卫消费 `stores/auth-store.ts`
+（未登录跳 `/login`，回跳目标经 router **state**（`state.from`）传递）；
+401 双通道处理（`lib/http.ts` / `agentic-runtime.tsx`）则用 `/login?next=...`
+查询参数回跳守卫消费 `stores/auth-store.ts`
 （首个 zustand store，localStorage 键 `agentic-auth` 持久化 token/user）。
 聊天与管理侧分离：`/` 与 `/chat/:threadId` 都是聊天页 —— 会话身份经
 `components/assistant-ui/
@@ -115,7 +120,9 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
   `@assistant-ui/react-ag-ui` + `@assistant-ui/react-markdown`) on **Tailwind v4**
   (`@tailwindcss/vite`) + **shadcn/ui** primitives in `src/components/ui/`
   (`components.json` present, style `base-nova` → 底层是 **Base UI**（`@base-ui/react`），
-  不是 Radix —— 组件 API（如 `render={...}`、`data-open`）按 Base UI 语义写).
+  不是 Radix —— 组件 API（如 `render={...}`、`data-open`）按 Base UI 语义写；
+  `package.json` 里遗留一个无 import 使用的 `radix-ui` 直接依赖，属历史残留，
+  不要在新代码里用).
   State via **zustand**. Icons via **lucide-react**. Toast via **sonner**（`Toaster`
   挂在 `App.tsx`）. 文件上传拖拽用 **react-dropzone**.
   This replaced an earlier Ant Design X UI — do not reintroduce antd.

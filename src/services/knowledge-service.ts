@@ -26,6 +26,8 @@ export interface KnowledgeBaseCreateInput {
   name: string;
   description?: string;
   weight?: number;
+  /** 公开或私有标识，缺省私有（仅属主可见） */
+  isPublic?: boolean;
 }
 
 /** PATCH /knowledge/{kbId} 的请求体（部分更新：未传字段保持原值） */
@@ -33,6 +35,7 @@ export interface KnowledgeBaseUpdateInput {
   name?: string;
   description?: string;
   weight?: number;
+  isPublic?: boolean;
 }
 
 /** PATCH /knowledge/{kbId}/document/{docId} 的请求体（仅元数据） */

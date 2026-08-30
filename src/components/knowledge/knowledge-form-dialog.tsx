@@ -1,7 +1,9 @@
 import { useEffect, useState, type FC } from "react";
+import { GlobeIcon, LockIcon } from "lucide-react";
 
 import { useDialogSubmit } from "@/components/shared/use-dialog-submit";
 import { DialogFormFooter } from "@/components/shared/dialog-footer";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +20,8 @@ import type { BackendKnowledgeBase } from "@/services/types";
  * 新建/编辑知识库共用表单弹窗。
  *
  * 字段约束镜像后端 KnowledgeBaseCreateRequest：
- *   name 必填 ≤25；description ≤500；weight 整数（越大越靠前）。
+ *   name 必填 ≤25；description ≤500；weight 整数（越大越靠前）；
+ *   isPublic 公开/私有标识（缺省私有：仅属主可见，公开全员可见）。
  * embedding_model 由后端建库时从 llm.yaml 取默认值，前端不采集。
  * 受控组件 + 行内校验，不引入表单库（字段少，保持项目轻量模式）。
  */
@@ -30,6 +33,7 @@ export interface KnowledgeFormValues {
   name: string;
   description: string;
   weight: number;
+  isPublic: boolean;
 }
 
 interface KnowledgeFormDialogProps {
@@ -51,6 +55,7 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [weight, setWeight] = useState("0");
+  const [isPublic, setIsPublic] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [weightError, setWeightError] = useState<string | null>(null);
 
@@ -60,6 +65,7 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
     setName(initial?.name ?? "");
     setDescription(initial?.description ?? "");
     setWeight(String(initial?.weight ?? 0));
+    setIsPublic(initial?.is_public ?? false);
     setNameError(null);
     setWeightError(null);
   }, [open, initial]);
@@ -85,6 +91,7 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
       name: trimmedName,
       description: description.trim(),
       weight: weightNum,
+      isPublic,
     });
   }, onOpenChange);
 
@@ -132,6 +139,39 @@ export const KnowledgeFormDialog: FC<KnowledgeFormDialogProps> = ({
             />
             <p className="text-xs text-muted-foreground">
               {description.length}/{DESCRIPTION_MAX}
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label>可见性</Label>
+            <div
+              role="group"
+              aria-label="知识库可见性"
+              className="flex w-fit gap-1 rounded-lg border border-border bg-background p-1"
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant={isPublic ? "ghost" : "default"}
+                aria-pressed={!isPublic}
+                onClick={() => setIsPublic(false)}
+              >
+                <LockIcon />
+                私有
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={isPublic ? "default" : "ghost"}
+                aria-pressed={isPublic}
+                onClick={() => setIsPublic(true)}
+              >
+                <GlobeIcon />
+                公开
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              私有仅自己可见；公开全员可见，可被其他成员查看与使用。
             </p>
           </div>
 
