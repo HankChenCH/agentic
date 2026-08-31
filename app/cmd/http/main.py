@@ -2,8 +2,8 @@
 
 容器装配来自 app.core.container（async 容器），本文件只保留 HTTP
 特有部分：路由、全局异常处理器、边缘策略中间件（CORS 白名单/
-请求体上限，数值见 http.yaml）。限流为 fastapi-limiter 依赖，按端点
-挂载（见 app/api/rate_limit.py），不经中间件。建表/迁移不在启动路径——
+请求体上限，数值见 http.yaml）。限流不在应用内实现，由网关层
+（反向代理/API 网关）负责。建表/迁移不在启动路径——
 由 `python -m app.cmd.admin db upgrade` 负责（Alembic 管理，见
 alembic.ini + migrations/）。命令行参数见 __main__.py。
 """
@@ -128,8 +128,7 @@ def create_app():
     post_only = frozenset({"POST"})
 
     # 中间件后 add 者在外层（请求链 CORS → RequestID → BodySize → 路由）：
-    # 413 拒绝响应向外穿透时仍能补上 X-Request-ID 与跨域头（限流 429 由
-    # 端点依赖抛出，走全局异常处理器出信封，天然带请求 ID 与跨域头）。
+    # 413 拒绝响应向外穿透时仍能补上 X-Request-ID 与跨域头。
     server.add_middleware(
         BodySizeLimitMiddleware,
         specs=[

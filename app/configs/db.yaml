@@ -2,7 +2,7 @@ default: sqlite # 切换 PostgreSQL 时改为 postgres（需先 docker compose u
 providers:
   sqlite:
     type: sqlite
-    dsn: ${DB_DSN:data/agentic.db}
+    dsn: ${SQLITE_DB_PATH:data/agentic.db}
   postgres: # 与 docker-compose 的 postgres 服务对齐（psycopg3 驱动，lazy 连接）
     type: postgresql
     host: ${POSTGRES_HOST:127.0.0.1}

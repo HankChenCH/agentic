@@ -11,7 +11,7 @@
 
 配合全局异常处理器（:mod:`app.api.exception_handlers`）的原则：
 **日志永远记录完整堆栈，HTTP 响应才按环境脱敏** —— 全局级别 dev/test 取
-DEBUG、prod 取 INFO，可经 ``AGENTIC_LOG_LEVEL`` 覆盖。
+DEBUG、prod 取 INFO，可经 ``APP_LOG_LEVEL`` 覆盖。
 """
 
 from .base import AppLogger

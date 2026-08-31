@@ -12,8 +12,10 @@
   上下文(含工具调用对的重放),而非信任客户端回传的 messages。
 - **长期记忆**:每轮结束后由 LLM 抽取记忆存储,聊天中经 `memory_recall` 工具召回。
 - **知识库(RAG)**:PDF 上传 → MinerU 云端解析 → 分块 → bge-m3 嵌入 → Weaviate
-  向量检索(支持混合检索);`knowledge_list` / `knowledge_search` 双工具装配给
-  LLM,先列库再自选检索。
+  向量检索(支持混合检索);`knowledge_list` / `knowledge_search` 检索双工具与
+  `knowledge_context` / `knowledge_document_read` / `knowledge_document_list`
+  定位读取三工具装配给 LLM:先列库再自选检索,命中片段可按 doc_id + position
+  看邻域、整篇通读或浏览库内文档清单。
 - **builtin:rag 图智能体**:自建 LangGraph 状态图的 RAG 专用智能体(非工具循环):
   查询理解(闲聊/知识分路 + 多轮凝练)→ 混合检索(分路直达,无需 LLM 自选工具)→
   相关性过滤 → 带 [n] 引用生成,未命中自动改写重试一次后如实兜底;检索步骤以
@@ -52,7 +54,7 @@ uv sync
 # 3. 启动中间件(知识库需要;纯聊天只需默认 SQLite,可跳过)
 docker compose up -d
 
-# 4. 数据库迁移(建表/升级,由 Alembic 管理;库指向由 db.yaml/DB_DSN 决定)
+# 4. 数据库迁移(建表/升级,由 Alembic 管理;库指向由 db.yaml/SQLITE_DB_PATH 决定)
 uv run python -m app.cmd.admin db upgrade
 
 # 5. 启动 HTTP 服务
@@ -93,14 +95,14 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | 文件 | 内容 |
 | --- | --- |
 | `app.yaml` | 应用名、运行环境(`APP_ENV: dev/test/prod`)、默认 agent |
-| `http.yaml` | HTTP 边缘策略:CORS 源白名单与请求体大小上限(限流不走本文件,见 `api/rate_limit.py`) |
-| `llm.yaml` | LLM 提供方注册表(deepseek / openai 兼容网关 / ollama),按 `task_type` 区分 chat / embedding;每个 entry 可配 `timeout`(单次请求超时,秒,默认 120) |
+| `http.yaml` | HTTP 边缘策略:CORS 源白名单与请求体大小上限(限流不在应用内,由网关层实现) |
+| `llm.yaml` | LLM 提供方注册表(deepseek / openai 兼容网关 / ollama),按 `task_type` 区分 chat / embedding;每个 entry 可配 `timeout`(单次请求超时,秒,默认 120)与 `capabilities`(能力声明:`thinkable` + `features`——支持的 `with_structured_output` method 白名单,声明顺序即自发现优先级;强制 tool_choice 通道与 DeepSeek 思考模式互斥,由 `ThinkingAwareChatDeepSeek` 自动关思考,json_mode 思考兼容) |
 | `db.yaml` | 数据库,默认 `sqlite`(`data/agentic.db`),可切 `postgres` |
 | `vector_db.yaml` | 向量库(weaviate)+ 顶层 `embedding` 指向 llm.yaml 的嵌入条目 |
 | `filesystem.yaml` | 对象存储,默认 `rustfs`(S3 兼容),亦有 `local` 磁盘实现 |
 | `document_parser.yaml` | MinerU 云端 PDF 解析(OCR / 公式 / 表格开关、轮询超时) |
 | `memory.yaml` / `logging.yaml` / `task.yaml` | 记忆、日志、Celery broker/backend(驱动+key引用,指向 redis.yaml 的 entry)+ 任务 `time_limit`/`soft_time_limit`(硬/软超时,默认 600/540 秒) |
-| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储、限流计数与 Celery 队列共用,后者经 task.yaml 引用);可配 `socket_timeout`(命令读写,默认 5 秒)与 `socket_connect_timeout`(建连,默认 3 秒) |
+| `redis.yaml` | Redis 连接(default + providers,`standalone` 直连;取消信号存储与 Celery 队列共用,后者经 task.yaml 引用);可配 `socket_timeout`(命令读写,默认 5 秒)与 `socket_connect_timeout`(建连,默认 3 秒) |
 | `auth.yaml` | 认证:JWT 签发/验签(`AUTH_JWT_SECRET`、算法 HS256、`token_expire_minutes`,默认 7 天) |
 
 常用环境变量(`.env` 或进程环境均可):
@@ -110,15 +112,15 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `DEEPSEEK_API_KEY` | DeepSeek 聊天模型 | 无,必填 |
 | `MINERU_API_KEY` | MinerU PDF 解析 Bearer token | 空(首次解析报错) |
 | `APP_ENV` | 运行环境(dev/test 附异常 detail+trace,prod 只回通用信息) | `dev` |
-| `DB_DSN` | SQLite 数据库文件路径 | `data/agentic.db` |
+| `SQLITE_DB_PATH` | SQLite 数据库文件路径 | `data/agentic.db` |
 | `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
-| `REDIS_URL` | Redis 连接(取消信号存储、限流计数与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
+| `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
 | `AGENTIC_DEFAULT_AGENT_ID` | 会话默认智能体(当前内置:`builtin:demo` 通用助手、`builtin:rag` 知识库 RAG 图智能体) | `builtin:demo` |
 | `CORS_ORIGINS` | CORS 源白名单(逗号分隔整体覆盖) | `http://localhost:5173,http://127.0.0.1:5173` |
 | `AUTH_JWT_SECRET` | JWT 签名密钥(HS256 建议 ≥32 字节;生产必须显式设置) | `dev-only-secret-…`(仅开发) |
 | `RUN_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | run / 上传请求体上限(字节) | 1 MiB / 64 MiB |
-| `AGENTIC_LOG_LEVEL` / `AGENTIC_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
+| `APP_LOG_LEVEL` / `APP_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
 | `METRICS_ENABLED` / `METRICS_WORKER_PORT` | 指标采集开关 / worker 指标端口 | `true` / `9091` |
 
 配置目录与 `.env` 路径可整体覆盖:`AGENTIC_CONFIG_DIR`、`AGENTIC_ENV_FILE`
@@ -133,7 +135,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | postgres 18 | `127.0.0.1:5432` | `agentic` / `agentic` / db `agentic` | 可选数据库(默认用 SQLite) |
 | weaviate 1.39 | `127.0.0.1:8080`(HTTP)+ `:50052`(gRPC,宿主侧) | 匿名访问 | 知识库向量存储 |
 | rustfs(S3 兼容) | `127.0.0.1:9000` | `agentic` / `agentic-secret` | 知识库文件存储(bucket `agentic` 由 `rustfs-init` 幂等创建) |
-| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 + 取消标志存储 + 限流计数(独立 `redis.yaml`) |
+| redis 8 | `127.0.0.1:6379` | — | Celery broker / 结果库 + 取消标志存储(独立 `redis.yaml`) |
 
 ## API 一览
 
@@ -148,11 +150,11 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 公开库可见,写(更新/删除/启停/上传/文档写)仅属主可操作,越权访问与不存在同返回 404。
 
 边缘策略:CORS 收敛为源白名单(默认仅 Vite dev server 两种 loopback 形态,
-`CORS_ORIGINS` 覆盖,中间件为纯 ASGI、SSE 友好);限流为 fastapi-limiter 依赖
-按端点挂载——run / run-cancel 与文档上传按登录用户滑动窗口限流(fastapi-limiter
-+ pyrate-limiter,Redis 共享计数,多实例额度合一;额度为代码常量 run 30/分、
-上传 10/分,见 `api/rate_limit.py`),超限回 429 信封 + `Retry-After`;run 与
-文档上传另受请求体字节上限约束(Content-Length 超限直回 413,分块/谎报
+`CORS_ORIGINS` 覆盖,中间件为纯 ASGI、SSE 友好);**限流不在应用内实现,
+由网关层(反向代理/API 网关)按部署策略实现**——应用内限流(原 fastapi-limiter
+端点依赖方案)已于 2026-08-31 移除,原因是其与 FastAPI 0.139 新路由机制
+(`_IncludedRouter`)不兼容,决定外移而非修补,应用不再产生 429;run 与
+文档上传仍受请求体字节上限约束(Content-Length 超限直回 413,分块/谎报
 长度在读取处拦截),上传转存为流式——边写对象存储边计数与 sha256 摘要,
 内存占用与文件大小无关。
 

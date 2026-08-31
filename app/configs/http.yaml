@@ -1,7 +1,7 @@
 # HTTP 入口边缘策略：CORS 白名单 / 请求体大小上限
 # 模型见 app/core/config/http.py，中间件实现见 app/api/middleware.py（路由作用域在
-# app/cmd/http/main.py 接线）。限流不走本文件：fastapi-limiter 依赖按端点挂载、
-# Redis 共享计数，见 app/api/rate_limit.py。
+# app/cmd/http/main.py 接线）。限流不走本文件：应用内不限流，
+# 由网关层（反向代理/API 网关）实现。
 
 cors:
   # 浏览器源白名单（精确匹配 scheme+host+port）。默认覆盖 Vite dev server 的两种

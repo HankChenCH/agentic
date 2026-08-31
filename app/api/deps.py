@@ -2,10 +2,11 @@
 
 不回库查用户（user_id 即身份），删除用户后的残留令牌由各端点的归属查询
 （查无此行 → 404）自然兜住。失败一律抛 InvalidCredentialsError → 全局
-异常处理器出 401 信封（限流 429 同走该处理器，边缘层无第二份信封口径）。
+异常处理器出 401 信封。
 
-验签成功后把 principal 落在 ``request.state.user_principal``，供 router 级
-依赖之后的端点级依赖读取（限流按用户计数，见 ``app/api/rate_limit.py``）。
+验签成功后把 principal 落在 ``request.state.user_principal``（端点经
+``Depends(require_user)`` 类型化取返回值即可；state 副本供诊断等
+非依赖路径读取）。
 
 选型说明（为何不用中间件）：现有 api/middleware.py 是纯 ASGI 且位于全局
 异常处理器之外，鉴权放那层 401 需手写信封形成第二份口径；路径白名单与

@@ -1,8 +1,8 @@
 """memory 组件清单：能力声明（spec）+ 工具构造 + 装配器。
 
-能力导出 = 深度回忆三件套（timeline/expand/state_at）；快速回忆不走
-工具——会话开始前由 AgenticService 自动注入（见 ability.recall 的
-build_fast_context）。三件套均需当前会话 thread 做去重登记与访问强化。
+能力导出 = 深度回忆三件套（timeline/expand/state_at）；快速回忆不走工具
+——由 BaseAgent._input 每轮经 build_fast_context 组装进 system prompt
+（见 ability.recall）。三件套均需当前会话 thread 做去重登记与访问强化。
 
 thread 的传递方式：不能闭包捕获（agent 实例按 agentic_id 跨会话缓存），
 也不能用 ContextVar——编排层是 sync 生成器，Starlette 每次恢复都在不同
@@ -111,8 +111,9 @@ _SPEC = register_component(ComponentSpec(
     name="memory",
     title="长期记忆",
     description=(
-        "跨会话长期记忆：会话前自动注入快速回忆上下文（非工具），并提供"
-        "深度回忆三件套供 agent 按需检索历史事件、人物关联与时点状态。"
+        "跨会话长期记忆：每轮由 agent 输入装配自动注入快速回忆上下文"
+        "（system prompt 常驻摘要，非工具），并提供深度回忆三件套供 agent"
+        "按需检索历史事件、人物关联与时点状态。"
     ),
     tools=(
         ToolSpec(

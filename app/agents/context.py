@@ -10,8 +10,9 @@ class AgentRunContext:
     """一次智能体运行所需的上下文。
 
     ``messages`` 携带多轮对话（user/assistant 文本，旧→新），末条必须为当前轮
-    用户消息——BaseAgent 会把运行期动态信息（当前时间）注入末条后整体回放，
-    使无 checkpointer 的图也能跨运行携带多轮上下文。
+    用户消息——BaseAgent 会把运行期动态信息（system prompt 的快速记忆块、
+    末条时间前缀）注入后整体回放，使无 checkpointer 的图也能跨运行携带多轮
+    上下文。
 
     ``thread_id``/``user_id`` 经 ``_config`` 的 configurable 透传给需要会话/
     归属身份的工具（如记忆深度回忆三件套，经 ``_thread``/``_user`` 辅助读取）。

@@ -107,6 +107,16 @@ class KnowledgeDocumentRepository:
             session.commit()
         return list(ids)
 
+    def get_document_by_id(self, doc_id: UUID) -> KnowledgeDocument | None:
+        # 定位读取工具只拿到 doc_id：先按 id 取回文档行（kb_id/名称/状态/seg_num），
+        # 可见性与启用守卫由上层服务圈定
+        with Session(self.engine, expire_on_commit=False) as session:
+            doc = session.exec(
+                select(KnowledgeDocument).where(col(KnowledgeDocument.id) == doc_id)
+            ).first()
+            session.commit()
+        return doc
+
     def list_documents_by_ids(self, doc_ids: List[UUID]) -> List[KnowledgeDocument]:
         # 检索命中后的溯源信息组装（文档名等），去重后的 id 批量取回
         if not doc_ids:
@@ -158,6 +168,28 @@ class KnowledgeDocumentRepository:
                 kb.status = KnowledgeStatus.READY
             session.commit()
         return True
+
+    def list_segments_by_doc(
+        self, doc_id: UUID, start: int | None = None, end: int | None = None
+    ) -> List[DocumentSegment]:
+        """按 position 有序取回文档分段（含 content/meta），支持闭区间 [start, end] 过滤。
+
+        定位读取工具（邻域/范围读文）的数据通道；区间语义由调用方钳制后传入，
+        本方法不做越界修正（不存在的 position 自然查不到行）。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            statement = (
+                select(DocumentSegment)
+                .where(col(DocumentSegment.doc_id) == doc_id)
+                .order_by(col(DocumentSegment.position))
+            )
+            if start is not None:
+                statement = statement.where(col(DocumentSegment.position) >= start)
+            if end is not None:
+                statement = statement.where(col(DocumentSegment.position) <= end)
+            rows = session.exec(statement).all()
+            session.commit()
+        return list(rows)
 
     def list_segment_ids_by_doc(self, doc_id: UUID) -> List[UUID]:
         # 删除文档/重解析前收集分段 id，供上层清理向量库对象

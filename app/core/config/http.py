@@ -4,8 +4,7 @@
 覆盖。CORS origins 以逗号分隔字符串整体覆盖（YAML 内联默认值同为逗号分隔），
 由校验器拆分为列表——环境变量插值只产出字符串，列表化收敛在模型层。
 
-限流不在本节：fastapi-limiter 依赖按端点挂载，Redis 共享计数，
-见 ``app/api/rate_limit.py``（额度为代码常量）。
+限流不在本节：应用内不限流，由网关层（反向代理/API 网关）实现。
 """
 
 from pydantic import BaseModel, Field, field_validator

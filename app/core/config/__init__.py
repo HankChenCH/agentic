@@ -112,7 +112,7 @@ class AppConfig(BaseModel):
         default_factory=get_environment,
     )
     http: HttpConfig = Field(
-        description="HTTP 入口边缘策略：CORS 白名单与请求体大小上限（装配见 app.cmd.http；限流为 fastapi-limiter 依赖，见 app.api.rate_limit）。",
+        description="HTTP 入口边缘策略：CORS 白名单与请求体大小上限（装配见 app.cmd.http；限流不在应用内，由网关层实现）。",
         default_factory=lambda: load_section("http.yaml", HttpConfig),
     )
     auth: AuthConfig = Field(

@@ -5,11 +5,24 @@ providers:
     task_type: chat
     api_key: ${DEEPSEEK_API_KEY}
     model: deepseek-v4-flash
+    # 能力声明（描述事实，不携带调用策略）：features = 该模型支持的
+    # with_structured_output method 白名单（声明顺序即自发现优先级）。
+    # DeepSeek 思考模式拒绝强制 tool_choice，function_calling/json_schema
+    # （强制 tool_choice 通道）由 ThinkingAwareChatDeepSeek 自动以关思考副本
+    # 执行；声明 json_mode 则思考兼容，无需关思考
+    capabilities:
+      thinkable: true
+      features:
+        - "function_calling"
   deepseek-pro:
     type: deepseek
     task_type: chat
     api_key: ${DEEPSEEK_API_KEY}
     model: deepseek-v4-pro
+    capabilities:
+      thinkable: true
+      features:
+        - "function_calling"
   # OpenAI 兼容中转/三方网关：api_url 填实际网关地址，model 按网关支持的模型调整
   # openai-chat:
   #   type: openai
@@ -17,6 +30,11 @@ providers:
   #   api_url: ${OPENAI_API_URL}
   #   api_key: ${OPENAI_API_KEY}
   #   model: gpt-4o-mini
+  #   capabilities:
+  #     thinkable: true
+  #     features:
+  #       - "function_calling"
+  #       - "json_schema"
   # openai-embedding:
   #   type: openai
   #   task_type: embedding

@@ -1,4 +1,6 @@
 enabled: true
+# 抽取/裁决走 with_structured_output：thinkable 模型上由
+# ThinkingAwareChatDeepSeek 自动关思考，无需为调用策略另设 entry
 extraction_provider: deepseek-flash
 
 recall:

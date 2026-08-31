@@ -31,7 +31,6 @@ dependencies = [
     # 用户域：JWT 签发/验签（密码哈希用 stdlib pbkdf2，不引 passlib）
     "pyjwt>=2.10.0",
     "prometheus-client>=0.21",
-    "fastapi-limiter>=0.2.0",
 ]
 
 [dependency-groups]

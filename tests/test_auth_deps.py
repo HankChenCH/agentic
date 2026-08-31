@@ -43,7 +43,7 @@ def test_valid_token_yields_principal():
     principal = require_user(request)
     assert isinstance(principal, UserPrincipal)
     assert principal.username == "alice"
-    assert request.state.user_principal is principal  # 落 state 供限流标识等后续依赖读取
+    assert request.state.user_principal is principal  # 落 state 供诊断等非依赖路径读取
 
 
 def test_garbage_and_cross_secret_tokens_rejected():

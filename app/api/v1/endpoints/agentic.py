@@ -8,7 +8,6 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.api.rate_limit import run_rate_limiter
 from app.services import AgenticService, ConversationService
 
 from app.models.schema.request.pagination import PaginationRequest
@@ -95,7 +94,7 @@ def delete_conversation(
 ):
     return Response.success(conversations.delete_conversation(user_id=principal.user_id, thread_id=thread_id)).to_dict()
 
-@router.post("/run", dependencies=[Depends(run_rate_limiter)])
+@router.post("/run")
 def run(
     service: Injected[AgenticService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
@@ -106,7 +105,7 @@ def run(
     events = service.run(principal.user_id, request.threadId, request.runId, request.messages[-1].content)
     return ClosingStreamingResponse(_stream_and_close(events), media_type="text/event-stream")
 
-@router.post("/run/cancel", dependencies=[Depends(run_rate_limiter)])
+@router.post("/run/cancel")
 def cancel_run(
     service: Injected[AgenticService],
     principal: Annotated[UserPrincipal, Depends(require_user)],

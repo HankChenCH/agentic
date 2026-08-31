@@ -6,9 +6,11 @@
 rewrite 重试一次，仍空如实兜底。中间 LLM 调用不进 UI 不落库，检索步骤以
 tools 通道的伪工具事件呈现（前端零改动渲染"正在检索"与溯源卡片）。
 
-人设（generate 系统提示词）即 ``build_system_prompt``；记忆快速上下文仍由
-编排层注入本轮用户消息（对图透明）；深度回忆/知识检索等 LLM 工具不挂载
-——本智能体的能力面就是图本身。
+人设（generate 系统提示词）即 ``build_system_prompt``；记忆快速上下文由本
+agent 的 ``_input`` 折进本轮用户消息（图节点按文本渲染历史，system 消息会被
+understand 丢弃——与 BaseAgent 默认的 system prompt 组装不同路，属本图自己的
+装配约定，对图仍透明）；深度回忆/知识检索等 LLM 工具不挂载——本智能体的
+能力面就是图本身。
 """
 
 from typing import List
@@ -68,12 +70,18 @@ class RagAgent(BaseAgent):
         """图输入：滤除工具痕迹后的历史 + 整体初始化的状态通道。
 
         多轮历史以库回放为准（图无 checkpointer）；检索痕迹（TOOL_CALL/
-        TOOL_RESULT 回放对）不参与凝练上下文。运行期动态信息（当前时间）
-        注入末条用户消息，与 BaseAgent 同口径。
+        TOOL_RESULT 回放对）不参与凝练上下文。运行期动态信息注入末条用户
+        消息：快速记忆块折叠（本图节点按文本渲染历史，system 消息会被
+        understand 丢弃，故不采用 BaseAgent 的 system prompt 组装）+ 当前
+        时间前缀，形状与原编排层注入逐字一致。
         """
         messages: List[BaseMessage] = [m for m in ctx.messages if _is_chat_text(m)]
         if messages:
-            messages[-1] = HumanMessage(f"[当前时间：{ctx.now}]\n\n{messages[-1].content}")
+            current = message_text(messages[-1])
+            block = self._fast_memory_block(ctx)
+            if block:
+                current = f"{block}\n\n---\n\n用户提问：{current}"
+            messages[-1] = HumanMessage(f"[当前时间：{ctx.now}]\n\n{current}")
         return {
             "messages": messages,
             "route": "",

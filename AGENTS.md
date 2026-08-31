@@ -11,7 +11,7 @@ Python 3.12 backend (**FastAPI + Celery + LangChain/LangGraph + ag-ui**) serving
 
 ```
 server/                          # this directory is its own git repo (the workspace root is not)
-├── pyproject.toml               # uv-managed deps (langchain, langchain-deepseek, wireup, ag-ui-protocol, celery[redis], langchain-weaviate, prometheus-client, fastapi-limiter)
+├── pyproject.toml               # uv-managed deps (langchain, langchain-deepseek, wireup, ag-ui-protocol, celery[redis], langchain-weaviate, prometheus-client)
 ├── alembic.ini                  # Alembic 配置：script_location 用 %(here)s 锚定（不依赖 CWD）；
 │                                #   sqlalchemy.url 留空——URL 由 migrations/env.py 从应用配置链解析
 ├── migrations/                  # Alembic 迁移：env.py（import app.models.domain 收集 SQLModel.metadata 作
@@ -19,7 +19,7 @@ server/                          # this directory is its own git repo (the works
 │                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表）
 ├── docker-compose.yaml          # Middleware stack: PostgreSQL + Weaviate + RustFS + Redis (local dev)
 ├── .python-version              # 3.12
-├── .env                         # 环境变量：APP_ENV、DB_DSN、WEAVIATE_*、DEEPSEEK_API_KEY、OPENAI_API_KEY（占位，OpenAI 兼容网关）、MINERU_API_KEY
+├── .env                         # 环境变量：APP_ENV、SQLITE_DB_PATH、WEAVIATE_*、DEEPSEEK_API_KEY、OPENAI_API_KEY（占位，OpenAI 兼容网关）、MINERU_API_KEY
 ├── .gitignore
 └── app/
     ├── cmd/                     # Entrypoints — one subdir per launchable app
@@ -36,11 +36,7 @@ server/                          # this directory is its own git repo (the works
 │                            #   add_typer 挂载：memory 域 repair（实体错合并存量修复，幂等，默认 dry-run，
 │                            #   --apply 落库）+ rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
 │                            #   + db 域：Alembic 迁移薄封装（upgrade/downgrade/revision/current/history/stamp）
-├── api/                     # exception_handlers.py (global AOP handlers); rate_limit.py (fastapi-limiter 限流
-│                              #   依赖：pyrate-limiter Redis 桶按 key 分桶（agentic:ratelimit: 前缀），
-│                              #   按 JWT 用户计数（require_user 落 request.state，未认证回退客户端 IP），
-│                              #   429 经全局异常处理器出信封+Retry-After；额度为代码常量，run/run-cancel
-│                              #   与上传端点挂载); middleware.py (纯 ASGI 边缘中间件，SSE
+├── api/                     # exception_handlers.py (global AOP handlers); middleware.py (纯 ASGI 边缘中间件，SSE
 │                              #   友好：RequestIDMiddleware——X-Request-ID 生成/透传 + loguru 上下文注入，
 │                              #   SSE 线程池日志同携带；BodySizeLimitMiddleware——请求体
 │                              #   字节上限，Content-Length 超限直回 413，实收累计超限（分块/谎报长度）由
@@ -91,8 +87,9 @@ server/                          # this directory is its own git repo (the works
     │                            #   assembles sinks from logging.yaml), service.py (LoggerFactory @injectable singleton)
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
-    ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents
-    │                            #   (demo/rag；rag 为自建 StateGraph，见 Gotchas「builtin:rag」)
+├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents
+│                            #   (builtin/{demo,rag}/ 一 agent 一包；rag 为自建 StateGraph，
+│                            #   见 Gotchas「builtin:rag」)
 ├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
 │                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
 │                            #   register_component/describe_capabilities）+ memory/ + knowledge/ + demo/。
@@ -102,8 +99,10 @@ server/                          # this directory is its own git repo (the works
 │                            #   实现，可选）+ repositories/（自有存储，可选）。
 │                            #   memory: ability/{recall,consolidation,user_node} + internal/{extraction,resolution,
 │                            #   renderer,scoring,vocab} + admin.py（MemoryEditor/MemoryGraphReader 端口
-│                            #   回填）+ repositories/ 图谱实现；knowledge: ability/retrieval +
-│                            #   manifest 契约模型 KnowledgeSearchResult（LLM/前端共用 JSON 形状）；
+│                            #   回填）+ repositories/ 图谱实现；knowledge: ability/{retrieval,
+│                            #   navigation}（检索 + 定位读取——邻域窗口/范围读文/文档清单，
+│                            #   守卫口径与检索一致：可见性 + KB/文档 enabled）+ manifest 契约模型
+│                            #   KnowledgeSearchResult 与 KnowledgeSegmentWindow（LLM/前端共用 JSON 形状）；
 │                            #   demo: ability/weather（演示工具 get_weather，mock 数据源收敛在
 │                            #   门面内部，未来替换实现工具层不动）。
 │                            #   能力（v1 仅 tools）经 manifest 静态登记注册表，装配器绑定服务产出
@@ -192,7 +191,7 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   create tables at startup). Subcommands: `downgrade <rev>`, `revision -m
   "..." [--autogenerate]`, `current`, `history`, `stamp [head]` — thin
   wrappers over `alembic.command`, URL resolved by `migrations/env.py` from
-  the app config chain (`DB_DSN`/`AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` all
+  the app config chain (`SQLITE_DB_PATH`/`AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` all
   apply). Workflow: change `models/domain` → `db revision --autogenerate` →
   review the script → `db upgrade`. A pre-Alembic DB (created by the old
   startup `create_all`) is adopted once via `db stamp head`. Direct
@@ -230,11 +229,9 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
     (`RUSTFS_BUCKET` overridable)
   - **redis** (`redis:8-alpine`) → `127.0.0.1:6379` — **in use** as the Celery
     broker/result backend by `app/cmd/task_executor` (task.yaml's broker/
-    backend reference the `redis.yaml` `redis` entry by driver+key), by
+    backend reference the `redis.yaml` `redis` entry by driver+key) and by
     the signal store's Redis backend (`app/configs/redis.yaml`, same entry by
-    default, keys prefixed `agentic:signal:`) and by the HTTP rate limiter
-    (`app/api/rate_limit.py`, same entry via an asyncio client, keys prefixed
-    `agentic:ratelimit:`)
+    default, keys prefixed `agentic:signal:`)
 - Redis is used by the task executor. The app's default db is still SQLite
   (`db.yaml` `default: sqlite`); the matching `postgres` entry is wired through
   `app/infrastructures/db/` (psycopg3 driver, lazy) — switch by changing
@@ -308,9 +305,10 @@ Server layer rules:
   ExceptionMiddleware 之外,抛异常只会变 500,实收超限路径经 `HTTPException(413)`
   复用全局 http_exception_handler;add 顺序决定层级：后 add 者在外层,请求链
   CORS → Metrics → RequestID → BodySize → 路由,拒绝响应向外穿透时补齐
-  X-Request-ID 与跨域头)。限流已不在此层：`api/rate_limit.py` 以 fastapi-limiter
-  依赖按端点挂载（run/run-cancel 与上传；按 JWT 用户计数、Redis 共享窗口，
-  429 经全局异常处理器出信封）。The endpoint is a
+  X-Request-ID 与跨域头)。限流不在应用层：原 `api/rate_limit.py`
+  （fastapi-limiter 端点依赖）已于 2026-08-31 移除——fastapi-limiter 0.2.0
+  与 FastAPI 0.139 的 `_IncludedRouter` 路由重构不兼容，决定外移而非修补；
+  限流职责归网关层（反向代理/API 网关），应用不再产生 429。The endpoint is a
   passthrough: `AgenticService.run` already yields encoded `data: {...}\n\n`
   frames (the `ag_ui.encoder.EventEncoder` lives in the orchestrator's
   translator), returned as
@@ -364,9 +362,18 @@ Server layer rules:
   （`list_visible_knowledge`/`search_for_user`，`search_for_user`/`search` 透传
   alpha——builtin:rag 的检索节点以 alpha=0.5 混合检索消费）→enabled 收敛→
   嵌入模型一致性守卫（`KnowledgeBase.embedding_model` 的消费者）→文档 enabled 后滤→
-  溯源组装；`knowledge_list`/`knowledge_search` 双工具经 `AgentToolbox` 装配（LLM
-  先列库再自选 kb_ids 检索），工具与图节点共用的结果串组装收敛在 manifest 的
-  `render_search_result`（`KnowledgeSearchResult` JSON 契约唯一组装点）。`KnowledgeObjectStore` 仍在 services 侧拥有
+  溯源组装；知识工具共五件，经 `AgentToolbox` 装配（LLM 先列库再自选 kb_ids
+  检索）：`knowledge_list`/`knowledge_search` 检索双工具 + `knowledge_context`
+  （命中片段邻域窗口）/`knowledge_document_read`（按 position 范围读文，段数
+  与字符预算截断并附续读指引）/`knowledge_document_list`（库内文档清单）定位
+  读取三工具——定位读取以检索结果自带的 `doc_id + position` 为句柄，门面在
+  `components/knowledge/ability/navigation.py`（`KnowledgeNavigationService`，
+  仓储读取通道 `get_document_by_id`/`list_segments_by_doc`），守卫口径与检索
+  一致（可见性 + KB/文档 enabled；不涉向量故无嵌入模型守卫），工具使用引导
+  收在各工具 description（随工具走，不散落 agent 系统提示词），工具与图节点
+  共用的检索结果串组装收敛在 manifest 的
+  `render_search_result`（`KnowledgeSearchResult` JSON 契约唯一组装点；定位
+  读取同款为 `render_segment_window`）。`KnowledgeObjectStore` 仍在 services 侧拥有
   `knowledge/{kb_id}/{doc_id}/...` key 布局 + best-effort 清理——服务不直接触碰
   `VectorStoreFactory`/raw `Filesystem`。不变量在服务层强制
   (`support.require_kb`/`require_document` raise 4001/4004)，纯函数在
@@ -384,7 +391,7 @@ Server layer rules:
   per-sink `type` (console/file), `level`, `format`, `serialize` (JSON);
   file sinks add `rotation`/`retention`/`compression`/`enqueue`. Global level
   defaults by environment (dev/test=DEBUG, prod=INFO; override via
-  `AGENTIC_LOG_LEVEL`). stdlib `logging.getLogger(__name__)` under the `app`
+  `APP_LOG_LEVEL`). stdlib `logging.getLogger(__name__)` under the `app`
   domain is bridged into the same sinks via `InterceptHandler` — uvicorn &
   third-party loggers stay untouched; use this in module-level non-DI code
   (e.g. `api/exception_handlers.py`). Inside injectable classes, inject
@@ -412,7 +419,14 @@ Server layer rules:
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
   `chat`/`embedding`（`rerank` 为配置预留、工厂尚未支持构建）; entry 级 `timeout`（秒，默认 120）落地为模型客户端
   请求超时——deepseek/openai 走 `request_timeout`，ollama 走
-  `client_kwargs={"timeout": ...}`；`deepseek-*` via `DEEPSEEK_API_KEY`,
+  `client_kwargs={"timeout": ...}`；entry 级 `capabilities`（`thinkable` +
+  `features`——支持的 `with_structured_output` method 白名单，Literal 未知值
+  加载期 fail-fast，声明顺序即自发现优先级）描述模型/部署能力；deepseek
+  builder 产物 `ThinkingAwareChatDeepSeek` 据此自发现/校验 method 并对思考
+  互斥项自动对齐——`function_calling`/`json_schema`（后者被 langchain-deepseek
+  重映射为前者）为强制 tool_choice 通道，与思考模式互斥（400）→ 关思考副本
+  执行；`json_mode` 走 response_format，思考兼容无需关思考。调用方不指定
+  method（记忆抽取/裁决、RAG understand/grade），规则归属供应商模型类；`deepseek-*` via `DEEPSEEK_API_KEY`,
   `openai-chat`/`openai-embedding` via `OPENAI_API_KEY` for
   OpenAI-compatible gateways——这两条 entry 当前在 `llm.yaml` 中
   **注释未启用**（代码侧 openai builder 已注册，启用时取消注释即可）, `ollama-embedding` (bge-m3) is local —
@@ -432,17 +446,13 @@ Server layer rules:
   `type`-discriminated entries — `standalone` via `REDIS_URL`, entry 级
   `socket_timeout`/`socket_connect_timeout`（默认 5/3 秒）传给
   `Redis.from_url`; direct-Redis
-  capabilities such as the signal store's Redis backend and the rate limiter's
-  asyncio client (`api/rate_limit.py`——api 层禁入 infrastructures 的分层禁边，
-  由按同一 entry 组装 asyncio 客户端绕开，同 `create_default_redis` 的第三方
-  类型先例), plus the Celery queue via
+  capabilities such as the signal store's Redis backend, plus the Celery queue via
   task.yaml's references — the single source of Redis connection facts), `http`
   (`HttpConfig`: CORS `origins` 白名单（逗号分隔字符串→列表，精确
   `http(s)://host[:port]`，`CORS_ORIGINS` 整体覆盖）+ `allow_credentials`；
   `max_body_bytes` 按 run/upload 作用域——路由匹配在
-  `cmd/http/main.py` 接线，中间件在 `api/middleware.py`。限流不在本节：
-  fastapi-limiter 依赖按端点挂载、Redis 共享计数（`api/rate_limit.py`，
-  额度为代码常量）), `metrics` (`MetricsConfig`: `enabled`（
+  `cmd/http/main.py` 接线，中间件在 `api/middleware.py`。限流不在本节也
+  不在应用内：由网关层实现（见 Gotchas「Edge limits」）), `metrics` (`MetricsConfig`: `enabled`（
   `METRICS_ENABLED`，关闭则不挂 /metrics 与 MetricsMiddleware）+
   `worker_metrics_port`（Celery worker 指标端口，`METRICS_WORKER_PORT`）——
   端点与中间件在 `api/metrics.py`，worker 侧装配在
@@ -486,8 +496,10 @@ Server layer rules:
   ③ `agents/toolbox.py` 加一个装配器字段（全系统唯一显式组件清单点，构造期
   校验跨组件工具名冲突）——`AgentFactory` 与各 agent 的 `build_tools` 不变。
   包内模块间一律完整子模块路径互导，禁经包 `__init__` 取属性（防初始化环）。
-  快速上下文注入与轮次收尾不在 v1 能力范式内：编排层直接 DI 组件门面服务
-  （`AgenticService` 注入 `MemoryRecallService`、`TurnFinalizer` 注入
+  快速上下文注入的读路径装配归 agent 层：`BaseAgent._input` 每轮经
+  `toolbox.memory.recall` 把快注块组装进 system prompt（RAG 因图节点按文本
+  渲染历史，在其 `_input` 折进末条用户消息）。轮次收尾不在 v1 能力范式内：
+  编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
   `MemoryConsolidationService`）。
 - **repositories** → data access for the conversation domain (`@injectable`),
   backed by the injected SQLAlchemy `Engine` (SQLModel sessions).
@@ -590,16 +602,16 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   are pinned to GET/POST/PATCH/DELETE/OPTIONS and headers to Content-Type /
   X-Request-ID / Authorization. Keep origins exact (`http(s)://host[:port]`, no
   trailing slash, no `*` — the config validator enforces this).
-- Edge limits: rate limiting lives in `api/rate_limit.py` (fastapi-limiter +
-  pyrate-limiter 4.x): POST `/agentic/run`、`/agentic/run/cancel` and document
-  upload are rate-limited per JWT user (fallback: client IP) with a Redis-shared
-  sliding window — pyrate 的桶在整桶窗口内计数、与 key 无关，按 key 限额靠自定义
-  `PerKeyBucketFactory` 一 key 一桶（`agentic:ratelimit:` 前缀）；额度为代码常量
-  （run 与 cancel 各 30/分——fastapi-limiter 以路由索引参与 key，两端点独立窗口，
-  旧中间件为共享前缀窗口；上传 10/分）；`Retry-After` 为窗口长度上界而非精确
-  等待秒数。Body-size caps remain in `api/middleware.py` via `http.yaml`
+- Edge limits: **rate limiting is NOT implemented in-app**（2026-08-31 移除原
+  `api/rate_limit.py` fastapi-limiter 方案——其 0.2.0 实现遍历
+  `request.app.routes` 取 `route.path` 计算限流 key，与 FastAPI 0.139
+  `include_router` 不再摊平子路由（`_IncludedRouter` 包装对象无 `path`）的
+  重构不兼容，include 出来的端点一进依赖即 500；决定外移而非修补）——
+  限流由网关层（反向代理/API 网关）按部署策略实现；应用自身不产生 429，
+  `fastapi-limiter`/`pyrate-limiter` 依赖已从 pyproject 移除。Body-size caps
+  remain in `api/middleware.py` via `http.yaml`
   (run 1 MiB JSON, upload 64 MiB multipart > the 50 MiB service-level file cap).
-  429/413 rejections use the standard `Response` envelope. Upload itself streams:
+  413 rejections use the standard `Response` envelope. Upload itself streams:
   the endpoint passes `UploadFile.file` through and
   `KnowledgeDocumentService.create_document` wraps it in a counting/sha256
   read-through reader (`_CountingDigestReader`) so the object-store `put` never
@@ -694,9 +706,13 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   entity on fusion score 1.0 / true cosine 0.44) is documented in
   `docs/memory-v2-design.md` §8; polluted archives are repairable via
   `python -m app.cmd.admin memory repair --apply`.
-  Recall has two tiers: `AgenticService.run` auto-injects a brief block
-  (`MemoryRecallService.build_fast_context`, pure SQL scoring, no LLM/embedding)
-  before streaming; deep recall = three tools (`timeline`/`expand`/`state_at`,
+  Recall has two tiers: `BaseAgent._input` composes a brief block into the
+  head SystemMessage each run (`MemoryRecallService.build_fast_context`, pure
+  SQL scoring, no LLM/embedding — a stable top-10 standing digest: it neither
+  skips session-fed ids nor bumps access counts, but still marks ids so deep
+  tools return only增量; `builtin:rag` folds the block into the last user
+  message since its nodes render history as text and would drop a
+  SystemMessage); deep recall = three tools (`timeline`/`expand`/`state_at`,
   declared and built in `components/memory/manifest.py`, reading the current
   thread from the langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
   into `configurable`, and tools declare a `config: RunnableConfig` param that

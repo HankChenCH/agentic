@@ -59,7 +59,7 @@ def test_bbox_flows_from_content_list_to_tool_json():
                 [],
             )
 
-    tools = {t.name: t for t in KnowledgeComponent(retrieval=StubRetrieval()).tools("builtin:demo")}
+    tools = {t.name: t for t in KnowledgeComponent(retrieval=StubRetrieval(), navigation=None).tools("builtin:demo")}
     payload = json.loads(tools["knowledge_search"].invoke({"query": "如何安装"}))
     source = payload["sources"][0]
     assert source["bboxes"][0] == [0, 0.07, 0.13, 0.56, 0.16]

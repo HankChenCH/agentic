@@ -1,34 +1,26 @@
-"""HTTP 边缘策略：fastapi-limiter 限流依赖、请求体上限中间件与 CORS 配置校验。
+"""HTTP 边缘策略：请求体上限中间件与 CORS 配置校验。
 
-限流以 build_rate_limiter + PerKeyBucketFactory + InMemoryBucket（可注入时钟）
-驱动，不依赖 Redis；信封/异常处理器联动用最小 FastAPI 应用 + TestClient
-验证（httpx 依赖已有）。
+限流不在应用层实现（由网关层负责，见 README「边缘策略」），无对应用例。
+信封/异常处理器联动用最小 FastAPI 应用 + TestClient 验证（httpx 依赖已有）。
 """
 
 import asyncio
 import json
 import re
 from typing import Sequence
-from uuid import UUID
 
 import pytest
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pyrate_limiter import AbstractClock, Duration, InMemoryBucket, Rate
 from starlette.exceptions import HTTPException
 from starlette.testclient import TestClient
 
-from app.api.deps import UserPrincipal
 from app.api.exception_handlers import register_exception_handlers
 from app.api.middleware import (
     BodySizeLimitMiddleware,
     BodySizeSpec,
 )
-from app.api.rate_limit import build_rate_limiter
 from app.core.config import CorsConfig
-
-USER_A = UUID("aaaaaaaa-0000-0000-0000-000000000001")
-USER_B = UUID("bbbbbbbb-0000-0000-0000-000000000002")
 
 
 def make_scope(method="POST", path="/agentic/run", headers=(), client=("203.0.113.7", 51234)):
@@ -112,109 +104,6 @@ async def call(middleware, scope, messages=()):
     send = SendRecorder()
     await middleware(scope, receive_from(messages), send)
     return send
-
-
-# ---------- 限流（fastapi-limiter 依赖） ----------
-
-
-class _FakeClock(AbstractClock):
-    """与注入时钟同源的桶内时钟。
-
-    桶的泄漏清理与计数必须共用同一时间轴（生产由 _wall_now_ms 对齐
-    RedisBucket.now() 保证）；内存桶默认走单调时钟，注入假时间戳时会被
-    泄漏线程立即当作过期清掉，故显式换钟。
-    """
-
-    def __init__(self, state: dict):
-        self._state = state
-
-    def now(self) -> int:
-        return int(self._state["ms"])
-
-
-def build_limited_app(*, rate=None, with_identity=True):
-    """最小限流应用：身份依赖先落 request.state，限流依赖后执行（同生产顺序）。
-
-    身份按 X-Test-User 头选用户，供跨用户独立计数断言；时钟可写（dict），
-    供窗口滑动断言。返回 (app, clock, limiter_dep)。
-    """
-    rate = rate or Rate(2, Duration.MINUTE)
-    clock = {"ms": 1_000_000}
-
-    def make_bucket(name):
-        bucket = InMemoryBucket([rate])
-        bucket._clock = _FakeClock(clock)
-        return bucket
-
-    limiter_dep = build_rate_limiter(
-        rate=rate,
-        make_bucket=make_bucket,
-        now_ms=lambda: clock["ms"],
-        scope="run",
-    )
-
-    app = FastAPI()
-    register_exception_handlers(app)
-
-    def identity(request: Request) -> UserPrincipal:
-        user_id = USER_B if request.headers.get("x-test-user") == "b" else USER_A
-        principal = UserPrincipal(user_id=user_id, username="alice")
-        request.state.user_principal = principal
-        return principal
-
-    deps = [Depends(identity), Depends(limiter_dep)] if with_identity else [Depends(limiter_dep)]
-
-    @app.post("/agentic/run", dependencies=deps)
-    async def run_endpoint():
-        return {"ok": True}
-
-    return app, clock, limiter_dep
-
-
-def test_rate_limit_allows_within_window_then_rejects():
-    app, _, dep = build_limited_app()
-    client = TestClient(app)
-    for _ in range(2):
-        assert client.post("/agentic/run").status_code == 200
-
-    response = client.post("/agentic/run")
-    assert response.status_code == 429
-    assert response.json()["error_code"] == 429
-    assert response.json()["error_message"] == "请求过于频繁，请稍后重试"
-    assert int(response.headers["Retry-After"]) == 60  # 窗口长度上界
-    dep.limiter.close()
-
-
-def test_rate_limit_counts_users_independently():
-    app, _, dep = build_limited_app()
-    client = TestClient(app)
-    for _ in range(2):
-        assert client.post("/agentic/run", headers={"X-Test-User": "a"}).status_code == 200
-    assert client.post("/agentic/run", headers={"X-Test-User": "a"}).status_code == 429
-    # 用户 B 独立窗口（同时证明身份依赖先于限流依赖执行——否则按 IP 合并计数）
-    assert client.post("/agentic/run", headers={"X-Test-User": "b"}).status_code == 200
-    dep.limiter.close()
-
-
-def test_rate_limit_falls_back_to_client_ip_without_identity():
-    """无身份（如未来挂在公开端点）回退客户端 IP，限流依旧生效。"""
-    app, _, dep = build_limited_app(with_identity=False)
-    client = TestClient(app)
-    for _ in range(2):
-        assert client.post("/agentic/run").status_code == 200
-    assert client.post("/agentic/run").status_code == 429
-    dep.limiter.close()
-
-
-def test_rate_limit_window_expiry_admits_again():
-    app, clock, dep = build_limited_app(rate=Rate(1, Duration.MINUTE))
-    client = TestClient(app)
-    assert client.post("/agentic/run").status_code == 200
-    assert client.post("/agentic/run").status_code == 429
-
-    clock["ms"] += Duration.MINUTE.value + 1  # 窗口滑出
-    assert client.post("/agentic/run").status_code == 200
-    dep.limiter.close()
 
 
 # ---------- BodySizeLimitMiddleware ----------

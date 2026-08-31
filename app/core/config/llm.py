@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, SecretStr, Field, model_validator
 
@@ -16,6 +17,25 @@ class ModelTaskType(str, Enum):
     CHAT = "chat"
     EMBEDDING = "embedding"
     RERANK = "rerank"
+
+
+class LLMCapabilities(BaseModel):
+    """模型/部署的能力声明（描述事实，不携带调用策略）。
+
+    ``thinkable``：模型支持思考模式；``features``：该模型支持的
+    ``with_structured_output`` method 白名单（function_calling / json_schema /
+    json_mode，按声明顺序表达自发现优先级）。消费规则归属供应商模型类：
+    ``ThinkingAwareChatDeepSeek`` 据此自发现 method、对显式 method 做声明
+    校验（fail-fast），并对与思考互斥的 method（强制 tool_choice 通道）自动
+    以关思考副本执行。``features`` 为 Literal 白名单，未知值配置加载期
+    fail-fast；openai/ollama builder 共享本 schema，暂不消费这些声明。
+    """
+
+    thinkable: bool = Field(default=False, description="模型是否支持思考模式")
+    features: list[Literal["function_calling", "json_schema", "json_mode"]] = Field(
+        default_factory=list,
+        description="支持的 with_structured_output method（声明顺序即自发现优先级）",
+    )
 
 
 class LLMProviderEntry(BaseModel):
@@ -43,6 +63,10 @@ class LLMProviderEntry(BaseModel):
     timeout: float = Field(
         default=120.0,
         description="单次请求超时（秒），防止上游模型/网关无响应时调用方无限挂起",
+    )
+    capabilities: LLMCapabilities = Field(
+        default_factory=LLMCapabilities,
+        description="模型/部署能力声明，由供应商模型类消费（如 ThinkingAwareChatDeepSeek）",
     )
 
 

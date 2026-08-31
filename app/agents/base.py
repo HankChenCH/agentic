@@ -1,10 +1,12 @@
 import functools
 import inspect
+import logging
 from abc import ABC, abstractmethod
 from typing import Callable, ClassVar
+from uuid import UUID
 
 from langchain.agents import create_agent
-from langchain.messages import HumanMessage
+from langchain.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, StructuredTool
@@ -13,6 +15,9 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.context import AgentRunContext
 from app.agents.toolbox import AgentToolbox
 from app.agents.tools_transformer import ToolsTransformer
+
+# 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（惯例同 api/exception_handlers）
+logger = logging.getLogger(__name__)
 
 
 class RunCanceledError(Exception):
@@ -81,14 +86,18 @@ class BaseAgent(ABC):
     """智能体基类（模板方法）。
 
     智能体图在实例化时编译一次（``self._graph``），stream/invoke 复用，不重复
-    build。因此 ``build_system_prompt`` / ``build_tools`` 是构建期静态的——只依赖
-    智能体身份，不依赖单次运行；多轮历史与运行期动态信息（当前时间等）通过
-    ``AgentRunContext`` 在每次调用时随输入消息注入，使图可跨运行复用。
+    build。图本身构建期静态、不随运行变化：人设字符串虽也只依赖智能体身份，
+    但其注入时机在每轮 ``_input``——与快速记忆块合并为头部 system 消息（快注
+    是用户级常驻摘要，每轮内容不同，不能烘进图）；多轮历史与运行期动态信息
+    （当前时间等）同样通过 ``AgentRunContext`` 在每次调用时随输入消息注入。
 
     子类供给差异点：
     - ``build_system_prompt``（必须实现）：智能体人设；
     - ``build_tools``（默认无工具）：以组合方式装配能力（如记忆召回、知识库检索），
       能力依赖经构造注入的 ``toolbox`` 获取；
+    - ``_system_prompt``（默认人设 + 快速记忆块）：每轮 system prompt 组装，
+      不想要快注的子类覆写之（RAG 因节点按文本渲染历史，整体覆写 ``_input``
+      把块折进用户消息）；
     - ``build_graph``（默认预置 ReAct 循环）：自建 StateGraph 的智能体覆写，
       并按需覆写 stream/invoke；
     - ``preferred_provider``（默认走全局配置）：智能体级模型路由，取值为
@@ -107,18 +116,20 @@ class BaseAgent(ABC):
         self.model = model
         # toolbox 必须先于 build_graph() 赋值：后者在图编译时即被调用
         self.toolbox = toolbox
+        # 快速回忆门面：每轮 _input 组装 system prompt 时消费（agents ──► components 合法边）
+        self.recall = toolbox.memory.recall
         self._graph = self.build_graph()
 
     def build_graph(self) -> CompiledStateGraph:
         """编译智能体图（实例化时调用一次，stream/invoke 复用）。
 
-        默认实现 = langchain 预置的 model↔tools ReAct 循环；需要自建
-        StateGraph（自有节点与循环，如 RAG 智能体）的子类覆写本方法，
+        默认实现 = langchain 预置的 model↔tools ReAct 循环；人设不在编译期
+        烘入图（system_prompt 参数不传），由 ``_input`` 每轮随输入消息注入。
+        需要自建 StateGraph（自有节点与循环，如 RAG 智能体）的子类覆写本方法，
         并按需覆写 stream/invoke 以适配自定义图的状态形状与流式语义。
         """
         return create_agent(
             name=self.agentic_id,
-            system_prompt=self.build_system_prompt(),
             model=self.model,
             tools=[_cancel_guard(t) for t in self.build_tools()],
             transformers=[ToolsTransformer],
@@ -146,11 +157,38 @@ class BaseAgent(ABC):
 
     def _input(self, ctx: AgentRunContext) -> dict:
         # 历史消息原样回放（图无 checkpointer，多轮上下文靠输入携带）；
-        # 运行期动态信息（当前时间）注入末条用户消息（当前轮），图本身不随运行变化
+        # 运行期动态信息注入两处：快速记忆块并入头部 system prompt（常驻
+        # 语境，不侵入用户消息），当前时间注入末条用户消息（当前轮）
         messages = list(ctx.messages)
         if messages:
             messages[-1] = HumanMessage(f"[当前时间：{ctx.now}]\n\n{messages[-1].content}")
-        return {"messages": messages}
+        return {"messages": [SystemMessage(self._system_prompt(ctx)), *messages]}
+
+    def _system_prompt(self, ctx: AgentRunContext) -> str:
+        """每轮 system prompt：人设 + 快速记忆块（常驻摘要，不侵入用户消息）。
+
+        快注块不落库、每轮重算，历史回放不受影响。
+        """
+        persona = self.build_system_prompt()
+        block = self._fast_memory_block(ctx)
+        return f"{persona}\n\n{block}" if block else persona
+
+    def _fast_memory_block(self, ctx: AgentRunContext) -> str:
+        """快速记忆块（用户级常驻摘要）；当前轮用户 query 仅作寒暄短路判别。
+
+        检索失败只记日志不阻断（口径同原编排层注入），降级为空块。
+        """
+        if not ctx.messages:
+            return ""
+        try:
+            return self.recall.build_fast_context(
+                query=str(ctx.messages[-1].content),
+                user_id=UUID(ctx.user_id),
+                thread_id=UUID(ctx.thread_id),
+            )
+        except Exception:
+            logger.warning("build fast memory context failed", exc_info=True)
+            return ""
 
     def _config(self, ctx: AgentRunContext) -> RunnableConfig:
         configurable: dict = {"thread_id": ctx.thread_id, "run_id": ctx.run_id, "user_id": ctx.user_id}

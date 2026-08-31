@@ -40,7 +40,10 @@ def test_builtin_components_registered():
     knowledge = COMPONENT_REGISTRY["knowledge"]
     demo = COMPONENT_REGISTRY["demo"]
     assert {t.name for t in memory.tools} == {"timeline", "expand", "state_at"}
-    assert {t.name for t in knowledge.tools} == {"knowledge_list", "knowledge_search"}
+    assert {t.name for t in knowledge.tools} == {
+        "knowledge_list", "knowledge_search", "knowledge_context",
+        "knowledge_document_read", "knowledge_document_list",
+    }
     assert {t.name for t in demo.tools} == {"get_weather"}
     for spec in (memory, knowledge, demo):
         assert spec.title and spec.description
@@ -123,11 +126,11 @@ def test_real_components_no_tool_collision_and_assemble():
     # 工具名互不冲突且数量与声明一致
     toolbox = AgentToolbox(
         memory=MemoryComponent(recall=None),
-        knowledge=KnowledgeComponent(retrieval=None),
+        knowledge=KnowledgeComponent(retrieval=None, navigation=None),
         demo=DemoComponent(weather=None),
     )
     names = [t.name for s in toolbox.specs for t in s.tools]
-    assert len(names) == len(set(names)) == 6
+    assert len(names) == len(set(names)) == 9
 
 
 def test_demo_weather_tool_returns_canned_report():

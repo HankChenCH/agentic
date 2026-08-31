@@ -20,8 +20,10 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-# 与 app.models.domain.user.DEFAULT_USER_ID 一致（迁移自包含，不反向 import）
-_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
+# 与 app.models.domain.user.DEFAULT_USER_ID 一致（迁移自包含，不反向 import）；
+# 必须用无连字符 hex：sa.Uuid 在 SQLite 落 CHAR(32)（hex 形态），带连字符字面量
+# 会与 ORM 绑定参数字符串不相等——归属值写入后按用户查询永远匹配不上
+_DEFAULT_USER_ID = "00000000000000000000000000000001"
 
 # SQLite batch 重建表时给反射出的无名约束按约定补名（drop 的前提）；
 # 键集与 SQLAlchemy 默认 naming_convention 对齐

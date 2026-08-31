@@ -8,8 +8,8 @@
   统一为信封响应（multipart 解析器只捕 MultiPartException/OSError，
   ``Request.stream`` 不吞自定义异常，异常可穿透到 ExceptionMiddleware）。
 
-限流不经过边缘中间件：fastapi-limiter 依赖按端点挂载（Redis 共享计数），
-见 ``app/api/rate_limit.py``。
+限流不经过边缘中间件：应用内不限流，由网关层（反向代理/API 网关）
+实现（原 fastapi-limiter 端点依赖方案已移除，见 README「边缘策略」）。
 """
 
 import logging

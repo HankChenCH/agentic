@@ -4,5 +4,5 @@ providers:
   weaviate:
     type: weaviate
     host: ${WEAVIATE_HOST:127.0.0.1}
-    port: ${WEAVIATE_PORT:8080}
+    port: ${WEAVIATE_HTTP_PORT:8080}
     grpc_port: ${WEAVIATE_GRPC_PORT:50051} # weaviate-client v4 的 gRPC 通道

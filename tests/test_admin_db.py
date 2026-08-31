@@ -1,7 +1,7 @@
 """admin 复合命令行的 db 域：在真实 SQLite 文件库上走完整 Alembic 链路。
 
 覆盖 alembic.ini 锚定（%(here)s，不依赖 CWD）→ env.py 从 AppConfig 解析
-URL（DB_DSN 环境插值）→ 初始迁移建全表 / 回退 / 存量库 stamp 接入。
+URL（SQLITE_DB_PATH 环境插值）→ 初始迁移建全表 / 回退 / 存量库 stamp 接入。
 """
 
 import pytest
@@ -17,13 +17,13 @@ from app.core.config.loader import read_config
 
 @pytest.fixture()
 def db_dsn(tmp_path, monkeypatch):
-    """DB_DSN 指向临时 SQLite 文件库。
+    """SQLITE_DB_PATH 指向临时 SQLite 文件库。
 
     read_config 的 lru_cache 连同环境变量插值结果一起缓存，patch 环境变量
-    前后必须 cache_clear，否则上一份插值结果会遮蔽本次 DB_DSN。
+    前后必须 cache_clear，否则上一份插值结果会遮蔽本次 SQLITE_DB_PATH。
     """
     dsn = tmp_path / "migrated.db"
-    monkeypatch.setenv("DB_DSN", str(dsn))
+    monkeypatch.setenv("SQLITE_DB_PATH", str(dsn))
     read_config.cache_clear()
     yield dsn
     read_config.cache_clear()

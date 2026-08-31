@@ -13,7 +13,6 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
-from app.components.memory import MemoryRecallService
 
 from .translator import AgUiTranslator, StorageTranslator
 from .turn_finalizer import TurnFinalizer
@@ -40,8 +39,6 @@ class AgenticService:
     conversations: ConversationService
 
     turn_finalizer: TurnFinalizer
-
-    memory: MemoryRecallService
 
     logger_factory: LoggerFactory
 
@@ -111,15 +108,11 @@ class AgenticService:
             # 最近轮次的 USER/ASSISTANT 文本 + 当前提问
             history = self.conversations.replay_history(thread_id=thread_id, exclude_turn_id=turn.turn_id)
 
-            # 快速回忆：会话前按问题自动注入（纯 SQL 直读，失败不阻断对话主链路）
-            memory_block = ""
-            try:
-                memory_block = self.memory.build_fast_context(query=query, user_id=user_id, thread_id=thread_id)
-            except Exception:
-                self.logger.warning("build fast memory context failed", exc_info=True)
-            user_query = f"{memory_block}\n\n---\n\n用户提问：{query}" if memory_block else query
+            # 快速回忆的装配在 agent 层（BaseAgent._input 组装进 system prompt；
+            # RAG 折进末条用户消息）——编排层只透传原始 query，用户消息落库
+            # 与 LLM 输入保持同源，不在此拼接任何上下文
             run = agent.stream(AgentRunContext(
-                messages=[*history, HumanMessage(content=user_query)],
+                messages=[*history, HumanMessage(content=query)],
                 thread_id=str(thread_id),
                 run_id=run_id,
                 user_id=str(user_id),

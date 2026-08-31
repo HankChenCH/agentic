@@ -148,16 +148,10 @@ class ExplodingRepository:
 
 
 class FakeMemory:
-    """记忆替身：快速注入固定块（可开关），remember 静默。"""
+    """记忆巩固替身：remember 静默并记录调用（消费方仅 TurnFinalizer）。"""
 
-    def __init__(self, block=""):
-        self.block = block
-        self.fast_queries = []
+    def __init__(self):
         self.remembered = []
-
-    def build_fast_context(self, query, user_id, thread_id):
-        self.fast_queries.append((query, user_id, thread_id))
-        return self.block
 
     def remember(self, **kwargs):
         self.remembered.append(kwargs)
@@ -256,7 +250,6 @@ def make_service(engine, monkeypatch):
             agent_factory=agent_factory,
             conversations=conversations,
             turn_finalizer=finalizer,
-            memory=memory or FakeMemory(),
             logger_factory=RecordingLoggerFactory(),
         )
 
@@ -359,11 +352,12 @@ def test_happy_path_lifecycle(engine, make_service, monkeypatch):
     assert len(stored_messages(engine, thread_id)) == 2
 
 
-def test_fast_memory_block_prepended(engine, make_service, monkeypatch):
-    """快速回忆块拼进当前轮用户消息首部。"""
+def test_orchestration_passes_raw_query_to_agent(engine, make_service, monkeypatch):
+    """编排层只透传原始 query，不做任何记忆拼接——快注装配归 agent 层
+    （BaseAgent._input 组装进 system prompt）。"""
     set_environment(monkeypatch, "dev")
 
-    memory = FakeMemory(block="## 快速记忆上下文（共1条）\n1. #S1 ...")
+    memory = FakeMemory()
     run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
     service = make_service(FakeAgentFactory(agent=FakeAgent(run)), memory=memory)
     thread_id = uuid4()
@@ -371,10 +365,9 @@ def test_fast_memory_block_prepended(engine, make_service, monkeypatch):
     frames = list(service.run(TEST_USER_ID, thread_id, "run-7", "我上周聊到什么了？"))
 
     assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
-    assert memory.fast_queries[0][0] == "我上周聊到什么了？"  # 以原始 query 触发注入
-    sent_user_text = str(FakeAgent.captured_context.messages[-1].content)
-    assert sent_user_text.startswith("## 快速记忆上下文")
-    assert "用户提问：我上周聊到什么了？" in sent_user_text
+    # FakeMemory 仅被 TurnFinalizer.remember 消费：编排层不触发快注
+    assert memory.remembered and memory.remembered[0]["query"] == "我上周聊到什么了？"
+    assert FakeAgent.captured_context.messages[-1].content == "我上周聊到什么了？"
 
 
 def test_client_disconnect_marks_turn_canceled(engine, make_service, monkeypatch):

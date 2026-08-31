@@ -118,7 +118,11 @@ def _decision(route: str, standalone: str = "凝练后的问题") -> UnderstandD
 def _make_agent(structured: List[Any], free: List[str], retrieval_script: List[tuple]):
     model = StubChatModel(structured_answers=structured, free_answers=free)
     retrieval = StubRetrieval(retrieval_script)
-    toolbox = SimpleNamespace(knowledge=SimpleNamespace(retrieval=retrieval))
+    # memory.recall 为永不命中的空快注替身（本文件只测 RAG 图行为本身）
+    toolbox = SimpleNamespace(
+        knowledge=SimpleNamespace(retrieval=retrieval),
+        memory=SimpleNamespace(recall=SimpleNamespace(build_fast_context=lambda **kwargs: "")),
+    )
     return RagAgent(model=model, toolbox=toolbox), model, retrieval
 
 

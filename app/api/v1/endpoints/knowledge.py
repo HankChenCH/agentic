@@ -19,7 +19,6 @@ from fastapi.responses import Response as RawResponse
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.api.rate_limit import upload_rate_limiter
 from app.models.schema.request.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseUpdateRequest,
@@ -121,7 +120,7 @@ def disable_knowledge_base(
     ).to_dict()
 
 
-@router.post("/{kb_id}/document", dependencies=[Depends(upload_rate_limiter)])
+@router.post("/{kb_id}/document")
 def create_knowledge_document(
     knowledge_document_service: Injected[KnowledgeDocumentService],
     principal: Annotated[UserPrincipal, Depends(require_user)],

@@ -28,6 +28,7 @@ from app.components.base import (
     configurable_user,
     register_component,
 )
+from app.components.knowledge.ability.navigation import KnowledgeNavigationService
 from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService, RetrievalHit
 from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K
 
@@ -48,6 +49,29 @@ class KnowledgeSearchArgs(BaseModel):
         description="要检索的知识库 id 列表（取 knowledge_list 结果中的 id）；缺省=检索全部可用知识库",
     )
     top_k: int = Field(default=DEFAULT_TOP_K, description="返回的最大片段数，默认 4")
+
+
+class KnowledgeContextArgs(BaseModel):
+    """knowledge_context 工具参数。"""
+
+    doc_id: str = Field(description="文档 id（取 knowledge_search 结果 sources 中的 doc_id）")
+    position: int = Field(description="片段位置（取 knowledge_search 结果 sources 中的 position，从 0 起）")
+    before: int = Field(default=1, description="向前取的相邻片段数（0-3，默认 1）")
+    after: int = Field(default=1, description="向后取的相邻片段数（0-3，默认 1）")
+
+
+class KnowledgeDocumentReadArgs(BaseModel):
+    """knowledge_document_read 工具参数。"""
+
+    doc_id: str = Field(description="文档 id（取 knowledge_search 或 knowledge_document_list 结果中的 doc_id）")
+    start: int = Field(default=0, description="起始 position（从 0 起；续读时取上次返回 end+1）")
+    end: int | None = Field(default=None, description="结束 position（含）；缺省=读到文档末尾（受单次预算截断）")
+
+
+class KnowledgeDocumentListArgs(BaseModel):
+    """knowledge_document_list 工具参数。"""
+
+    kb_id: str = Field(description="知识库 id（取 knowledge_list 结果中的 id）")
 
 
 class KnowledgeSource(BaseModel):
@@ -75,7 +99,37 @@ class KnowledgeSearchResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
-def _build_knowledge_list_tool(service: KnowledgeRetrievalService) -> StructuredTool:
+class KnowledgeSegment(BaseModel):
+    """单个有序片段：定位读取结果的最小单元（阅读用，不带 score/bboxes 控制体积）。"""
+
+    doc_id: str
+    doc_name: str
+    position: int
+    content: str
+    page_start: int | None = None
+    page_end: int | None = None
+    heading_path: list[str] = Field(default_factory=list)
+
+
+class KnowledgeSegmentWindow(BaseModel):
+    """定位读取（knowledge_context / knowledge_document_read）共用结果契约。
+
+    ``start``/``end`` 为实际返回的 position 闭区间、``seg_total`` 为文档总段数
+    ——agent 由此感知文档规模与读取进度，按需续读。
+    """
+
+    kb_id: str
+    doc_id: str
+    doc_name: str
+    seg_total: int
+    start: int
+    end: int
+    segments: list[KnowledgeSegment] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+def _build_knowledge_list_tool(component: "KnowledgeComponent") -> StructuredTool:
+    service = component.retrieval
     # config 的类型注解必须是裸 RunnableConfig（langchain 按类型严格相等
     # 识别注入参数，| None 会导致注入失效）；默认值只为语法/直调兜底
     def knowledge_list(config: RunnableConfig = None) -> str:
@@ -105,7 +159,9 @@ def _build_knowledge_list_tool(service: KnowledgeRetrievalService) -> Structured
     )
 
 
-def _build_knowledge_search_tool(service: KnowledgeRetrievalService) -> StructuredTool:
+def _build_knowledge_search_tool(component: "KnowledgeComponent") -> StructuredTool:
+    service = component.retrieval
+
     def knowledge_search(
         query: str, kb_ids: list[str] | None = None, top_k: int = DEFAULT_TOP_K, config: RunnableConfig = None
     ) -> str:
@@ -124,11 +180,144 @@ def _build_knowledge_search_tool(service: KnowledgeRetrievalService) -> Structur
             "top_k: 返回的最大片段数，默认 4。"
             "返回 {\"sources\": [{index, doc_name, page_start, page_end, heading_path, score, content, bboxes, ...}], \"notes\": []}；"
             "回答时依据 sources 的 content 作答，并以 [index] 角标注明引用出处（文档名/页码）；未检索到时如实说明。"
+            "命中片段是按相似度挑出的节选，可能只是某段论述/表格的中间部分："
+            "需要前后文时，用该条的 doc_id + position 调 knowledge_context 看邻域；"
+            "需要完整上下文时，用 knowledge_document_read 从头通读。"
         ),
         args_schema=KnowledgeSearchArgs,
         func=knowledge_search,
         infer_schema=False,
     )
+
+
+def _build_knowledge_context_tool(component: "KnowledgeComponent") -> StructuredTool:
+    navigation = component.navigation
+
+    def knowledge_context(
+        doc_id: str, position: int, before: int = 1, after: int = 1, config: RunnableConfig = None
+    ) -> str:
+        parsed = _parse_uuid(doc_id)
+        if parsed is None:
+            return "doc_id 无效：请取 knowledge_search 结果 sources 中的 doc_id 原值"
+        window = navigation.segment_context(configurable_user(config), parsed, position, before=before, after=after)
+        return render_segment_window(window, fallback=f"文档不可见或不存在（doc_id: {doc_id}）")
+
+    return StructuredTool.from_function(
+        name="knowledge_context",
+        description=(
+            "查看某个已检索片段的前后相邻片段，补齐命中片段缺失的上下文（分段约为 800 字符，"
+            "命中常是论述/表格的中间部分）。doc_id 与 position 取 knowledge_search 结果对应"
+            "来源中的原值；before/after 各控制向前/向后取几段（0-3，默认 1）。"
+            "返回按 position 有序的片段窗口 JSON（含文档总段数 seg_total 与实际返回区间 start/end）；"
+            "看过窗口仍不够时，可加大 before/after 或改用 knowledge_document_read 通读。"
+        ),
+        args_schema=KnowledgeContextArgs,
+        func=knowledge_context,
+        infer_schema=False,
+    )
+
+
+def _build_knowledge_document_read_tool(component: "KnowledgeComponent") -> StructuredTool:
+    navigation = component.navigation
+
+    def knowledge_document_read(
+        doc_id: str, start: int = 0, end: int | None = None, config: RunnableConfig = None
+    ) -> str:
+        parsed = _parse_uuid(doc_id)
+        if parsed is None:
+            return "doc_id 无效：请取 knowledge_search 或 knowledge_document_list 结果中的 doc_id 原值"
+        window = navigation.read_document(configurable_user(config), parsed, start=start, end=end)
+        return render_segment_window(window, fallback=f"文档不可见或不存在（doc_id: {doc_id}）")
+
+    return StructuredTool.from_function(
+        name="knowledge_document_read",
+        description=(
+            "按 position 顺序读取文档片段，用于通读或续读：knowledge_search 只返回节选，"
+            "需要完整上下文（长表格全文、连续章节、整篇短文档）时使用。start 为起始 "
+            "position（缺省 0），end 为结束 position（含，缺省读到末尾）。单次返回有段数与"
+            "字符预算，超预算会被截断并在 notes 中给出续读 position——按 notes 指引以 "
+            "start 续读即可顺序读完；返回 JSON 含文档总段数 seg_total 与实际返回区间。"
+        ),
+        args_schema=KnowledgeDocumentReadArgs,
+        func=knowledge_document_read,
+        infer_schema=False,
+    )
+
+
+def _build_knowledge_document_list_tool(component: "KnowledgeComponent") -> StructuredTool:
+    navigation = component.navigation
+
+    def knowledge_document_list(kb_id: str, config: RunnableConfig = None) -> str:
+        parsed = _parse_uuid(kb_id)
+        if parsed is None:
+            return "kb_id 无效：请取 knowledge_list 结果中的 id 原值"
+        docs = navigation.list_documents(configurable_user(config), parsed)
+        if docs is None:
+            return "知识库不可见、不存在或未启用"
+        if not docs:
+            return "该知识库暂无文档"
+        lines = []
+        for index, doc in enumerate(docs, start=1):
+            line = f"{index}. {doc.name}（doc_id: {doc.id}，{doc.seg_num} 段，{doc.status.value}）"
+            if doc.description:
+                line += f" — {doc.description}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    return StructuredTool.from_function(
+        name="knowledge_document_list",
+        description=(
+            "列出某个知识库内的文档（名称、doc_id、分段数、状态、描述），用于浏览库中"
+            "有哪些资料再按需 knowledge_document_read 通读——不需要关键词、想看全库"
+            "内容清单时使用，代替盲目多次检索。kb_id 取 knowledge_list 结果中的 id；"
+            "仅已启用（enabled）的库可列出。"
+        ),
+        args_schema=KnowledgeDocumentListArgs,
+        func=knowledge_document_list,
+        infer_schema=False,
+    )
+
+
+def render_segment_window(window, fallback: str) -> str:
+    """定位读取结果 → 工具结果串（knowledge_context / knowledge_document_read 共用组装点）。
+
+    未命中（库/文档不可见或未启用）返回 fallback 说明；命中返回
+    ``KnowledgeSegmentWindow`` 的 JSON，notes（越界/预算截断指引）附在尾部。
+    """
+    if window is None:
+        return fallback
+    payload = KnowledgeSegmentWindow(
+        kb_id=str(window.kb_id),
+        doc_id=str(window.doc_id),
+        doc_name=window.doc_name,
+        seg_total=window.seg_total,
+        start=window.start,
+        end=window.end,
+        segments=[_segment_source(segment, window.doc_name) for segment in window.segments],
+        notes=window.notes,
+    ).model_dump()
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _segment_source(segment, doc_name: str) -> KnowledgeSegment:
+    meta = segment.meta or {}
+    return KnowledgeSegment(
+        doc_id=str(segment.doc_id),
+        doc_name=doc_name,
+        position=segment.position,
+        content=segment.content,
+        page_start=meta.get("page_start"),
+        page_end=meta.get("page_end"),
+        heading_path=meta.get("heading_path") or [],
+    )
+
+
+def _parse_uuid(raw: str) -> UUID | None:
+    # LLM 生成的 id 可能非法（幻觉/截断）：无效时返回 None 由调用方出引导话术
+    try:
+        return UUID(raw)
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def _parse_kb_ids(kb_ids: list[str] | None) -> list[UUID] | None:
@@ -211,9 +400,10 @@ _SPEC = register_component(ComponentSpec(
     name="knowledge",
     title="知识库检索",
     description=(
-        "按当前用户可见的知识库（自己的私有库 + 公开库）做 RAG 检索：先列出"
-        "可用库再按需检索文档片段，结果带文档名/页码/标题路径/原文位置框等"
-        "溯源信息，供引用作答与前端溯源卡片共用。"
+        "按当前用户可见的知识库（自己的私有库 + 公开库）做 RAG 检索与定位读取："
+        "先列出可用库再按需检索文档片段（结果带文档名/页码/标题路径/原文位置框等"
+        "溯源信息，供引用作答与前端溯源卡片共用）；命中片段可再按 doc_id + "
+        "position 邻域扩展或整篇通读，支持浏览库内文档清单。"
     ),
     tools=(
         ToolSpec(
@@ -228,6 +418,24 @@ _SPEC = register_component(ComponentSpec(
             args_model=KnowledgeSearchArgs,
             build=_build_knowledge_search_tool,
         ),
+        ToolSpec(
+            name="knowledge_context",
+            description="查看已检索片段的前后相邻片段（邻域窗口），补齐命中片段缺失的上下文。",
+            args_model=KnowledgeContextArgs,
+            build=_build_knowledge_context_tool,
+        ),
+        ToolSpec(
+            name="knowledge_document_read",
+            description="按 position 顺序读取文档片段（通读/续读），单次有预算截断并附续读指引。",
+            args_model=KnowledgeDocumentReadArgs,
+            build=_build_knowledge_document_read_tool,
+        ),
+        ToolSpec(
+            name="knowledge_document_list",
+            description="列出知识库内的文档清单（名称、doc_id、分段数、状态），导航入口。",
+            args_model=KnowledgeDocumentListArgs,
+            build=_build_knowledge_document_list_tool,
+        ),
     ),
 ))
 
@@ -235,7 +443,7 @@ _SPEC = register_component(ComponentSpec(
 @injectable
 @dataclass
 class KnowledgeComponent:
-    """knowledge 组件装配器：持检索门面服务，把 spec 声明实例化为可运行工具。
+    """knowledge 组件装配器：持检索/定位读取门面服务，把 spec 声明实例化为可运行工具。
 
     检索范围按当前用户可见性圈定（身份经 langgraph config 注入读取），与
     agent 身份无关——``agentic_id`` 形参是与 ``MemoryComponent.tools`` 的
@@ -243,10 +451,11 @@ class KnowledgeComponent:
     """
 
     retrieval: KnowledgeRetrievalService
+    navigation: KnowledgeNavigationService
 
     @property
     def spec(self) -> ComponentSpec:
         return _SPEC
 
     def tools(self, agentic_id: str) -> list[StructuredTool]:
-        return [tool.build(self.retrieval) for tool in _SPEC.tools]
+        return [tool.build(self) for tool in _SPEC.tools]

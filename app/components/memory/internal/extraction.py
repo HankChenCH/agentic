@@ -1,12 +1,14 @@
 """解析块：巩固管线的 LLM 输入组装、两次结构化输出调用与结果清洗。
 
-两次 LLM 调用均走 ``with_structured_output(method="function_calling")``：
-输出形状由 pydantic wire 模型（``_*Payload``）表达，不再依赖 prompt 内联
-JSON 示例；宽松清洗层保留——截断/clamp/溯源引用过滤/保留键/条数上限，
-坏条目整条丢弃，模型输出在语义上仍不可信。任何调用/校验失败都告警降级
-不上抛：抽取返回空结果、裁决返回 None，由服务层决定兜底路径。prompt 携带
-「当前时间」作时间锚，让模型把“昨天/上个月”落到可解析的 ``time_hint``；
-无法归一时的原文进 ``time_remark`` 保信息量。
+两次 LLM 调用均走 ``with_structured_output()``（不指定 method，由模型能力
+声明自发现与思考模式对齐，见 llm.yaml ``capabilities`` 与
+``ThinkingAwareChatDeepSeek``）：输出形状由 pydantic wire 模型（
+``_*Payload``）表达，不再依赖 prompt 内联 JSON 示例；宽松清洗层保留——
+截断/clamp/溯源引用过滤/保留键/条数上限，坏条目整条丢弃，模型输出在语义上
+仍不可信。任何调用/校验失败都告警降级不上抛：抽取返回空结果、裁决返回
+None，由服务层决定兜底路径。prompt 携带「当前时间」作时间锚，让模型把
+“昨天/上个月”落到可解析的 ``time_hint``；无法归一时的原文进 ``time_remark``
+保信息量。
 """
 
 import logging
@@ -180,7 +182,7 @@ class PairedFact:
 def extract_structure(model: BaseChatModel, transcript: str, now: datetime) -> ExtractionResult:
     """第❶步结构化抽取；结构化输出失败告警降级为空结果（调用方放弃本轮写入）。"""
     try:
-        result = model.with_structured_output(_ExtractionPayload, method="function_calling").invoke([
+        result = model.with_structured_output(_ExtractionPayload).invoke([
             SystemMessage(content=_EXTRACTION_SYSTEM_PROMPT),
             HumanMessage(content=f"【当前时间】{now.strftime('%Y-%m-%d %H:%M')}\n\n【本轮对话】\n{transcript}"),
         ])
@@ -213,7 +215,7 @@ def adjudicate_facts(
         for i, f in enumerate(facts)
     )
     try:
-        result = model.with_structured_output(_AdjudicationPayload, method="function_calling").invoke([
+        result = model.with_structured_output(_AdjudicationPayload).invoke([
             SystemMessage(content=_ADJUDICATION_SYSTEM_PROMPT),
             HumanMessage(content=f"【既有 ACTIVE 陈述】\n{existing_block}\n\n【候选新事实】\n{new_block}"),
         ])

@@ -18,7 +18,7 @@ _LEVEL_NAMES = ("TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITIC
 
 
 def _normalize_level(value: str | None) -> str | None:
-    """级别名归一化：空串（``${AGENTIC_LOG_LEVEL:}`` 缺省产物）视为未设置。"""
+    """级别名归一化：空串（``${APP_LOG_LEVEL:}`` 缺省产物）视为未设置。"""
     if value is None:
         return None
     level = value.strip().upper()

@@ -2,10 +2,11 @@
 
 组件自内聚惯例：存取经注入的抽象 MemoryRepository（当前绑定 SQLite 图谱
 实现）；向量适配器自 services/domain/memory 注入（components→domain 合法
-边）。快速注入纯 SQL 直读+评分截断，零 LLM/embedding；timeline/expand/
-state_at 深度工具由 tools.py 薄封装成 agent 可调用的闭包。会话内已投喂的
-记忆经 SessionInjectRegistry 登记，深度工具只返回增量。expand 的锚点解析
-复用 resolution 的两段式消歧（与收尾写路同规）。
+边）。快注纯 SQL 直读+评分截断，零 LLM/embedding，由 BaseAgent._input 每轮
+组装进 system prompt（常驻摘要，非工具）；timeline/expand/state_at 深度
+工具由 manifest.py 薄封装成 agent 可调用的闭包。会话内已投喂的记忆经
+SessionInjectRegistry 登记，深度工具只返回增量。expand 的锚点解析复用
+resolution 的两段式消歧（与收尾写路同规）。
 """
 
 import logging
@@ -66,7 +67,7 @@ class SessionInjectRegistry:
 @injectable
 @dataclass
 class MemoryRecallService:
-    """召回块：build_fast_context 会话前快注 + timeline/expand/state_at 深度三件套。
+    """召回块：build_fast_context system prompt 快注 + timeline/expand/state_at 深度三件套。
 
     零 LLM：快注纯 SQL 直读，三件套只做向量检索/时间切片 + 渲染。
     """
@@ -81,22 +82,27 @@ class MemoryRecallService:
     # ==================== 快速注入 ====================
 
     def build_fast_context(self, query: str, user_id: UUID, thread_id: UUID) -> str:
-        """快速回忆块：纯 SQL 直读评分截断，零 LLM/embedding。寒暄不注入。
+        """快速记忆块：纯 SQL 直读评分截断，零 LLM/embedding。寒暄不注入。
 
-        user_id 决定记忆作用域（用户级隔离），thread_id 仅用于会话内投喂去重。
+        语义是**用户级常驻摘要**（装配进 system prompt），不是按问题检索——
+        快路径无相关度输入，评分为「时近 × 重要」排序，与 query 无关（query
+        仅作寒暄短路判别）。块计算不跳过会话内已投喂 id（块每轮重算且不落库，
+        历史回放取原始 query，跳过会造成事实在会话内只可见一轮的滚动丢失），
+        但仍登记 id 供深度三件套只返回增量。不触发 bump_access——稳定 top-10
+        若每轮自我强化访问计数会挤占新记忆（深度工具保留强化，它们才是真正的
+        提取练习）。
+
+        user_id 决定记忆作用域（用户级隔离），thread_id 仅用于投喂登记。
         """
         if not self.app_config.memory.enabled or _is_smalltalk(query):
             return ""
         now = datetime.now(timezone.utc)
         weights = self._weights()
         half_life = self.app_config.memory.score.recency_half_life_days
-        seen = self.inject_registry.seen(thread_id)
         repo = self.memory_repo.for_user(user_id)
 
         scored = []
         for row in repo.list_active_statements():
-            if f"s:{row.id}" in seen:
-                continue
             value = score_item(_item_of(row, None), weights, half_life, now)
             scored.append((value, row))
         scored.sort(key=lambda pair: pair[0], reverse=True)
@@ -110,7 +116,6 @@ class MemoryRecallService:
         lines = [renderer.statement_topology_line(r, ents, now=now) for r in rows]
 
         self.inject_registry.mark(thread_id, [f"s:{r.id}" for r in rows])
-        repo.bump_access([r.id for r in rows], [], sorted(ents), now)
         return renderer.brief_context(now, lines)
 
     # ==================== 深度三件套 ====================

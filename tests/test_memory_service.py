@@ -1,4 +1,4 @@
-"""MemoryRecallService 快注：排序/强化/小话短路与会话内增量去重。"""
+"""MemoryRecallService 快注：排序/小话短路/常驻摘要稳定性与会话内增量登记。"""
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -50,7 +50,7 @@ def test_smalltalk_and_disabled_short_circuit(engine):
     assert _service(engine, enabled=False).build_fast_context("我在哪工作", TEST_USER_ID, THREAD) == ""
 
 
-def test_fast_context_damps_cold_items_and_bumps_accessed(engine):
+def test_fast_context_damps_cold_items_without_bumping(engine):
     repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
     cold = _seed(repo, "钓鱼", importance=0.2, last_active=NOW - timedelta(days=120))
     hot = _seed(repo, "Python", importance=0.9)
@@ -64,12 +64,13 @@ def test_fast_context_damps_cold_items_and_bumps_accessed(engine):
     assert sorted(_rendered_ids(block))[0] == hot.id  # 热且未被访问过者居首
 
     stored = {row.id: row for row in repo.list_active_statements()}
-    assert stored[hot.id].access_count == 1          # 召回即强化（提取练习）
-    cold_row = stored[cold.id]
-    assert cold_row.access_count == 0                # 未入选者不虚增访问计数
+    # 快注是常驻摘要：不自我强化访问计数（否则稳定 top-10 挤占新记忆）；
+    # 提取练习强化只由深度工具触发
+    assert all(row.access_count == (6 if row.id == stale_hot.id else 0)
+               for row in stored.values())
 
 
-def test_session_registry_returns_only_increment_across_calls(engine):
+def test_fast_block_is_stable_and_marks_registry_for_tools(engine):
     repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
     a = _seed(repo, "Python")
     b = _seed(repo, "游泳")
@@ -78,8 +79,11 @@ def test_session_registry_returns_only_increment_across_calls(engine):
     first_ids = _rendered_ids(svc.build_fast_context("聊点爱好", TEST_USER_ID, THREAD))
     second_ids = _rendered_ids(svc.build_fast_context("还有别的吗", TEST_USER_ID, THREAD))
 
-    assert len(first_ids) == 1 and second_ids and set(first_ids).isdisjoint(second_ids)
-    assert set(first_ids) | set(second_ids) == {a.id, b.id}
+    # 块不跳过会话内已投喂 id：同库状态下跨轮稳定（system 常驻摘要语义，
+    # 跳过会造成事实只可见一轮的滚动丢失）；id 仍登记供深度工具只返回增量
+    assert first_ids and first_ids == second_ids
+    assert svc.inject_registry.seen(THREAD) == {f"s:{first_ids[0]}"}
+    assert {a.id, b.id}  # 两条均在库，仅 top-1 入块
 
 
 def test_disabled_engine_yields_empty_even_with_rows(engine):

@@ -5,7 +5,7 @@
   侧仅 ``app`` logger 挂 :class:`~.loguru_backend.InterceptHandler` 转发，
   uvicorn / sqlalchemy 等第三方 logger 保持各自默认，互不干扰、不重复输出；
 - 全局级别缺省按环境推导：dev/test 取 DEBUG 便于本地排查，prod 取 INFO
-  降噪（可用环境变量 ``AGENTIC_LOG_LEVEL`` 覆盖）；
+  降噪（可用环境变量 ``APP_LOG_LEVEL`` 覆盖）；
 - 配置坏 → :class:`~app.core.exceptions.framework.ConfigError`，不带残缺
   配置启动（与其他分节一致的 fail-fast）。
 
