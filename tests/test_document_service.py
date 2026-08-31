@@ -6,6 +6,7 @@ from typing import BinaryIO, Iterator
 from uuid import uuid4
 
 import pytest
+from obstore.store import MemoryStore
 from sqlmodel import Session
 
 import app.services.domain.knowledge.document_service as document_service_module
@@ -201,3 +202,19 @@ def test_create_document_oversize_unseekable_empty_stream(engine, service, files
             kb_id, TEST_USER_ID, filename="a.pdf", content_type="application/pdf", stream=UnseekableStream(b"")
         )
     assert not filesystem.objects
+
+
+@pytest.mark.parametrize("label, payload", [("small", PDF_BYTES), ("large-multipart", b"\xde\xad\xbe\xef" * (2 * 1024 * 1024))])
+def test_counting_reader_accepted_by_obstore_put(label, payload):
+    """回归：obstore ``put`` 的输入校验要求 file-like 具备 seek/tell（探测
+    流长并决定是否 multipart），只实现 read 会被拒——正是上传报
+    "Unexpected input for PutInput" 的根因。MemoryStore 纯内存不触网，
+    直接走真实 obstore 路径验证：字节一致且探测性 seek 不污染计数/摘要。"""
+    store = MemoryStore()
+    reader = document_service_module._CountingDigestReader(
+        io.BytesIO(payload), document_service_module.MAX_UPLOAD_BYTES
+    )
+    store.put(f"{label}.pdf", reader)
+    assert bytes(store.get(f"{label}.pdf").bytes()) == payload
+    assert reader.size == len(payload)
+    assert reader.hexdigest() == hashlib.sha256(payload).hexdigest()

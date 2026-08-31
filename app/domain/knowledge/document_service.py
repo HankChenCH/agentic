@@ -49,8 +49,10 @@ class _CountingDigestReader:
     """读穿透流包装：转存路径上增量累计大小并计算 sha256，超限立即中断读取。
 
     ``read(size)`` 无参/负参时截断为单块大小，保证任意消费方都不会整段
-    读入内存；仅实现 ``read``——两个 Filesystem 实现（pathlib copyfileobj
-    / obstore put）的写入路径都只依赖它。
+    读入内存；``seek``/``tell`` 委托底层流——obstore ``put`` 的输入校验
+    要求 file-like 具备这两个方法（探测流长以决定是否 multipart，只实现
+    ``read`` 会被拒：Unexpected input for PutInput），copyfileobj 则不用。
+    obstore 探长后必先 seek 回起点再单遍顺序读取，计数/摘要不受影响。
     """
 
     def __init__(self, source: BinaryIO, max_bytes: int) -> None:
@@ -72,6 +74,12 @@ class _CountingDigestReader:
             )
         self._digest.update(chunk)
         return chunk
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        return self._source.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._source.tell()
 
     def hexdigest(self) -> str:
         return self._digest.hexdigest()
