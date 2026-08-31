@@ -39,7 +39,7 @@ export class BizError extends Error {
  * axios 1.19 起 AxiosInterceptorFulfilled 要求拦截器原样返回
  * AxiosResponse，老"拦截器里换裸 payload"的写法不再通过类型检查。
  *
- * 注意：SSE 流式 chat 端点（/agentic/chat）不归这里管，仍由 @ag-ui/client 的
+ * 注意：SSE 流式 agentic run 端点（/agentic/run）不归这里管，仍由 @ag-ui/client 的
  * HttpAgent 直接消费。
  */
 export const http = axios.create({

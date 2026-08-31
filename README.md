@@ -40,15 +40,15 @@ sonner(toast)· lucide-react · react-dropzone · react-pdf · oxlint
 
 ```bash
 VITE_API_BASE=http://127.0.0.1:8000              # REST 基址(API 根)
-VITE_SSE_URL=http://127.0.0.1:8000/agentic/chat  # 可选;默认由 VITE_API_BASE 派生
+VITE_SSE_URL=http://127.0.0.1:8000/agentic/run   # 可选;默认由 VITE_API_BASE 派生
 ```
 
 不配置时兜底 `http://127.0.0.1:8000`,与后端 dev server 默认端口对齐。
 
 ## 与后端的契约
 
-- **聊天(ag-ui)**:`HttpAgent`(`@ag-ui/client`)经 `useAgUiRuntime`
-  (`@assistant-ui/react-ag-ui`)POST `ChatRequest` 到 `/agentic/chat`,消费
+- **Agentic run(ag-ui)**:`HttpAgent`(`@ag-ui/client`)经 `useAgUiRuntime`
+  (`@assistant-ui/react-ag-ui`)POST `RunRequest` 到 `/agentic/run`,消费
   ag-ui 事件的 SSE 流;事件到 UI parts 的映射由 `useAgUiRuntime` 完成
   (`REASONING_*` → reasoning、`TEXT_MESSAGE_*` → 文本、`TOOL_CALL_*` → 工具),
   不要在其上再写一层适配器。

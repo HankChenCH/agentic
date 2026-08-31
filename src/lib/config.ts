@@ -6,15 +6,15 @@
  *
  * - REST_BASE: REST 基址（API 根，各领域端点自带顶级前缀：
  *              /agentic/conversation...、/knowledge...、/agent/.../knowledge）
- * - SSE_URL:   ag-ui SSE 流式 chat 端点。默认由 REST_BASE 派生（同源同服务），
+ * - SSE_URL:   ag-ui SSE 流式 agentic run 端点。默认由 REST_BASE 派生（同源同服务），
  *              若前后端分离/走网关需要单独覆盖，可设 VITE_SSE_URL。
  *
  * .env(.local) 示例：
  *   VITE_API_BASE=http://your-host
- *   VITE_SSE_URL=http://your-host/agentic/chat   # 可选
+ *   VITE_SSE_URL=http://your-host/agentic/run   # 可选
  */
 export const REST_BASE =
   import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
 export const SSE_URL =
-  import.meta.env.VITE_SSE_URL ?? `${REST_BASE}/agentic/chat`;
+  import.meta.env.VITE_SSE_URL ?? `${REST_BASE}/agentic/run`;

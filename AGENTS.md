@@ -62,10 +62,10 @@ All commands run with CWD = `client/agentic-client/` (this directory).
 
 ## Architecture & boundaries
 
-**Client ⇄ Server contract = ag-ui protocol（聊天）+ REST（其余）.** The client
+**Client ⇄ Server contract = ag-ui protocol（agentic run）+ REST（其余）.** The client
 (`HttpAgent` from `@ag-ui/client`, wrapped by `useAgUiRuntime` from
-`@assistant-ui/react-ag-ui`) POSTs a `ChatRequest` to the backend's
-`/agentic/chat` endpoint and consumes an SSE stream of ag-ui events.
+`@assistant-ui/react-ag-ui`) POSTs a `RunRequest` to the backend's
+`/agentic/run` endpoint and consumes an SSE stream of ag-ui events.
 `useAgUiRuntime` maps ag-ui events onto assistant-ui's parts model
 (`REASONING_*` → reasoning part, `TEXT_MESSAGE_*` → text part, `TOOL_CALL_*` →
 tool-call part), so **do not** write an extra adapter layer on top of it. When
@@ -131,7 +131,7 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
 ## Gotchas
 
 - 「停止生成」走**双通道取消**（`agentic-runtime.tsx` 的 `onCancel`）：先
-  `POST /agentic/chat/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
+  `POST /agentic/run/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
   工具执行中不可打断的场景），再 `agent.abortRun()` 本地断链（即时取消态 +
   断链取消路径）。缺一不可：只留 abort 则断链事件可能被传输层吞掉；只留
   REST 则前端没有即时取消态。react-ag-ui 0.0.44 自身的 cancel 只 abort
@@ -139,7 +139,7 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
 - 后端地址统一在 `src/lib/config.ts`（`REST_BASE`/`SSE_URL`，来自
   `import.meta.env.VITE_API_BASE`/`VITE_SSE_URL`，兜底 `http://127.0.0.1:8000`
   —— API 根）。REST 端点按领域挂顶级前缀：会话 `/agentic/conversation...`、
-  聊天 SSE `/agentic/chat`、知识库 `/knowledge...`、绑定 `/agent/.../knowledge`、
+  run SSE `/agentic/run`、知识库 `/knowledge...`、绑定 `/agent/.../knowledge`、
   记忆图谱 `/memory/graph`（响应字段 camelCase 特例，类型见 memory-service.ts）；
   service 层写完整相对路径（相对 API 根），不再共享单一 `/agentic` 前缀。
 - **shadcn CLI 路径坑**：`yarn shadcn add <comp>` 时 CLI 解析不到 `@` 别名

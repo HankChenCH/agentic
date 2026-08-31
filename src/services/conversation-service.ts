@@ -12,7 +12,7 @@ import type {
  *
  * 所有方法都经 @/lib/http 的 axios 实例（拦截器已自动剥去
  * { error_code, error_message, response } 信封），因此这里直接拿到干净 payload。
- * SSE chat 端点（/agentic/chat）不在此处，由 @ag-ui/client 的 HttpAgent 直接消费。
+ * SSE run 端点（/agentic/run）不在此处，由 @ag-ui/client 的 HttpAgent 直接消费。
  */
 export const conversationService = {
   /**
@@ -77,14 +77,14 @@ export const conversationService = {
 
   /**
    * 显式取消当前会话的活跃轮次。
-   * POST /agentic/chat/cancel（body: { threadId }，幂等）
+   * POST /agentic/run/cancel（body: { threadId }，幂等）
    *
    * 服务端置 Redis 取消标志即返回，流式循环在节流边界感知后收口（静默
    * 断流）。前端仍配合 abortRun 本地断链：abort 提供即时取消态与断链取消
    * 路径，REST 标志兜底代理吞断链事件 / 工具执行中不可打断的场景。
    */
-  async cancelChatRun(threadId: string): Promise<{ canceled: boolean }> {
-    return postJson<{ canceled: boolean }>("/agentic/chat/cancel", {
+  async cancelRun(threadId: string): Promise<{ canceled: boolean }> {
+    return postJson<{ canceled: boolean }>("/agentic/run/cancel", {
       threadId,
     });
   },

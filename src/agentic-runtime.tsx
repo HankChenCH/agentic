@@ -138,7 +138,7 @@ export const AgenticRuntimeProvider = ({
     //    收到 GeneratorExit）。AbortError 会被 runtime 归类为 RUN_CANCELLED，
     //    不会误报成运行错误。REST 失败不阻断本地取消，静默即可。
     onCancel: () => {
-      void conversationService.cancelChatRun(agent.threadId).catch(() => {});
+      void conversationService.cancelRun(agent.threadId).catch(() => {});
       agent.abortRun();
     },
   });
