@@ -52,12 +52,18 @@ class Fragment:
 
 
 def brief_context(now: datetime, lines: list[str]) -> str:
-    """简报态：快速回忆块的扁平事实行。"""
+    """简报态：快速回忆块的扁平事实行。
+
+    使用提示随块输出（进模板 ``{memory}`` 槽或 RAG 折叠）：块空则整节移除，
+    提示与数据同生同灭——agent 人设不复写两级记忆策略（聚合在
+    ``components/memory/manifest.py``、随深度工具 description 触达）。
+    """
     if not lines:
         return ""
     head = f"## 快速记忆上下文（共{len(lines)}条 · 取自 {now.strftime('%Y-%m-%d')}）"
+    usage = "本节为用户级常驻摘要，请优先直接利用；不足以还原时再用记忆工具深挖。"
     numbered = "\n".join(f"{i}. {line}" for i, line in enumerate(lines, start=1))
-    return f"{head}\n【事实拓扑】＃编号=数据库溯源键\n{numbered}"
+    return f"{head}\n{usage}\n【事实拓扑】＃编号=数据库溯源键\n{numbered}"
 
 
 def fragments_output(now: datetime, fragments: list[Fragment]) -> str:

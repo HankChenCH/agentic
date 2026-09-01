@@ -89,7 +89,8 @@ server/                          # this directory is its own git repo (the works
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
 ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents
 │                            #   (builtin/{demo,rag}/ 一 agent 一包；rag 为自建 StateGraph，
-│                            #   见 Gotchas「builtin:rag」)
+│                            #   见 Gotchas「builtin:rag」) + middleware.py（动态 system
+│                            #   prompt：PromptTemplate 模板槽位 + 片段渲染中间件）
 ├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
 │                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
 │                            #   register_component/describe_capabilities）+ memory/ + knowledge/ + demo/。
@@ -505,9 +506,11 @@ Server layer rules:
   ③ `agents/toolbox.py` 加一个装配器字段（全系统唯一显式组件清单点，构造期
   校验跨组件工具名冲突）——`AgentFactory` 与各 agent 的 `build_tools` 不变。
   包内模块间一律完整子模块路径互导，禁经包 `__init__` 取属性（防初始化环）。
-  快速上下文注入的读路径装配归 agent 层：`BaseAgent._input` 每轮经
-  `toolbox.memory.recall` 把快注块组装进 system prompt（RAG 因图节点按文本
-  渲染历史，在其 `_input` 折进末条用户消息）。轮次收尾不在 v1 能力范式内：
+  快速上下文注入的读路径装配归 agent 层：BaseAgent 默认 `prompt_fragments` 的
+  memory 片段经 `agents/middleware.py` 的动态 prompt 中间件把快注块渲染进
+  模板 `{memory}` 槽（每次模型调用；人设模板在各 agent 的 prompts.py，
+  占位符覆盖/空节移除/片段降级语义见 middleware 模块注释；RAG 因图节点按
+  文本渲染历史，在其 `_input` 折进末条用户消息）。轮次收尾不在 v1 能力范式内：
   编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
   `MemoryConsolidationService`）。
 - **repositories** → data access for the conversation domain (`@injectable`),
@@ -683,11 +686,18 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   lands on the same `_cancel_turn_safely` path, silently closing the stream
   (no RUN_ERROR frame; the client's local abort state is the source of
   truth, since ag-ui has no server-side CANCELLED event). Tools check the
-  flag at entry via the `cancel_check` closure carried in
-  `AgentRunContext` → `_config`'s `configurable` (see `_cancel_guard` in
-  `agents/base.py`; it synthesizes a `config: RunnableConfig` param for
-  tools that don't declare one, so langchain injects + schema-excludes it —
-  same pattern as the memory tools). Flag reads are best-effort: the store
+  flag at entry via the `cancel_check` closure carried in `AgentRunContext`
+  (passed with langgraph's `context=`; middleware read it back from
+  `request.runtime.context`) — enforced by `CancelGuardMiddleware.wrap_tool_call`
+  (`agents/cancel.py`, mounted mandatorily at the front of `BaseAgent.build_graph`'s
+  middleware list, outside the `build_middleware` extension point so subclass
+  overrides can't drop it; outermost = cancel fires before any other tool
+  middleware such as retries). On hit it raises `RunCanceledError` before the
+  tool body runs; the exception propagates out of the graph run unchanged
+  (langgraph's default tool-error handling only absorbs validation-type
+  errors) and the orchestration loop's generic exception fallback closes the
+  turn — the frame-level cancel check usually notices first, so the guard
+  covers the window in between. Flag reads are best-effort: the store
   being down degrades to disconnect-only cancel and never blocks the run; the
   cancel endpoint's write failure propagates to the caller.
 - Multi-turn history is server-authoritative: `ConversationService.replay_history`(由 `AgenticService.run` 调用) rebuilds
@@ -715,8 +725,12 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   entity on fusion score 1.0 / true cosine 0.44) is documented in
   `docs/memory-v2-design.md` §8; polluted archives are repairable via
   `python -m app.cmd.admin memory repair --apply`.
-  Recall has two tiers: `BaseAgent._input` composes a brief block into the
-  head SystemMessage each run (`MemoryRecallService.build_fast_context`, pure
+  Recall has two tiers: the default `prompt_fragments` memory fragment renders
+  `MemoryRecallService.build_fast_context` into the template `{memory}` slot on
+  every model call via `DynamicSystemPromptMiddleware` (`app/agents/middleware.py`;
+  persona is baked via `create_agent(system_prompt=...)` and the middleware
+  overrides `system_message` per call, so the model never sees two system
+  messages; fragment failure/empty degrades to dropping the section) — pure
   SQL scoring, no LLM/embedding — a stable top-10 standing digest: it neither
   skips session-fed ids nor bumps access counts, but still marks ids so deep
   tools return only增量; `builtin:rag` folds the block into the last user

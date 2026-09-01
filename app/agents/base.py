@@ -1,18 +1,23 @@
-import functools
-import inspect
 import logging
 from abc import ABC, abstractmethod
-from typing import Callable, ClassVar
+from typing import ClassVar
 from uuid import UUID
 
 from langchain.agents import create_agent
-from langchain.messages import HumanMessage, SystemMessage
+from langchain.messages import HumanMessage
+from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agents.cancel import CancelGuardMiddleware
 from app.agents.context import AgentRunContext
+from app.agents.middleware import (
+    DynamicSystemPromptMiddleware,
+    PromptContext,
+    PromptFragment,
+    render_system_prompt,
+)
 from app.agents.toolbox import AgentToolbox
 from app.agents.tools_transformer import ToolsTransformer
 
@@ -20,88 +25,35 @@ from app.agents.tools_transformer import ToolsTransformer
 logger = logging.getLogger(__name__)
 
 
-class RunCanceledError(Exception):
-    """工具入口守卫检测到取消标志：跳过工具体（langgraph 记 tool-error），
-    随后由编排层的边界检查终止本轮——不继承 BaseException，避免绕过
-    langgraph 的常规错误处理路径。"""
-
-
-def _cancel_checked(func: Callable):
-    """为工具函数包上入口取消检查（_cancel_guard 的共用包装器）。
-
-    检查闭包由编排层经 ``AgentRunContext.cancel_check`` → ``_config`` 的
-    ``configurable.cancel_check`` 传入，包装器在每次工具被调用前读取：命中即
-    抛 ``RunCanceledError`` 跳过工具体（省掉一次无谓的检索/LLM 外呼），随后
-    编排层流式循环的边界检查终止本轮。
-
-    无论原函数是否声明 ``config``，包装器都透出 ``config: RunnableConfig``
-    形参（langchain 的运行时注入以函数签名为准）：已声明的原样透传，未声明
-    的剥除后调用——取消检查本身需要 config，但 config 不得进工具的 LLM schema
-    （StructuredTool 用显式 args_schema、裸函数靠 RunnableConfig 注解排除）。
-    """
-    sig_params = list(inspect.signature(func).parameters.values())
-    has_config = any(p.name == "config" for p in sig_params)
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        config = kwargs.get("config")
-        check = (config or {}).get("configurable", {}).get("cancel_check")
-        if check is not None and check():
-            raise RunCanceledError("run canceled by client")
-        if not has_config:
-            kwargs.pop("config", None)
-        return func(*args, **kwargs)
-
-    if not has_config:
-        params = [*sig_params, inspect.Parameter(
-            "config", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None, annotation=RunnableConfig,
-        )]
-        wrapper.__signature__ = inspect.Signature(params)
-        annotations = dict(getattr(func, "__annotations__", None) or {})
-        annotations["config"] = RunnableConfig
-        wrapper.__annotations__ = annotations
-    return wrapper
-
-
-def _cancel_guard(tool: Callable | BaseTool) -> Callable | BaseTool:
-    """工具入口的协作式取消检查（显式取消通道的工具侧半边），支持两种工具形态：
-
-    - StructuredTool（组件工具的声明式形态）：守卫下沉到底层 func 重建工具，
-      args_schema 原样透传（config 注入形参在签名层保证，不进 schema）；
-    - 裸函数（智能体自带工具，如 weather）：同款包装并合成签名，langchain
-      据此把 config 判为注入参数。
-    """
-    if isinstance(tool, BaseTool):
-        return StructuredTool.from_function(
-            name=tool.name,
-            description=tool.description,
-            args_schema=tool.args_schema,
-            func=_cancel_checked(tool.func),
-            infer_schema=False,
-        )
-    return _cancel_checked(tool)
-
-
 class BaseAgent(ABC):
-    """智能体基类（模板方法）。
+    """智能体基类（模板方法）：标准 ReAct 型智能体只声明差异，机制归基类。
 
-    智能体图在实例化时编译一次（``self._graph``），stream/invoke 复用，不重复
-    build。图本身构建期静态、不随运行变化：人设字符串虽也只依赖智能体身份，
-    但其注入时机在每轮 ``_input``——与快速记忆块合并为头部 system 消息（快注
-    是用户级常驻摘要，每轮内容不同，不能烘进图）；多轮历史与运行期动态信息
-    （当前时间等）同样通过 ``AgentRunContext`` 在每次调用时随输入消息注入。
-
-    子类供给差异点：
-    - ``build_system_prompt``（必须实现）：智能体人设；
-    - ``build_tools``（默认无工具）：以组合方式装配能力（如记忆召回、知识库检索），
-      能力依赖经构造注入的 ``toolbox`` 获取；
-    - ``_system_prompt``（默认人设 + 快速记忆块）：每轮 system prompt 组装，
-      不想要快注的子类覆写之（RAG 因节点按文本渲染历史，整体覆写 ``_input``
-      把块折进用户消息）；
-    - ``build_graph``（默认预置 ReAct 循环）：自建 StateGraph 的智能体覆写，
-      并按需覆写 stream/invoke；
+    声明面（子类要写的全部）：
+    - ``build_system_prompt``（必须实现）：PromptTemplate 兼容的模板字符串
+      （f-string 槽位）。静态槽（如 ``{tools}``）构建期由基类填充并烘进图；
+      动态槽（如 ``{memory}``）必须以 ``<slot>``/``</slot>`` 信封包裹，每轮由
+      动态 prompt 中间件渲染，产出为空则整节移除——模板没有的片段静默失配
+      （自动退役），模板加了槽没有片段则构建期报错；
+    - ``prompt_fragments``（默认提供 memory 快注片段）：动态槽渲染字典
+      （占位符名 → ``(PromptContext) -> str``，异常/空串由中间件统一降级）；
+    - ``build_tools``（默认无工具）：以组合方式装配能力（如记忆深度回忆、
+      知识库检索），能力依赖经构造注入的 ``toolbox`` 获取；
+    - ``build_middleware``（默认挂动态 prompt 中间件）：中间件装配扩展点，
+      需要叠加其他内置中间件（摘要/重试/调用限额等）的子类覆写并以
+      ``super()`` 起始；
     - ``preferred_provider``（默认走全局配置）：智能体级模型路由，取值为
       ``LLMConfig.providers`` 的 entry key。
+
+    自建 StateGraph 的智能体（如 RAG）覆写 ``build_graph`` 并按需覆写
+    ``stream/invoke/_input``——中间件与模板机制只服务默认 ReAct 路径（RAG
+    的快注仍经 ``_fast_memory_block`` 折进末条用户消息）。
+
+    每轮运行事实（``AgentRunContext``）经 langgraph ``context=`` 参数传入，
+    中间件经 ``request.runtime.context`` 取回——取消守卫（``CancelGuardMiddleware``，
+    本类 ``build_graph`` 强制前置，不经 ``build_middleware`` 装配面）据此检查
+    ``ctx.cancel_check``；``thread_id/user_id`` 仍经 ``_config`` 的 configurable
+    透传给声明了 config 形参的工具。图在实例化时编译一次（``self._graph``），
+    stream/invoke 复用，不重复 build。
 
     仅当"身份"不同（人设、pipeline、模型路由）才需要新子类；工具增减通过
     ``build_tools`` 传参即可，不必新建智能体类。
@@ -116,67 +68,131 @@ class BaseAgent(ABC):
         self.model = model
         # toolbox 必须先于 build_graph() 赋值：后者在图编译时即被调用
         self.toolbox = toolbox
-        # 快速回忆门面：每轮 _input 组装 system prompt 时消费（agents ──► components 合法边）
+        # 快速回忆门面：默认 memory 片段（与 RAG 折叠路径）消费（agents ──► components 合法边）
         self.recall = toolbox.memory.recall
         self._graph = self.build_graph()
 
     def build_graph(self) -> CompiledStateGraph:
         """编译智能体图（实例化时调用一次，stream/invoke 复用）。
 
-        默认实现 = langchain 预置的 model↔tools ReAct 循环；人设不在编译期
-        烘入图（system_prompt 参数不传），由 ``_input`` 每轮随输入消息注入。
-        需要自建 StateGraph（自有节点与循环，如 RAG 智能体）的子类覆写本方法，
-        并按需覆写 stream/invoke 以适配自定义图的状态形状与流式语义。
+        默认实现 = langchain 预置 model↔tools ReAct 循环 + 声明式 system
+        prompt 装配：模板槽位经 ``PromptTemplate`` 自动推导并校验覆盖（占位符
+        无片段提供者 → ValueError，含缺失槽名清单），静态槽实渲后烘进图作
+        基线，动态槽由中间件在每次模型调用时渲染并覆写 ``system_message``
+        （单趟渲染，片段产出不被二次扫描）。取消守卫（``CancelGuardMiddleware``）
+        在此强制前置——工具入口的协作式取消是编排层契约，不进 ``build_middleware``
+        装配面。需要自建 StateGraph 的子类覆写本方法，并按需覆写 stream/invoke
+        以适配自定义图的状态形状与流式语义。
         """
+        template = PromptTemplate.from_template(self.build_system_prompt())
+        static_values = self._static_prompt_values()
+        fragments = self.prompt_fragments()
+        missing = sorted(set(template.input_variables) - set(static_values) - set(fragments))
+        if missing:
+            raise ValueError(
+                f"{self.agentic_id} 的 system prompt 模板占位符缺少提供者: {missing}"
+                f"（静态槽: {sorted(static_values)}；已声明片段: {sorted(fragments)}）"
+            )
         return create_agent(
             name=self.agentic_id,
             model=self.model,
-            tools=[_cancel_guard(t) for t in self.build_tools()],
+            system_prompt=self._baseline_prompt(template, static_values, fragments),
+            tools=self.build_tools(),
             transformers=[ToolsTransformer],
+            middleware=[CancelGuardMiddleware(), *self.build_middleware(template, static_values, fragments)],
         )
 
+    def _baseline_prompt(self, template: PromptTemplate, static_values: dict, fragments: dict) -> str:
+        """基线 system prompt：静态槽实渲 + 动态槽取空（整节移除）。
+
+        正常路径下动态 prompt 中间件每次模型调用以完整渲染结果覆写基线；
+        仅当子类整体覆写 ``build_middleware`` 未挂该中间件时基线生效（片段
+        声明随之失效，属显式豁免）。
+        """
+        dynamic_slots = [s for s in fragments if s in template.input_variables]
+        values = {**static_values, **{slot: "" for slot in dynamic_slots}}
+        return render_system_prompt(template, values, dynamic_slots)
+
+    def build_middleware(self, template: PromptTemplate, static_values: dict, fragments: dict) -> list:
+        """中间件装配（扩展点）。模板存在动态槽时默认挂动态 system prompt
+        中间件；无动态槽（或片段全部失配模板）则不挂——每轮重渲静态串纯属
+        浪费。需要叠加其他中间件的子类覆写并以 ``super()`` 起始。
+
+        取消守卫不在此装配：``build_graph`` 已强制前置 ``CancelGuardMiddleware``
+        （列表首位 = wrap_tool_call 链最外层），覆写本方法不影响取消语义。"""
+        if not any(slot in template.input_variables for slot in fragments):
+            return []
+        return [DynamicSystemPromptMiddleware(template, static_values, fragments)]
+
+    def prompt_fragments(self) -> dict[str, PromptFragment]:
+        """动态槽片段字典（扩展点）：占位符名 → 渲染函数。默认提供 memory
+        快注片段；子类增删条目即可增减动态节，模板没有对应占位符的条目自动
+        失效。"""
+        return {"memory": self._memory_fragment}
+
+    def _memory_fragment(self, pctx: PromptContext) -> str:
+        if pctx.ctx is None:
+            return ""
+        return self._fast_memory_block(pctx.ctx)
+
+    def _static_prompt_values(self) -> dict[str, str]:
+        """静态槽值（构建期一次）。``{tools}`` = 实际装配工具的「名称 + 首行
+        用途」索引——从 ``build_tools()`` 装配结果生成而非全局注册表，经装配
+        过滤后的工具集才是该 agent 的真相，模板索引在机制上不会与真实工具集
+        漂移（工具增删只改本索引与 schema，人设模板零维护）。"""
+        lines = []
+        for tool in self.build_tools():
+            name = getattr(tool, "name", None) or getattr(tool, "__name__", "")
+            # BaseTool 走 description；裸函数（langchain 转工具前）只有 __doc__
+            desc = getattr(tool, "description", None) or getattr(tool, "__doc__", None) or ""
+            first_line = str(desc).strip().splitlines()[0].strip() if str(desc).strip() else ""
+            lines.append(f"- {name}: {first_line}" if first_line else f"- {name}")
+        return {"tools": "\n".join(lines)}
+
     def stream(self, ctx: AgentRunContext):
-        """启动流式运行，返回 langgraph 运行句柄（消费方用 interleave 遍历）。"""
+        """启动流式运行，返回 langgraph 运行句柄（消费方用 interleave 遍历）。
+
+        ``context=ctx`` 使 ``AgentRunContext`` 经 langgraph runtime 可达
+        （动态 prompt 中间件经 ``request.runtime.context`` 读取）——v3 的
+        ``stream_events`` 把该参数透传给底层 stream。
+        """
         return self._graph.stream_events(
             version="v3",
             input=self._input(ctx),
             config=self._config(ctx),
+            context=ctx,
         )
 
     def invoke(self, ctx: AgentRunContext) -> str:
         """非流式单次调用：走完整智能体流程（含工具循环），返回最终 assistant 文本。
 
-        供非流式单次调用场景使用，不产出 ag-ui 事件。
+        供非流式单次调用场景使用，不产出 ag-ui 事件。``context=`` 透传同
+        ``stream``。
         """
         result = self._graph.invoke(
             input=self._input(ctx),
             config=self._config(ctx),
+            context=ctx,
         )
         content = result["messages"][-1].content
         return content if isinstance(content, str) else str(content)
 
     def _input(self, ctx: AgentRunContext) -> dict:
-        # 历史消息原样回放（图无 checkpointer，多轮上下文靠输入携带）；
-        # 运行期动态信息注入两处：快速记忆块并入头部 system prompt（常驻
-        # 语境，不侵入用户消息），当前时间注入末条用户消息（当前轮）
+        """图输入：历史消息原样回放（图无 checkpointer，多轮上下文靠输入携带），
+        当前时间注入末条用户消息。人设与动态上下文不再进输入消息——人设基线
+        烘在图上、动态槽由中间件每次模型调用渲染，任一时刻模型只收一条
+        system 消息。"""
         messages = list(ctx.messages)
         if messages:
             messages[-1] = HumanMessage(f"[当前时间：{ctx.now}]\n\n{messages[-1].content}")
-        return {"messages": [SystemMessage(self._system_prompt(ctx)), *messages]}
-
-    def _system_prompt(self, ctx: AgentRunContext) -> str:
-        """每轮 system prompt：人设 + 快速记忆块（常驻摘要，不侵入用户消息）。
-
-        快注块不落库、每轮重算，历史回放不受影响。
-        """
-        persona = self.build_system_prompt()
-        block = self._fast_memory_block(ctx)
-        return f"{persona}\n\n{block}" if block else persona
+        return {"messages": messages}
 
     def _fast_memory_block(self, ctx: AgentRunContext) -> str:
         """快速记忆块（用户级常驻摘要）；当前轮用户 query 仅作寒暄短路判别。
 
-        检索失败只记日志不阻断（口径同原编排层注入），降级为空块。
+        检索失败只记日志不阻断（口径同原编排层注入），降级为空块。两个消费
+        方：默认 memory 片段（ReAct 路径，进模板 ``{memory}`` 槽）与 RAG 的
+        ``_input`` 折叠（自建图路径）。
         """
         if not ctx.messages:
             return ""
@@ -192,13 +208,13 @@ class BaseAgent(ABC):
 
     def _config(self, ctx: AgentRunContext) -> RunnableConfig:
         configurable: dict = {"thread_id": ctx.thread_id, "run_id": ctx.run_id, "user_id": ctx.user_id}
-        if ctx.cancel_check is not None:
-            configurable["cancel_check"] = ctx.cancel_check
         return {"configurable": configurable}
 
     @abstractmethod
     def build_system_prompt(self) -> str:
-        """返回该智能体的 system prompt（构建期静态，不含单次运行信息）。"""
+        """返回该智能体的 system prompt 模板（PromptTemplate 兼容的 f-string：
+        静态槽如 ``{tools}`` 构建期由基类填充；动态槽如 ``{memory}`` 须以
+        ``<slot>`` 信封包裹，每轮由 ``prompt_fragments`` 的片段渲染）。"""
 
     def build_tools(self) -> list:
         """返回该智能体携带的工具列表（构建期静态），默认无工具。"""

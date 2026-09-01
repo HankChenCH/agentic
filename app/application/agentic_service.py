@@ -117,8 +117,8 @@ class AgenticService:
                 run_id=run_id,
                 user_id=str(user_id),
                 now=now,
-                # 工具入口的协作式取消检查（经 configurable 注入工具，闭包即数据，
-                # agents 层不依赖本层）
+                # 工具入口的协作式取消检查（闭包随 AgentRunContext 经 langgraph
+                # context= 传给取消守卫中间件，闭包即数据，agents 层不依赖本层）
                 cancel_check=lambda: self.conversations.is_run_canceled(thread_id),
             ))
         except Exception as e:

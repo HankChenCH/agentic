@@ -1,8 +1,14 @@
 """memory 组件清单：能力声明（spec）+ 工具构造 + 装配器。
 
 能力导出 = 深度回忆三件套（timeline/expand/state_at）；快速回忆不走工具
-——由 BaseAgent._input 每轮经 build_fast_context 组装进 system prompt
-（见 ability.recall）。三件套均需当前会话 thread 做去重登记与访问强化。
+——由 BaseAgent 默认 memory 片段经动态 system prompt 中间件把快注块渲染进
+模板 ``{memory}`` 槽（见 ability.recall 与 agents/middleware.py；RAG 因图
+节点按文本渲染历史，在其 _input 折进末条用户消息）。三件套均需当前会话
+thread 做去重登记与访问强化。
+
+跨工具的两级记忆使用策略聚合在本清单（组件能力的唯一聚合点）：manifest
+文本对模型不可见，经 ``_DEEP_TOOL_POLICY`` 组合进各深度工具 description
+触达 LLM——agent 人设模板不复写工具工作流，工具集与引导不会漂移。
 
 thread 的传递方式：不能闭包捕获（agent 实例按 agentic_id 跨会话缓存），
 也不能用 ContextVar——编排层是 sync 生成器，Starlette 每次恢复都在不同
@@ -30,6 +36,14 @@ from app.components.base import (
     register_component,
 )
 from app.components.memory.ability.recall import MemoryRecallService
+
+# 两级记忆使用策略（跨工具，聚合于本清单、组合进各深度工具 description 触达
+# LLM）：检索节制条款随策略走，agent 人设只保留不含工具名的通用表述。
+_DEEP_TOOL_POLICY = (
+    "跨会话记忆分两级：若系统上下文已附快速记忆块，优先直接利用；不足以还原"
+    "事情来龙去脉时再调用本工具深挖。检索一般一轮即可，确有信息缺口才继续，"
+    "不要反复空查。"
+)
 
 
 class TimelineArgs(BaseModel):
@@ -59,9 +73,10 @@ def _build_timeline_tool(memory_service: MemoryRecallService) -> StructuredTool:
     return StructuredTool.from_function(
         name="timeline",
         description=(
-            "按线索检索过去发生的事件情节（何时何地发生了什么），返回带时间锚与"
-            "溯源编号的记忆片段。涉及用户经历、项目来龙去脉、事件背景时使用；"
-            "多数问题检索一次即可，确有缺口再补充不同线索继续查。"
+            f"{_DEEP_TOOL_POLICY}"
+            "深度用法：按线索检索过去发生的事件情节（何时何地发生了什么），返回"
+            "带时间锚与溯源编号的记忆片段。涉及用户经历、项目来龙去脉、事件背景"
+            "时使用。"
         ),
         args_schema=TimelineArgs,
         func=timeline,
@@ -78,9 +93,10 @@ def _build_expand_tool(memory_service: MemoryRecallService) -> StructuredTool:
     return StructuredTool.from_function(
         name="expand",
         description=(
-            "展开某个人/物/机构/概念的关联记忆网：它相关的既有事实与经历事件。"
-            "当 timeline 或对话中出现关键对象、需要摸清其关系脉络时使用；"
-            "entity 传规范名称（人名/物名等）。"
+            f"{_DEEP_TOOL_POLICY}"
+            "深度用法：展开某个人/物/机构/概念的关联记忆网：它相关的既有事实与"
+            "经历事件。当 timeline 或对话中出现关键对象、需要摸清其关系脉络时"
+            "使用；entity 传规范名称（人名/物名等）。"
         ),
         args_schema=ExpandArgs,
         func=expand,
@@ -97,8 +113,9 @@ def _build_state_at_tool(memory_service: MemoryRecallService) -> StructuredTool:
     return StructuredTool.from_function(
         name="state_at",
         description=(
-            "时点回放：查询某个过去日期当时仍在生效的事实状态（含此后被新值取代"
-            "的历史情况）。适合“那时候/当时他在做什么”类问题；time 用 "
+            f"{_DEEP_TOOL_POLICY}"
+            "深度用法：时点回放——查询某个过去日期当时仍在生效的事实状态（含此后"
+            "被新值取代的历史情况）。适合“那时候/当时他在做什么”类问题；time 用 "
             "YYYY-MM-DD 格式。"
         ),
         args_schema=StateAtArgs,
@@ -111,8 +128,8 @@ _SPEC = register_component(ComponentSpec(
     name="memory",
     title="长期记忆",
     description=(
-        "跨会话长期记忆：每轮由 agent 输入装配自动注入快速回忆上下文"
-        "（system prompt 常驻摘要，非工具），并提供深度回忆三件套供 agent"
+        "跨会话长期记忆：每轮由动态 system prompt 中间件把快速回忆块渲染进"
+        "模板记忆节（用户级常驻摘要，非工具），并提供深度回忆三件套供 agent"
         "按需检索历史事件、人物关联与时点状态。"
     ),
     tools=(
