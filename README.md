@@ -62,6 +62,9 @@ uv run uvicorn app.cmd.http.main:server --reload
 
 # 6. 启动 Celery worker(知识库文档摄取需要;需先起 redis)
 uv run celery -A app.cmd.task_executor.main worker
+
+# 7. 启动 Celery beat(看门狗调度:卡死文档对账重投;可选,不跑则无自动恢复)
+uv run celery -A app.cmd.task_executor.main beat
 ```
 
 HTTP 服务监听 `0.0.0.0:8000`,run 端点即 `http://127.0.0.1:8000/agentic/run`。
@@ -73,6 +76,7 @@ HTTP 服务监听 `0.0.0.0:8000`,run 端点即 `http://127.0.0.1:8000/agentic/ru
 | 安装/同步依赖 | `uv sync` |
 | 运行 dev server | `uv run uvicorn app.cmd.http.main:server --reload` |
 | 运行 Celery worker | `uv run celery -A app.cmd.task_executor.main worker` |
+| 运行 Celery beat(看门狗调度) | `uv run celery -A app.cmd.task_executor.main beat` |
 | 运行单元测试 | `uv run pytest tests/` |
 | 数据库迁移(Alembic) | `uv run python -m app.cmd.admin db upgrade`(另有 `downgrade` / `revision` / `current` / `history` / `stamp`) |
 | 启动/停止中间件 | `docker compose up -d` / `docker compose down` |

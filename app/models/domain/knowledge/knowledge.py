@@ -168,6 +168,13 @@ class KnowledgeDocument(TimeFieldMixin, SQLModel, table=True):
         default=0
     )
 
+    reap_count: int = Field(
+        title="看门狗重投次数",
+        description="卡死对账（看门狗）已补发的次数：processing 超时判死后计数重投，成功收尾归零；"
+        "达上限置 failed 防毒丸（无限卡死循环），走人工 retry",
+        default=0,
+    )
+
     kb: "KnowledgeBase" = Relationship(back_populates="documents")
     segments: List["DocumentSegment"] = Relationship(
         back_populates="doc",

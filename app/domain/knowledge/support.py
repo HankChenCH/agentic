@@ -6,6 +6,7 @@ Celery 两个运行时经由服务方法操作文档，端点不再各自挡 404
 """
 
 import posixpath
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.exceptions import BusinessError
@@ -35,6 +36,14 @@ DISABLE_ALLOWED = {KnowledgeStatus.ENABLED, KnowledgeStatus.DISABLED}
 
 # 重试处理：failed 可重试；pending（如 worker 未起、任务丢失）可补发
 RETRY_ALLOWED = {KnowledgeStatus.FAILED, KnowledgeStatus.PENDING}
+
+
+def as_utc(value: datetime) -> datetime:
+    """时区归一为 aware UTC：SQLite 方言丢 tzinfo（naive 即 UTC 墙钟，TimeFieldMixin 口径），
+    PG timestamptz 保留 aware。卡死判定等时间比较前必须先归一。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def check_status_transition(status: KnowledgeStatus, enabled: bool, error: type[BusinessError]) -> None:

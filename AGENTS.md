@@ -181,6 +181,9 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   driver+key reference (`driver: redis` + `provider` naming a `redis.yaml`
   providers entry; resolved by `app.core.config.resolve_url`, fail-fast on
   unknown key/driver — defaults both point at the `redis` entry, db0).
+  Watchdog scheduler (beat；卡死对账 reap 任务的调度进程，与 worker 分开跑):
+  `uv run celery -A app.cmd.task_executor.main beat`（`task.yaml`
+  `reap_interval_seconds: 0` 可整体关闭）。
 - Maintenance CLI (Typer): `uv run python -m app.cmd.admin memory repair`
   (dry-run; `--apply` to write) and `uv run python -m app.cmd.admin memory
   rebuild-index` (stats only; `--yes` to drop + re-embed). Top-level
@@ -441,7 +444,13 @@ Server layer rules:
   the `redis` driver resolves against `redis.yaml` providers; plus
   `time_limit`/`soft_time_limit` (硬/软任务超时，默认 600/540 秒，soft<hard
   由校验保证，落到 worker conf `task_time_limit`/`task_soft_time_limit`,
-  broker 连接套用被引 redis entry 的 socket 超时)), `redis`
+  broker 连接套用被引 redis entry 的 socket 超时), and the reliability block
+  （`acks_late` 晚 ack；`reject_on_worker_lost=False` 防硬超时毒丸循环；
+  `prefetch_multiplier=1`；`visibility_timeout=1200` 未 ack 消息重投窗口——
+  broker+result backend 两处一致、校验须 > time_limit；`stale_processing_seconds=660`
+  processing 判死阈值、校验须 > time_limit；`stale_pending_seconds=600` pending
+  判消息丢失；`reap_interval_seconds=120` beat 对账周期、0 关闭；
+  `max_reap_attempts=3` 单文档重投上限——全景见 Gotchas「Celery 可靠性」)), `redis`
   (`RedisConfig`: default + providers dict with
   `type`-discriminated entries — `standalone` via `REDIS_URL`, entry 级
   `socket_timeout`/`socket_connect_timeout`（默认 5/3 秒）传给
@@ -788,6 +797,32 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
     上下文；时间前缀注入与 `BaseAgent._input` 同口径。
   - 检索异常降级：retrieve 捕获异常发 tool-error 并按未命中继续（改写重试→兜底），
     不炸整轮流（`KnowledgeVectorIndex.search` 自身已吞异常，此处兜服务层故障）。
+- **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
+  制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
+  ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/
+  断连后未 ack 消息由 broker 重投（整进程死亡走 visibility_timeout=1200s 窗口，
+  需 beat 之外无额外动作）；`task_reject_on_worker_lost=False` 是刻意的——子进程
+  被硬超时强杀时若重投会形成「强杀→重投」毒丸无限循环，进程内死亡一律落 DB 状态
+  交看门狗有界恢复。重投前提是任务幂等，见 ②。② **claim 门闸（幂等重投核心）**：
+  `KnowledgeDocumentRepository.claim_document` 用「读后乐观锁条件 UPDATE」（WHERE
+  带旧 status+旧 updated_at 等值比较，跨 SQLite/PG 时区表示可移植）把文档原子占为
+  processing：pending/failed 可抢、卡死 processing（updated_at < stale_before，由
+  任务按 `stale_processing_seconds` 换算传入）可接管、fresh processing/ready/enabled/
+  deleting 一律幂等跳过——acks_late 重投、看门狗补发、人工 retry 的并发安全全部
+  收口于此；附带修复游离消息会把 ready 文档重置为 processing 的旧问题。③ **任务级
+  autoretry**：`app/tasks/knowledge.py` 的 `TRANSIENT_EXCEPTIONS`（InfrastructureError
+  ——MinerU 解析器统一抛它/SQLAlchemyError/TimeoutError/ConnectionError/httpx
+  .HTTPError/WeaviateBaseError）指数退避重试 max_retries=3；`dont_autoretry_for=
+  (BusinessError,)` 保证业务错误（4001/4004/4005/4006 等永久失败）永不重试；
+  SoftTimeLimitExceeded 刻意不重试（确定性超时重试只放大占用）。④ **看门狗
+  （beat 周期任务 `agentic.knowledge.reap_stuck_documents`，`app/tasks/maintenance.py`）**：
+  processing 超 stale_processing_seconds 判死→`mark_reaped` 计数重投，达
+  `max_reap_attempts` 置 failed+原因（`knowledge_base_document.reap_count` 列，
+  成功收尾 `complete_document` 归零）；pending 超 `stale_pending_seconds` 判消息
+  丢失（Redis 无持久化重启/dispatch 失败）→直接补发。跑 beat：
+  `uv run celery -A app.cmd.task_executor.main beat`。域分层约束：reap 只产出
+  补发决策（`DocumentIngestionService.reap_stuck_documents` 返回 dispatch/
+  finalized 清单），实际 `.delay` 在 tasks 层——domain 禁向上 import tasks。
 - `README.md` is the human-facing overview (quickstart, config, API, layout);
   this file remains the deeper agent guide — keep both in sync when adding
   entrypoints/config sections/endpoints.

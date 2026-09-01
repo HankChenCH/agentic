@@ -6,6 +6,7 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List, Tuple
 from uuid import UUID
 
@@ -53,6 +54,95 @@ class KnowledgeDocumentRepository:
             session.commit()
             session.refresh(doc)
         return doc
+
+    def claim_document(
+        self, kb_id: UUID, doc_id: UUID, *, stale_before: datetime | None
+    ) -> KnowledgeDocument | None:
+        """幂等 claim 门闸：把文档从可处理状态原子地占为 processing，返回占到的行。
+
+        重投/重复消息/看门狗补发的并发安全全部收口于此：
+        - pending/failed 直接可抢（failed 由重试语义进入）；
+        - processing 仅在 ``updated_at < stale_before`` 时可抢（存活任务最长跑
+          time_limit，调用方传入 now - stale_processing_seconds；None = 不接管）；
+        - ready/enabled/disabled/deleting 一律拒绝——游离消息不得重刷已完成文档。
+
+        实现为「读后乐观锁条件更新」：WHERE 带上读到的旧 status + 旧 updated_at
+        做等值比较（同一表示跨 SQLite/PG 时区口径可移植），rowcount=1 即抢占成功，
+        并发方落空返回 None（调用方按幂等跳过处理）。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            doc = session.exec(
+                select(KnowledgeDocument)
+                .where(col(KnowledgeDocument.id) == doc_id)
+                .where(col(KnowledgeDocument.kb_id) == kb_id)
+            ).first()
+            if doc is None:
+                session.commit()
+                return None
+            if doc.status == KnowledgeStatus.PROCESSING:
+                if stale_before is None or _as_utc(doc.updated_at) >= _as_utc(stale_before):
+                    session.commit()
+                    return None
+            elif doc.status not in (KnowledgeStatus.PENDING, KnowledgeStatus.FAILED):
+                session.commit()
+                return None
+            result = session.exec(
+                update(KnowledgeDocument)
+                .where(col(KnowledgeDocument.id) == doc_id)
+                .where(col(KnowledgeDocument.kb_id) == kb_id)
+                .where(col(KnowledgeDocument.status) == doc.status)
+                .where(col(KnowledgeDocument.updated_at) == doc.updated_at)
+                .values(status=KnowledgeStatus.PROCESSING, error_message=None)
+            )
+            claimed = int(result.rowcount) == 1
+            session.commit()
+            if not claimed:
+                return None
+            return session.exec(
+                select(KnowledgeDocument)
+                .where(col(KnowledgeDocument.id) == doc_id)
+                .where(col(KnowledgeDocument.kb_id) == kb_id)
+            ).first()
+
+    def list_reap_candidates(self) -> List[KnowledgeDocument]:
+        """看门狗对账候选：全部 processing/pending 文档行。
+
+        卡死即异常，此类行数极小，全量捞回后由调用方在 Python 端做陈旧阈值
+        过滤——避免跨方言（SQLite naive / PG timestamptz）的 SQL 时间比较口径问题。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            rows = session.exec(
+                select(KnowledgeDocument).where(
+                    col(KnowledgeDocument.status).in_(
+                        [KnowledgeStatus.PROCESSING, KnowledgeStatus.PENDING]
+                    )
+                )
+            ).all()
+            session.commit()
+        return list(rows)
+
+    def mark_reaped(self, doc_id: UUID, *, max_attempts: int) -> bool:
+        """看门狗重投计数 +1；达上限置 failed + 原因（毒丸保护）。
+
+        返回 True 表示应继续重投，False 表示已终结为 failed（走人工 retry）。
+        成功收尾的归零在 :meth:`complete_document`。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            doc = session.get(KnowledgeDocument, doc_id)
+            if doc is None:
+                session.commit()
+                return False
+            count = doc.reap_count + 1
+            if count > max_attempts:
+                doc.status = KnowledgeStatus.FAILED
+                doc.error_message = (
+                    f"task reaped {max_attempts} times without completing; manual retry required"
+                )[:_ERROR_MESSAGE_MAX]
+            else:
+                doc.reap_count = count
+            session.add(doc)
+            session.commit()
+            return count <= max_attempts
 
     def delete_document(self, kb_id: UUID, doc_id: UUID) -> bool:
         with Session(self.engine, expire_on_commit=False) as session:
@@ -158,6 +248,7 @@ class KnowledgeDocumentRepository:
                 session.commit()
                 return False
             doc.status = KnowledgeStatus.READY
+            doc.reap_count = 0  # 成功收尾归零重投计数
             session.exec(
                 update(DocumentSegment)
                 .where(col(DocumentSegment.doc_id) == doc_id)
@@ -199,3 +290,15 @@ class KnowledgeDocumentRepository:
             ).all()
             session.commit()
         return list(ids)
+
+
+# 落库的看门狗终结原因截断长度（与 domain support.ERROR_MESSAGE_MAX 同口径；
+# repositories 禁反向依赖 services，故本地声明）
+_ERROR_MESSAGE_MAX = 2000
+
+
+def _as_utc(value: datetime) -> datetime:
+    """把读回的时间归一为 aware UTC：SQLite 丢 tzinfo（naive 即 UTC 墙钟），PG timestamptz 保留 aware。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

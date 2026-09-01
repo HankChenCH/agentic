@@ -7,3 +7,20 @@ broker:
 backend:
   driver: redis
   provider: redis
+# ---- 可靠性（acks_late + autoretry + 幂等重投 + 卡死恢复）----
+# 任务执行完才 ack：worker 崩溃未 ack 消息由 broker 重投；任务体幂等由 claim 门闸保证
+acks_late: true
+# 子进程被强杀（硬超时）不重投：防「强杀→重投」毒丸循环，进程内死亡落 DB 由看门狗有界恢复
+reject_on_worker_lost: false
+# acks_late 标准搭配：不囤积任务，长任务不拖同一 worker 队列里的短任务
+prefetch_multiplier: 1
+# Redis 未 ack 消息重投窗口：须 > time_limit（不能重投仍在跑的任务）
+visibility_timeout: 1200
+# processing 判死阈值：须 > time_limit（存活任务最长可跑 time_limit，不能误伤慢任务）
+stale_processing_seconds: 660
+# pending 判消息丢失阈值（如 Redis 无持久化重启）
+stale_pending_seconds: 600
+# 看门狗对账周期（beat）；0 = 关闭
+reap_interval_seconds: 120
+# 单文档重投上限（毒丸保护）：达上限置 failed 走人工 retry，成功收尾归零
+max_reap_attempts: 3

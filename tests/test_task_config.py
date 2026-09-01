@@ -59,6 +59,27 @@ def test_unsupported_driver_raises():
         resolve_url(config.broker, redis=_redis_config(redis="redis://127.0.0.1:6379/0"))
 
 
+def test_reliability_defaults():
+    config = TaskConfig()
+
+    assert config.acks_late is True
+    # 子进程强杀不重投：防硬超时毒丸循环，交看门狗有界恢复
+    assert config.reject_on_worker_lost is False
+    assert config.prefetch_multiplier == 1
+    assert config.visibility_timeout == 1200
+    assert config.stale_processing_seconds == 660
+    assert config.stale_pending_seconds == 600
+    assert config.reap_interval_seconds == 120
+    assert config.max_reap_attempts == 3
+
+
+def test_recovery_windows_must_exceed_time_limit():
+    with pytest.raises(ValueError, match="visibility_timeout .* must be > time_limit"):
+        TaskConfig(visibility_timeout=600)
+    with pytest.raises(ValueError, match="stale_processing_seconds .* must be > time_limit"):
+        TaskConfig(stale_processing_seconds=600)
+
+
 def test_shipped_task_yaml_loads_and_resolves():
     # 随仓 yaml 守护：真实 task.yaml 必须能加载并解析出可用 URL（防 yaml/模型漂移）
     config = load_section("task.yaml", TaskConfig)

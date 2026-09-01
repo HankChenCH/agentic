@@ -35,11 +35,64 @@ class TaskConfig(BaseModel):
         default=540,
         description="任务软超时（秒），超时向任务内抛 SoftTimeLimitExceeded，任务可自行收尾；须小于 time_limit",
     )
+    acks_late: bool = Field(
+        default=True,
+        description="任务执行完才 ack（``task_acks_late``）：worker 崩溃/断连时未 ack 消息由 broker 重投，"
+        "前提是任务体幂等（knowledge 摄取由 claim 门闸保证）",
+    )
+    reject_on_worker_lost: bool = Field(
+        default=False,
+        description="worker 子进程被强杀（硬超时等）时是否重投消息（``task_reject_on_worker_lost``）。"
+        "刻意默认 False：确定性超时的文档会被无限「强杀→重投」循环（毒丸），进程内死亡一律落 DB 状态，"
+        "由看门狗（reap）按计数上限做有界恢复",
+    )
+    prefetch_multiplier: int = Field(
+        default=1,
+        ge=1,
+        description="worker 预取倍数（``worker_prefetch_multiplier``）：acks_late 下取 1，避免单 worker 囤积任务拖长尾延迟",
+    )
+    visibility_timeout: int = Field(
+        default=1200,
+        description="Redis 未 ack 消息的重投窗口（秒）：worker 整进程死亡（kill -9/断电）后消息在此窗口后被 broker 重投；"
+        "须大于 time_limit（不能把仍在跑的任务重投出去），broker 与 result backend 两处统一套用",
+    )
+    stale_processing_seconds: int = Field(
+        default=660,
+        description="processing 判死阈值（秒）：文档 processing 持续超过该时长视为执行体已死，看门狗接管；"
+        "须大于 time_limit（存活任务最长可跑 time_limit，不能误伤慢任务）",
+    )
+    stale_pending_seconds: int = Field(
+        default=600,
+        description="pending 判丢失阈值（秒）：pending 持续超过该时长视为消息已丢（如 Redis 无持久化重启），看门狗直接补发",
+    )
+    reap_interval_seconds: int = Field(
+        default=120,
+        ge=0,
+        description="看门狗（reap）对账周期（秒）：beat 周期调度卡死文档对账；0 = 关闭看门狗",
+    )
+    max_reap_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="单文档看门狗重投上限：达到上限置 failed + 原因（毒丸保护），走人工 retry；成功收尾归零",
+    )
 
     @model_validator(mode="after")
     def _soft_before_hard(self):
         if self.soft_time_limit >= self.time_limit:
             raise ValueError(f"soft_time_limit ({self.soft_time_limit}) must be < time_limit ({self.time_limit})")
+        return self
+
+    @model_validator(mode="after")
+    def _recovery_windows_after_limits(self):
+        # 可靠性窗口都建立在「任务最长跑 time_limit」之上：重投/判死阈值太短会把存活任务误重投
+        if self.visibility_timeout <= self.time_limit:
+            raise ValueError(
+                f"visibility_timeout ({self.visibility_timeout}) must be > time_limit ({self.time_limit})"
+            )
+        if self.stale_processing_seconds <= self.time_limit:
+            raise ValueError(
+                f"stale_processing_seconds ({self.stale_processing_seconds}) must be > time_limit ({self.time_limit})"
+            )
         return self
 
 
