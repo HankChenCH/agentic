@@ -1,4 +1,4 @@
-"""用户域领域服务：注册/登录/用户查询的唯一门面。
+"""用户域领域服务：注册/登录/用户查询/资料与密码的唯一门面。
 
 密码哈希（PBKDF2）与 JWT 签发都在本域内完成；格式校验是领域规则
 （端点模型上的长度约束只服务 422 明细），其余入口同样受约束。
@@ -30,6 +30,7 @@ from .token import TokenBundle, encode_access_token
 _USERNAME_PATTERN = re.compile(r"^\w+([\u4e00-\u9fff]+\w*)*$", re.UNICODE)
 _USERNAME_MIN, _USERNAME_MAX = 3, 32
 _PASSWORD_MIN, _PASSWORD_MAX = 8, 64
+_NICKNAME_MAX = 32
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,37 @@ class UserService:
         if user is None:
             raise UserNotFoundError(f"user not found: {user_id}")
         return user
+
+    # ---- 写路径：资料与密码 ----
+
+    def update_profile(self, user_id: UUID, nickname: str) -> User:
+        if len(nickname) > _NICKNAME_MAX:
+            raise UserInvalidParamError(f"昵称长度不能超过 {_NICKNAME_MAX} 字符")
+        user = self.user_repo.update_profile(user_id, nickname)
+        if user is None:
+            raise UserNotFoundError(f"user not found: {user_id}")
+        self.logger.info("user profile updated: %s", user.id)
+        # 账号信息变更同步进记忆「用户」节点；失败不阻断（轮次收尾自愈补齐）
+        try:
+            self.memory_user_node.sync_user_node(user.id, user.username, user.nickname)
+        except Exception:
+            self.logger.exception("sync memory user node failed on profile update: %s", user.id)
+        return user
+
+    def change_password(self, user_id: UUID, old_password: str, new_password: str) -> User:
+        user = self.user_repo.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"user not found: {user_id}")
+        if not verify_password(old_password, user.password_hash):
+            raise InvalidCredentialsError("原密码错误")
+        self._validate_password(new_password)
+        if new_password == old_password:
+            raise UserInvalidParamError("新密码不能与原密码相同")
+        updated = self.user_repo.update_password(user_id, hash_password(new_password))
+        if updated is None:  # 与上面 get_by_id 之间用户被删除的极端竞态
+            raise UserNotFoundError(f"user not found: {user_id}")
+        self.logger.info("user password changed: %s", user.id)
+        return updated
 
     # ---- 内部 ----
 

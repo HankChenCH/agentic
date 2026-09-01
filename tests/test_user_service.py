@@ -23,7 +23,7 @@ from app.models.domain.user import DEFAULT_USER_ID
 from app.repositories.user_repository import UserRepository
 from app.services.domain.user.passwords import hash_password, verify_password
 from app.services.domain.user.token import decode_access_token, encode_access_token
-from app.services.domain.user.user_service import UserService
+from app.services.domain.user.user_service import UserService, public_user
 
 from conftest import StubLoggerFactory
 
@@ -132,6 +132,73 @@ def test_get_user_missing_raises(engine):
     svc = make_service(engine)
     with pytest.raises(UserNotFoundError):
         svc.get_user(uuid4())
+
+
+# ---------------- 资料更新 ----------------
+
+def test_update_profile_nickname_and_sync(engine):
+    sync = RecordingUserNodeSync()
+    svc = make_service(engine, memory_user_node=sync)
+    session = svc.register("alice", "password123")
+    sync.calls.clear()
+
+    user = svc.update_profile(session.user.id, "小红")
+    assert user.nickname == "小红"
+    assert sync.calls == [(user.id, "alice", "小红")]   # 改昵称同步记忆「用户」节点
+
+    user = svc.update_profile(session.user.id, "")
+    assert public_user(user)["nickname"] == "alice"      # 昵称清空展示回退用户名
+
+
+def test_update_profile_sync_failure_does_not_block(engine):
+    sync = RecordingUserNodeSync(error=RuntimeError("memory down"))
+    svc = make_service(engine, memory_user_node=sync)
+    session = svc.register("alice", "password123")
+    sync.calls.clear()
+
+    user = svc.update_profile(session.user.id, "nick")   # 同步失败仅告警，更新照常成功
+    assert user.nickname == "nick"
+
+
+def test_update_profile_validates_length_and_missing_user(engine):
+    svc = make_service(engine)
+    session = svc.register("alice", "password123")
+    with pytest.raises(UserInvalidParamError):
+        svc.update_profile(session.user.id, "x" * 33)
+    with pytest.raises(UserNotFoundError):
+        svc.update_profile(uuid4(), "nick")
+
+
+# ---------------- 修改密码 ----------------
+
+def test_change_password_requires_correct_old(engine):
+    svc = make_service(engine)
+    session = svc.register("alice", "password123")
+
+    with pytest.raises(InvalidCredentialsError):
+        svc.change_password(session.user.id, "wrong-old", "newpassword123")
+    assert svc.login("alice", "password123").user.id == session.user.id  # 失败后旧密码仍可用
+
+
+def test_change_password_rejects_same_and_invalid_new(engine):
+    svc = make_service(engine)
+    session = svc.register("alice", "password123")
+    with pytest.raises(UserInvalidParamError):
+        svc.change_password(session.user.id, "password123", "password123")
+    with pytest.raises(UserInvalidParamError):
+        svc.change_password(session.user.id, "password123", "short")
+
+
+def test_change_password_success_relogin_with_new(engine):
+    svc = make_service(engine)
+    session = svc.register("alice", "password123")
+
+    user = svc.change_password(session.user.id, "password123", "newpassword123")
+    assert user.id == session.user.id
+    assert user.password_hash != "newpassword123"        # 不落明文
+    with pytest.raises(InvalidCredentialsError):
+        svc.login("alice", "password123")                # 旧密码失效
+    assert svc.login("alice", "newpassword123").user.id == session.user.id
 
 
 # ---------------- 令牌与密码基元 ----------------

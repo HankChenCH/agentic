@@ -35,3 +35,23 @@ class UserRepository:
             session.commit()
             session.refresh(user)
         return user
+
+    def update_profile(self, user_id: UUID, nickname: str) -> User | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            user = session.get(User, user_id)
+            if user is None:
+                return None
+            user.nickname = nickname
+            session.commit()
+            session.refresh(user)
+        return user
+
+    def update_password(self, user_id: UUID, password_hash: str) -> User | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            user = session.get(User, user_id)
+            if user is None:
+                return None
+            user.password_hash = password_hash
+            session.commit()
+            session.refresh(user)
+        return user
