@@ -146,6 +146,10 @@ export const ChatPage: FC = () => {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>{user?.username}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => void navigate("/profile")}>
+                  <UserRoundIcon />
+                  个人资料
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleLogout}>
                   <LogOutIcon />
                   退出登录

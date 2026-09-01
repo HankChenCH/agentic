@@ -13,6 +13,7 @@ import { PdfPreviewProvider } from "@/components/shared/pdf-preview-provider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChatPage } from "@/pages/chat-page";
 import { LoginPage } from "@/pages/login-page";
+import { ProfilePage } from "@/pages/profile-page";
 import { useAuthStore } from "@/stores/auth-store";
 
 import { AgenticRuntimeProvider } from "./agentic-runtime";
@@ -81,6 +82,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <ChatPage /> },
       { path: "/chat/:threadId", element: <ChatPage /> },
+      { path: "/profile", element: <ProfilePage /> },
       { path: "/admin", element: <Suspense fallback={<LazyFallback />}><AdminHomePage /></Suspense> },
       { path: "/admin/knowledge", element: <Suspense fallback={<LazyFallback />}><KnowledgeListPage /></Suspense> },
       { path: "/admin/knowledge/:kbId", element: <Suspense fallback={<LazyFallback />}><KnowledgeDetailPage /></Suspense> },

@@ -12,12 +12,16 @@ export interface AuthUser {
   id: string;
   username: string;
   nickname: string;
+  /** 注册时间（ISO 字符串）。可选：旧版本持久化的会话里没有该字段 */
+  created_at?: string;
 }
 
 interface AuthState {
   token: string | null;
   user: AuthUser | null;
   setSession: (token: string, user: AuthUser) => void;
+  /** 只更新用户信息（token 不动），资料页改昵称后同步用 */
+  setUser: (user: AuthUser) => void;
   logout: () => void;
 }
 
@@ -27,6 +31,7 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       user: null,
       setSession: (token, user) => set({ token, user }),
+      setUser: (user) => set({ user }),
       logout: () => set({ token: null, user: null }),
     }),
     { name: "agentic-auth" },
