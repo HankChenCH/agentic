@@ -48,7 +48,7 @@ from app.components.knowledge.manifest import render_search_result
 
 # 与真实 knowledge_search 工具同名的伪工具步骤名（前端按名称渲染检索卡片）
 TOOL_NAME = "knowledge_search"
-RAG_TOP_K = 6  # 检索终选片段数（服务内部仍按 2x 过采样后滤）
+RAG_TOP_K = 6  # 检索终选片段数（仅返回口径：服务内部候选池固定，返回前做邻域扩展 + RRF 融合）
 RAG_ALPHA = 0.5  # Weaviate 混合检索权重：<1 开启 BM25+向量融合（gse 中文分词已就绪）
 MAX_REWRITES = 1  # 检索改写重试配额（行业共识：一次纠正分支足够，循环要硬上限）
 

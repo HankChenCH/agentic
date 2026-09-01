@@ -361,12 +361,17 @@ Server layer rules:
   向量细节统一收敛在领域侧 `services/domain/knowledge/vector_index.py`
   （`KnowledgeVectorIndex`，components→domain 合法引用；每库一 collection
   `Knowledge_{kb_id.hex}` + 显式 schema（content 用 gse 分词，见 collection.py）+
-  幂等 ensure + 批量写/删 + 整库 drop + search/search_many（alpha=1 纯向量、<1 混合，
-  多库扇出融合只此一处）；`KnowledgeRetrievalService` 做可见性圈定
-  （`list_visible_knowledge`/`search_for_user`，`search_for_user`/`search` 透传
-  alpha——builtin:rag 的检索节点以 alpha=0.5 混合检索消费）→enabled 收敛→
+  幂等 ensure + 批量写/删 + 整库 drop + search/search_many（alpha=1 纯向量、
+  <1 混合；search_many = 检索管线通道 A 的候选构建——逐库取回 + 分数合并）；
+  `KnowledgeRetrievalService` 做可见性圈定
+  （`list_visible_knowledge`/`search_for_user`）→enabled 收敛→
   嵌入模型一致性守卫（`KnowledgeBase.embedding_model` 的消费者）→文档 enabled 后滤→
-  溯源组装；知识工具共五件，经 `AgentToolbox` 装配（LLM 先列库再自选 kb_ids
+  双通道召回 + RRF 融合（通道 A = 混合检索候选，默认
+  alpha=`DEFAULT_HYBRID_ALPHA`=0.5——工具与 builtin:rag 检索节点同管线；
+  通道 B = 命中邻域扩展，经 `list_segments_by_doc` 按 position 取前后段，
+  邻段双通道在榜即互证加分；RRF 排名融合只此一处，展示分与排序解耦——
+  score=混合检索分，纯邻段命中继承种子分）→溯源组装；
+  `top_k` 纯返回口径（默认 4、上限 20，内部候选池 `_POOL_PER_KB=8` 与返回数解耦）；知识工具共五件，经 `AgentToolbox` 装配（LLM 先列库再自选 kb_ids
   检索）：`knowledge_list`/`knowledge_search` 检索双工具 + `knowledge_context`
   （命中片段邻域窗口）/`knowledge_document_read`（按 position 范围读文，段数
   与字符预算截断并附续读指引）/`knowledge_document_list`（库内文档清单）定位

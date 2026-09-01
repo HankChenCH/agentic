@@ -1,14 +1,20 @@
-"""检索编排：可见性圈定、状态收敛、自选库子集、嵌入模型守卫与文档后滤。"""
+"""检索编排：可见性圈定、状态收敛、自选库子集、嵌入模型守卫、文档后滤、
+双通道召回（混合检索 + 邻域扩展）与 RRF 融合排序（top_k 只控返回数）。"""
 
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from sqlmodel import Session
 
-from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService
+from app.components.knowledge.ability.retrieval import (
+    KnowledgeRetrievalService,
+    _Candidate,
+    _rrf_fuse,
+)
 from app.services.domain.knowledge.vector_index import VectorHit
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import (
+    DocumentSegment,
     KnowledgeBase,
     KnowledgeDocument,
     KnowledgeStatus,
@@ -71,11 +77,27 @@ def make_service(engine, vector, embedding=EMBEDDING):
     )
 
 
-def hit_for(doc_id: UUID, score=0.9, content="片段内容") -> VectorHit:
+def hit_for(doc_id: UUID, score=0.9, content="片段内容", position=0) -> VectorHit:
     return VectorHit(
-        content=content, score=score, kb_id="kb", doc_id=str(doc_id), position=0,
+        content=content, score=score, kb_id="kb", doc_id=str(doc_id), position=position,
         meta={"page_start": 1, "page_end": 1, "heading_path": ["H1"], "types": ["text"]},
     )
+
+
+def make_segments(engine, kb_id, doc_id, contents: dict):
+    """按 {position: content} 落库文档片段（邻域扩展的数据源）。"""
+    with Session(engine) as session:
+        for position, content in contents.items():
+            session.add(DocumentSegment(
+                kb_id=kb_id,
+                doc_id=doc_id,
+                position=position,
+                content=content,
+                word_count=len(content),
+                status=KnowledgeStatus.ENABLED,
+                meta={"page_start": 2, "page_end": 2, "heading_path": ["H1"], "types": ["text"]},
+            ))
+        session.commit()
 
 
 # ---------- 可见性圈定（检索范围 = 属主私有 + 公开） ----------
@@ -178,24 +200,108 @@ def test_disabled_doc_filtered_and_top_k_capped(engine):
     doc_on = make_doc(engine, kb, "启用文档")
     doc_off = make_doc(engine, kb, "停用文档", status=KnowledgeStatus.DISABLED)
     vector = StubVectorIndex([
-        hit_for(doc_off, score=0.99),  # 停用文档分数最高也必须被后滤
-        hit_for(doc_on, score=0.90),
-        hit_for(doc_on, score=0.80),
+        hit_for(doc_off, score=0.99, position=0),  # 停用文档分数最高也必须被后滤
+        hit_for(doc_on, score=0.90, position=0),
+        hit_for(doc_on, score=0.80, position=1),
     ])
     service = make_service(engine, vector)
 
     hits = service.search([kb], "问题", top_k=2)
     assert [hit.doc_id for hit in hits] == [str(doc_on), str(doc_on)]
+    assert [hit.position for hit in hits] == [0, 1]  # 融合序（此处无邻段即 A 通道排名序）
     assert all(hit.score != 0.99 for hit in hits)  # 停用文档被剔除
 
 
 def test_search_overfetch_filtered_to_top_k(engine):
     kb = make_kb(engine, "kb1")
     doc = make_doc(engine, kb, "文档")
-    vector = StubVectorIndex([hit_for(doc, score=1 - i / 10) for i in range(5)])
+    vector = StubVectorIndex(
+        [hit_for(doc, score=1 - i / 10, position=i) for i in range(5)]
+    )
     service = make_service(engine, vector)
 
     hits = service.search([kb], "问题", top_k=2)
     assert len(hits) == 2
-    # 过采样 2 倍后截断：分数最高的两条胜出
+    # top_k 只控返回数：融合序头部胜出（此处无邻段，即 A 通道排名序）
+    assert [hit.position for hit in hits] == [0, 1]
     assert [hit.score for hit in hits] == [1.0, 0.9]
+
+
+# ---------- 双通道召回与 RRF 融合 ----------
+
+
+def test_rrf_fuse_ranks_dual_channel_first():
+    """同片段双通道在榜（互证）压过单通道头部；纯函数排序确定性。"""
+    a_only = _Candidate(key=("d", 0), score=1.0, content="", meta={}, kb_id="k", rank_a=1)
+    dual = _Candidate(key=("d", 1), score=0.5, content="", meta={}, kb_id="k", rank_a=9, rank_b=1)
+    b_only = _Candidate(key=("d", 2), score=0.0, content="", meta={}, kb_id="k", rank_b=2)
+
+    assert [c.key for c in _rrf_fuse([a_only, dual, b_only])] == [("d", 1), ("d", 0), ("d", 2)]
+
+
+def test_top_k_controls_return_size_not_pool_depth(engine):
+    """top_k 只控返回数：内部检索深度固定为候选池常量，大值钳制到返回上限。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "文档")
+    vector = StubVectorIndex(
+        [hit_for(doc, score=1 - i / 20, position=i) for i in range(12)]
+    )
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=3)
+    assert len(hits) == 3
+    assert vector.calls[-1][1] == 8  # 扇出深度 = max(池常量, top_k)，与返回数解耦
+
+    service.search([kb], "问题", top_k=999)
+    assert vector.calls[-1][1] == 20  # 大 top_k 钳制到返回上限，池深随之封顶
+
+
+def test_neighbor_hits_assembled_with_inherited_score(engine):
+    """邻段入榜：内容/meta/文档名取自 SQL 行，score 继承种子混合检索分。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "产品手册")
+    make_segments(engine, kb, doc, {4: "第四段", 5: "第五段", 6: "第六段"})
+    vector = StubVectorIndex([hit_for(doc, score=0.9, position=5)])
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=4)
+    assert [hit.position for hit in hits] == [5, 4, 6]  # 种子先于邻段（A 排名并列时按 rank_a 破平）
+    # 种子内容取自向量命中，邻段内容取自 segment 行
+    assert [hit.content for hit in hits] == ["片段内容", "第四段", "第六段"]
+    neighbors = [hit for hit in hits if hit.position != 5]
+    assert all(hit.score == 0.9 for hit in neighbors)
+    assert all(hit.doc_name == "产品手册" for hit in hits)
+    assert hits[1].meta["page_start"] == 2  # 邻段溯源 meta 来自 segment 行
+
+
+def test_dual_channel_hit_outranks_single_channel(engine):
+    """既直接命中又互为邻段的片段，融合排名压过更高分的孤立命中。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "文档")
+    make_segments(engine, kb, doc, {3: "三", 4: "四", 5: "五", 9: "九"})
+    vector = StubVectorIndex([
+        hit_for(doc, score=0.9, position=4),
+        hit_for(doc, score=0.8, position=5),
+        hit_for(doc, score=0.7, position=9),  # 孤段：直接命中但无邻段
+    ])
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=5)
+    assert {hit.position for hit in hits[:2]} == {4, 5}  # 双通道互证占前两席
+    assert hits[2].position == 3  # 纯邻段压过孤立的直接命中
+    assert hits[3].position == 9
+
+
+def test_neighbor_window_respects_document_bounds(engine):
+    """窗口在文档首/末段处自然收边：不产生越界邻段。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "文档")
+    make_segments(engine, kb, doc, {0: "首段", 1: "次段", 4: "末段"})
+    vector = StubVectorIndex([
+        hit_for(doc, score=0.9, position=0),
+        hit_for(doc, score=0.8, position=4),
+    ])
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=6)
+    assert [hit.position for hit in hits] == [0, 1, 4]  # 无 position=-1/3/5 越界项

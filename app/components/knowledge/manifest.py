@@ -10,7 +10,9 @@ knowledge_search 返回 JSON（``{"sources": [...], "notes": [...]}``），
 形状由 ``KnowledgeSearchResult`` 契约模型单源定义：LLM 依据 sources 的
 content 作答并按 index 标注 [n] 引用，前端 ToolUI 解析同一 JSON 渲染溯源
 卡片（bboxes 为原文 0-1 归一化位置框，用于 PDF 高亮定位）——模型即契约，
-不再是无 schema 的口头约定。
+不再是无 schema 的口头约定。检索管线（混合检索 + 命中邻域扩展 + RRF 排名
+融合）收敛在 ``KnowledgeRetrievalService``，入参 top_k 只控最终返回条数，
+与内部检索深度无关。
 """
 
 import json
@@ -48,7 +50,7 @@ class KnowledgeSearchArgs(BaseModel):
         default=None,
         description="要检索的知识库 id 列表（取 knowledge_list 结果中的 id）；缺省=检索全部可用知识库",
     )
-    top_k: int = Field(default=DEFAULT_TOP_K, description="返回的最大片段数，默认 4")
+    top_k: int = Field(default=DEFAULT_TOP_K, description="返回的最大片段数，默认 4（仅控制返回条数，与内部检索深度无关）")
 
 
 class KnowledgeContextArgs(BaseModel):
@@ -175,9 +177,11 @@ def _build_knowledge_search_tool(component: "KnowledgeComponent") -> StructuredT
         name="knowledge_search",
         description=(
             "在知识库中检索与问题相关的文档片段，返回带出处（文档名/页码/标题路径/原文位置框）的 JSON。"
+            "检索为混合检索（语义+关键词），命中片段会连同其前后相邻片段一起做融合排序："
+            "score 为混合检索相关度，来源顺序为融合名次（可能与 score 大小略有出入，按顺序引用即可）。"
             "query: 检索问题或关键词；"
             "kb_ids: 要检索的知识库 id 列表（取 knowledge_list 结果中的 id）；缺省=检索全部可用知识库；"
-            "top_k: 返回的最大片段数，默认 4。"
+            "top_k: 返回的最大片段数，默认 4（仅控制返回条数，与内部检索深度无关）。"
             "返回 {\"sources\": [{index, doc_name, page_start, page_end, heading_path, score, content, bboxes, ...}], \"notes\": []}；"
             "回答时依据 sources 的 content 作答，并以 [index] 角标注明引用出处（文档名/页码）；未检索到时如实说明。"
             "命中片段是按相似度挑出的节选，可能只是某段论述/表格的中间部分："

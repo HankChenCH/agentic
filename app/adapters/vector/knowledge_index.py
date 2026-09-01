@@ -24,7 +24,8 @@ _EMBED_BATCH_SIZE = 32
 # 向量删除的单批大小（gRPC 消息体保护）
 _VECTOR_DELETE_BATCH_SIZE = 100
 
-# 检索默认返回条数
+# 检索工具入参 top_k 的默认值（仅最终返回条数口径；内部检索深度见
+# KnowledgeRetrievalService 的候选池常量）
 DEFAULT_TOP_K = 4
 
 # 检索命中里已提升为独立字段的 metadata 键（其余键整体进入 VectorHit.meta）
@@ -114,7 +115,12 @@ class KnowledgeVectorIndex:
     def search_many(
         self, kb_ids: List[UUID], query: str, *, top_k: int = DEFAULT_TOP_K, alpha: float = 1.0
     ) -> List[VectorHit]:
-        """多库扇出检索 + 融合：逐库各取 top_k 后按分数统一排序截断。"""
+        """多库扇出检索 + 融合：逐库各取 top_k 后按分数统一排序截断。
+
+        在检索管线中承担通道 A 的候选构建（混合检索 + 跨库分数合并）——
+        KnowledgeRetrievalService 在其结果上再做文档 enabled 后滤、邻域
+        扩展与 RRF 排名融合，跨库排序的最终口径以那边的融合为准。
+        """
         hits: List[VectorHit] = []
         for kb_id in kb_ids:
             hits.extend(self.search(kb_id, query, top_k=top_k, alpha=alpha))
