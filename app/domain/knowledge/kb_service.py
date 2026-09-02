@@ -24,7 +24,6 @@ from app.models.schema.request.knowledge import (
     KnowledgeBaseUpdateRequest,
 )
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
 from .object_store import KnowledgeObjectStore
 from .support import (
     check_status_transition,
@@ -38,7 +37,6 @@ from .support import (
 @dataclass
 class KnowledgeBaseService:
     kb_repo: KnowledgeBaseRepository
-    binding_repo: KnowledgeBindingRepository
     vector_index: KnowledgeVectorIndex
     object_store: KnowledgeObjectStore
     app_config: AppConfig
@@ -105,9 +103,7 @@ class KnowledgeBaseService:
             kb.status = KnowledgeStatus.DELETING
             kb = self.kb_repo.update_kb(kb)
         # 整库向量直接 drop collection（替代全量分段 id 逐批删除，快且不留空壳）；
-        # 绑定行同步清理，避免悬空引用
         self.vector_index.drop_collection(kb_id)
-        self.binding_repo.delete_by_kb(kb_id)
         self.object_store.delete_prefix_best_effort(self.object_store.kb_prefix(kb_id))
         self.kb_repo.delete_kb(kb_id)
         return kb

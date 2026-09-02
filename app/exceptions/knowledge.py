@@ -47,8 +47,3 @@ class KnowledgeDocumentInvalidError(KnowledgeError):
 
     default_code = 4006
 
-
-class KnowledgeAgentInvalidError(KnowledgeError):
-    """绑定目标 agent 未注册（agentic_id 不在 agent 注册表）。"""
-
-    default_code = 4007

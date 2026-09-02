@@ -1,8 +1,8 @@
 """记忆域领域端口（依赖倒置）：协议住领域层，实现由外层回填。
 
 图快照（graph_snapshot.py）需要记忆库的只读面，编辑能力（admin_service.py）
-需要记忆库的纠错写面，但领域层不得 import components——与
-``knowledge/ports.py`` 的 ``AgentCatalog`` 同款解法：实现住在
+需要记忆库的纠错写面，但领域层不得 import components——协议住
+领域层、实现住在
 ``app/components/memory/``（``graph_reader.py`` 只读 / ``editor.py`` 编辑），
 经 wireup ``@injectable(as_type=...)`` 按本协议类型注入。依赖箭头
 components ──► domain 合法。

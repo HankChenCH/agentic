@@ -1,4 +1,3 @@
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -29,8 +28,3 @@ class KnowledgeDocumentUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=500, description="文档详情描述")
     weight: int | None = Field(default=None, description="管理侧排序权重")
 
-
-class KnowledgeBindingsUpdateRequest(BaseModel):
-    """agent 知识库绑定全量替换：kbIds 即该 agent 的最终绑定集合（空列表=清空）。"""
-
-    kbIds: list[UUID] = Field(default_factory=list, description="绑定的知识库 id 列表")

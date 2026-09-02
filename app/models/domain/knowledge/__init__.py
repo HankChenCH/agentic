@@ -1,4 +1,3 @@
-from .binding import KnowledgeAgentBinding
 from .knowledge import KnowledgeStatus, KnowledgeBase, KnowledgeDocument, DocumentSegment
 
 __all__ = [
@@ -6,5 +5,4 @@ __all__ = [
     "KnowledgeBase",
     "KnowledgeDocument",
     "DocumentSegment",
-    "KnowledgeAgentBinding",
 ]

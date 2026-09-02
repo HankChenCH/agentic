@@ -24,7 +24,6 @@ from app.models.schema.request.knowledge import (
     KnowledgeBaseUpdateRequest,
 )
 from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_binding_repository import KnowledgeBindingRepository
 from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
 from app.services.domain.knowledge.document_service import KnowledgeDocumentService
 from app.services.domain.knowledge.kb_service import KnowledgeBaseService
@@ -70,7 +69,6 @@ def make_kb(
 def make_kb_service(engine) -> KnowledgeBaseService:
     return KnowledgeBaseService(
         kb_repo=KnowledgeBaseRepository(engine=engine),
-        binding_repo=KnowledgeBindingRepository(engine=engine),
         vector_index=StubVectorIndex(),
         object_store=KnowledgeObjectStore(
             filesystem=MemoryFilesystem(), logger_factory=LoggerFactory()

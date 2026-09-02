@@ -19,7 +19,6 @@ from app.exceptions.conversation import (
     UnsupportedAttachmentTypeError,
 )
 from app.exceptions.knowledge import (
-    KnowledgeAgentInvalidError,
     KnowledgeDocumentInvalidError,
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentStatusError,
@@ -69,7 +68,6 @@ __all__ = [
     "KnowledgeDocumentNotFoundError",
     "KnowledgeDocumentStatusError",
     "KnowledgeDocumentInvalidError",
-    "KnowledgeAgentInvalidError",
     "UserError",
     "UsernameDuplicatedError",
     "InvalidCredentialsError",
