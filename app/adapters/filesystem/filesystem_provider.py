@@ -42,6 +42,16 @@ class Filesystem(ABC):
     def list(self, prefix: str = "") -> Iterator[str]:
         """按前缀列出对象 key（字典序），空前缀列出全部。"""
 
+    def presign_get(self, key: str, expires_in: int) -> str | None:
+        """签发预签名 GET URL（浏览器凭签名直拉对象存储，绕过后端字节中转）。
+
+        返回 ``None`` 表示后端不具备签名能力（如本地磁盘实现），调用方应
+        降级为 ``read()`` 由后端回源。``expires_in`` 单位秒。签名是纯本地
+        计算（SigV4），不发起网络请求；URL 的 host/path 会签进签名，浏览器
+        必须以完全一致的地址访问（部署形态见 S3FilesystemEntry.public_endpoint）。
+        """
+        return None
+
 
 class FilesystemBuilder(ABC):
     """文件存储构建器：每个供应商一个子类，把 provider entry 翻译成契约实例。

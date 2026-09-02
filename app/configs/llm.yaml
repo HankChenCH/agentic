@@ -1,5 +1,19 @@
-default: deepseek-flash
+default: deepseek-flash-vision
 providers:
+  deepseek-flash-vision:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-flash-vision-exp
+    capabilities:
+      thinkable: true
+      # 多模态输入模态声明：含 vision 表示可接收图片输入（chat 消息带图）
+      multimodal:
+        - text
+        - vision
+      features:
+        - "json_mode"
+        - "function_calling"
   deepseek-flash:
     type: deepseek
     task_type: chat

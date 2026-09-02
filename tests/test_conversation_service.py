@@ -34,6 +34,11 @@ def service(engine):
     )
 
 
+def _text(text):
+    """纯文本请求的存储形态 content 数组（RunMessage.storage_content 的产物）。"""
+    return [{"type": "text", "text": text}]
+
+
 def usage_msg(turn_id, **usage):
     return SimpleNamespace(token_usage=dict(usage))
 
@@ -49,7 +54,7 @@ def test_describe_and_delete_raise_when_missing(service):
 
 def test_open_turn_persists_conversation_turn_and_user_message(service, engine):
     thread_id = uuid4()
-    conversation, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-1", query="你好")
+    conversation, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-1", content=_text("你好"))
 
     assert conversation.agentic_id == "builtin:demo"
     assert conversation.current_turn_id == turn.turn_id
@@ -78,7 +83,7 @@ def test_cancel_flag_roundtrip_and_open_turn_clears_it(engine):
     service.cancel_run_flag(thread_id)
     assert service.is_run_canceled(thread_id)
 
-    service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-3", query="你好")
+    service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-3", content=_text("你好"))
     assert not service.is_run_canceled(thread_id)
 
 
@@ -101,7 +106,7 @@ def test_is_run_canceled_degrades_when_store_unavailable(engine):
 
 def test_cancel_turn_persists_canceled_status(service, engine):
     """取消轮次：内存对象与库中行都收口为 CANCELED（断连路径的持久化契约）。"""
-    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=uuid4(), run_id="run-3", query="你好")
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=uuid4(), run_id="run-3", content=_text("你好"))
 
     service.cancel_turn(turn)
 
@@ -114,7 +119,7 @@ def test_cancel_turn_persists_canceled_status(service, engine):
 
 
 def test_record_turn_usage_accumulates_with_whitelist(service, engine):
-    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=uuid4(), run_id="run-2", query="你好")
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=uuid4(), run_id="run-2", content=_text("你好"))
     turn.token_usage = {"total_tokens": 100}
 
     service.record_turn_usage(turn, [

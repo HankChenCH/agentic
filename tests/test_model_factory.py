@@ -112,6 +112,35 @@ def test_unknown_capability_feature_rejected():
         )
 
 
+def test_unknown_multimodal_value_rejected():
+    # multimodal 白名单（Literal）：未知模态同样配置加载期 fail-fast
+    with pytest.raises(ValidationError):
+        LLMProviderEntry(
+            type="deepseek", task_type=ModelTaskType.CHAT,
+            model="test-chat", api_key="test-key",
+            capabilities={"multimodal": ["text", "smell"]},
+        )
+
+
+def test_multimodal_capability_wired_into_model():
+    # vision 声明落位到模型实例（BaseAgent.supports_vision 的读取源）
+    capabilities = {"thinkable": True, "multimodal": ["text", "vision"], "features": ["json_mode"]}
+    entry = LLMProviderEntry(
+        type="deepseek", task_type=ModelTaskType.CHAT,
+        model="test-chat", api_key="test-key", capabilities=capabilities,
+    )
+    config = LLMConfig(default="main", providers={"main": entry})
+    model = ModelFactory(app_config=_StubAppConfig(llm=config)).create()
+
+    assert model.multimodal == ("text", "vision")
+
+
+def test_multimodal_defaults_to_undeclared():
+    # 未声明 multimodal 的 entry：模型属性为空元组（视为不支持图片输入）
+    model = _factory().create()
+    assert getattr(model, "multimodal", ()) == ()
+
+
 def test_capabilities_wired_into_model():
     # 能力声明落位到模型实例；未声明的 entry 缺省不可思考
     model = _capabilities_factory(True).create()

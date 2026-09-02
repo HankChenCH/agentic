@@ -109,7 +109,8 @@ def run(
 ):
     # service.run() 已输出 SSE 帧（"data: {...}\n\n"），endpoint 纯透传。
     # 多轮历史以服务端（库）为准：请求只取末条用户消息作为当前提问，payload 历史不回放。
-    events = service.run(principal.user_id, request.threadId, request.runId, request.messages[-1].content)
+    # content 经 RunMessage 归一为存储形态内容数组（纯文本 = 单 text part 的退化形态）。
+    events = service.run(principal.user_id, request.threadId, request.runId, request.messages[-1].storage_content())
     return ClosingStreamingResponse(_stream_and_close(events), media_type="text/event-stream")
 
 @router.post("/run/cancel")

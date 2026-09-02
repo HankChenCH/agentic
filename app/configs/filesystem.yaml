@@ -7,6 +7,9 @@ providers:
     type: s3
     bucket: ${RUSTFS_BUCKET:agentic} # 由 compose 的 rustfs-init 幂等创建
     endpoint: ${RUSTFS_ENDPOINT:http://127.0.0.1:9000} # rustfs S3 API，与 docker-compose 对齐
+    # 预签名 URL 的对外基地址（可选，直连形态不配置即与 endpoint 一致；反代
+    # 形态填浏览器可达的基地址，代理须保持 host+path 原样透传给 rustfs）
+    public_endpoint: ${RUSTFS_PUBLIC_ENDPOINT:}
     access_key_id: ${RUSTFS_ACCESS_KEY:agentic}
     secret_access_key: ${RUSTFS_SECRET_KEY:agentic-secret}
     virtual_hosted_style_request: false # 本地 endpoint 需 path-style 寻址

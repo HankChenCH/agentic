@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 from typing import List, Tuple
 
 from wireup import injectable
-from langchain.messages import AIMessage, HumanMessage, ToolMessage
+from langchain.messages import AIMessage, ToolMessage
 from langchain_core.messages import BaseMessage
 
 from app.core.config import AppConfig
@@ -12,6 +12,7 @@ from app.core.logging import LoggerFactory
 from app.exceptions import ConversationNotFoundError
 from app.packages.signal.signal_store import SignalStore
 from app.repositories.conversation_repository import ConversationRepository
+from app.services.domain.conversation.multimodal import image_parts_of, text_of, user_message_from_content
 from app.services.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
 
 from app.models.domain.agentic import (
@@ -52,12 +53,14 @@ class ConversationService:
 
     # ---- run 行程所需写路径（编排层准备段 / 收尾段下沉）----
 
-    def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, query: str) -> Tuple[AgenticConversation, AgenticConversationTurn]:
+    def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, content: List[dict]) -> Tuple[AgenticConversation, AgenticConversationTurn]:
         """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。
 
         归属规则：会话已存在且属于他人时按不存在处理（404，不泄露存在性），
         不能变成新建——客户端 threadId 自行生成，必须防止借他人 thread_id
         续聊或注入消息。
+        ``content`` 为存储形态的内容数组（端点已从 ag-ui 载荷归一，含
+        text/image part；见 multimodal.py），原样落库。
         """
         # 防御性清理遗留取消标志（上轮取消后 TTL 内残留会误杀本轮；正常收尾
         # 后标志本就应不存在，此处是无条件兜底）。清理失败不阻断开轮。
@@ -80,13 +83,19 @@ class ConversationService:
             sequence_num=0,
             role=AgenticMessageRole.USER,
             message_type=AgenticMessageType.MESSAGE,
-            content=[{"type": "text", "text": query}],
+            content=content,
             token_usage={},
             latency_ms=0,
         ))
         return conversation, turn
 
-    def replay_history(self, thread_id: UUID, exclude_turn_id: UUID) -> List[BaseMessage]:
+    def replay_history(
+        self,
+        thread_id: UUID,
+        exclude_turn_id: UUID,
+        supports_vision: bool = False,
+        image_resolver=None,
+    ) -> List[BaseMessage]:
         """从库如实组装多轮回放消息，排除当前轮次与未完成（非 COMPLETED）轮次。
 
         按厂商建议携带完整工具调用链：TOOL_CALL → AIMessage(tool_calls)、
@@ -94,6 +103,11 @@ class ConversationService:
         tool_calls 消息后必须紧跟对应 tool 消息，故未配对的调用/结果行跳过
         （工具出错时不落 TOOL_RESULT 行，孤儿调用直接回放会 400）。
         THOUGHT（reasoning）不回放：厂商 API 不接受历史 reasoning_content 注入。
+
+        用户消息经 ``user_message_from_content`` 还原多模态内容：
+        ``supports_vision`` 为假或附件读取失败时图片降级丢弃（历史回放静默
+        不注明，保持 prompt 稳定）；``image_resolver`` 由编排层用附件
+        store + 消息属主身份构造（本域 url 引用 → 字节 → base64 块）。
         """
         rows = self.conversation_repo.list_replay_messages(thread_id=thread_id, exclude_turn_id=exclude_turn_id)
 
@@ -103,14 +117,22 @@ class ConversationService:
             part = row.content[0] if row.content else {}
             part_type = part.get("type")
 
+            # 用户消息（MESSAGE）整行走多模态翻译——content 数组可能以图片
+            # 开头，不能按 content[0].type 分派；纯空内容跳过（对齐旧行为）
+            if row.role == AgenticMessageRole.USER and row.message_type == AgenticMessageType.MESSAGE:
+                if not text_of(row.content) and not image_parts_of(row.content):
+                    continue
+                history.append(user_message_from_content(
+                    row.content, supports_vision=supports_vision,
+                    image_resolver=image_resolver, note_on_degrade=False,
+                ))
+                continue
+
             if part_type == "text":
                 text = part.get("text", "")
                 if not text:
                     continue
-                if row.role == AgenticMessageRole.USER:
-                    history.append(HumanMessage(content=text))
-                elif row.message_type == AgenticMessageType.MESSAGE:
-                    history.append(AIMessage(content=text))
+                history.append(AIMessage(content=text))
             elif part_type == "tool_call":
                 tool_call_id = part.get("tool_call_id", "")
                 if not tool_call_id:

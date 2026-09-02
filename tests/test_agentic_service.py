@@ -6,7 +6,9 @@ agent 工厂 / 记忆 / 日志全替身；threading.Thread 换成同步 InlineTh
 保证断言时收尾加工（TurnFinalizer.run）已确定性完成。
 """
 
+import base64
 import json
+from io import BytesIO
 from time import sleep
 from types import SimpleNamespace
 from uuid import uuid4
@@ -19,10 +21,13 @@ from app.exceptions import ConversationNotFoundError
 from app.models.domain.agentic import (
     AgenticConversationMessage,
     AgenticConversationTurn,
+    AgenticMessageRole,
     AgenticTurnStatus,
 )
 from app.packages.signal.memory_signal_store import InMemorySignalStore
+from app.infrastructures.filesystem.local_provider import LocalFilesystem
 from app.repositories.conversation_repository import ConversationRepository
+from app.services.domain.conversation.attachments import ConversationAttachmentStore
 from app.services.domain.conversation.conversation_service import ConversationService
 from app.services.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
 from app.services.orchestration.agentic_service import AgenticService
@@ -47,6 +52,11 @@ def turn_status(engine, thread_id):
             select(AgenticConversationTurn).where(AgenticConversationTurn.thread_id == thread_id)
         ).first()
         return None if turn is None else AgenticTurnStatus(turn.status)
+
+
+def _text(text):
+    """纯文本请求的存储形态 content 数组（RunMessage.storage_content 的产物）。"""
+    return [{"type": "text", "text": text}]
 
 
 def stored_messages(engine, thread_id):
@@ -97,9 +107,12 @@ class FakeRun:
 
 class FakeAgent:
     captured_context = None
+    # 编排层读取的能力声明（BaseAgent.supports_vision 的替身口径）
+    supports_vision = False
 
-    def __init__(self, run):
+    def __init__(self, run, supports_vision=False):
         self._run = run
+        self.supports_vision = supports_vision
 
     def stream(self, context):
         type(self).captured_context = context
@@ -226,10 +239,10 @@ class FakeUserNodeSync:
 
 
 @pytest.fixture()
-def make_service(engine, monkeypatch):
+def make_service(engine, monkeypatch, tmp_path):
     monkeypatch.setattr("app.services.orchestration.agentic_service.threading.Thread", InlineThread)
 
-    def _make(agent_factory, conversation_repo=None, memory=None, signal_store=None):
+    def _make(agent_factory, conversation_repo=None, memory=None, signal_store=None, title_generator=None):
         repo = conversation_repo or ConversationRepository(engine=engine)
         # 只用到 default_agentic_id 一项配置，替身避免加载全量 YAML
         conversations = ConversationService(
@@ -238,8 +251,14 @@ def make_service(engine, monkeypatch):
             signal_store=signal_store or InMemorySignalStore(),
             logger_factory=RecordingLoggerFactory(),
         )
+        # 附件 store 走真实实现 + 本地磁盘（tmp），local 后端 presign 返回 None，
+        # 恰好覆盖"签名不可用 → 降级"的口径
+        attachments = ConversationAttachmentStore(
+            filesystem=LocalFilesystem(root=tmp_path / "attachments"),
+            logger_factory=RecordingLoggerFactory(),
+        )
         finalizer = TurnFinalizer(
-            title_generator=FakeTitleGenerator(),
+            title_generator=title_generator or FakeTitleGenerator(),
             conversations=conversations,
             memory=memory or FakeMemory(),
             users=FakeUserService(user=SimpleNamespace(id=uuid4(), username="tester", nickname="")),
@@ -249,6 +268,7 @@ def make_service(engine, monkeypatch):
         return AgenticService(
             agent_factory=agent_factory,
             conversations=conversations,
+            attachments=attachments,
             turn_finalizer=finalizer,
             logger_factory=RecordingLoggerFactory(),
         )
@@ -262,7 +282,7 @@ def test_stream_error_prod_sanitized_to_generic_message(engine, make_service, mo
     service = make_service(FakeAgentFactory(agent=FakeAgent(FakeRun(error=RuntimeError(SECRET)))))
     thread_id = uuid4()
 
-    frames = list(service.run(TEST_USER_ID, thread_id, "run-1", "你好"))
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-1", _text("你好")))
 
     events = decode(frames)
     assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
@@ -279,7 +299,7 @@ def test_stream_error_dev_keeps_detail(engine, make_service, monkeypatch):
     service = make_service(FakeAgentFactory(agent=FakeAgent(FakeRun(error=RuntimeError(SECRET)))))
     thread_id = uuid4()
 
-    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-2", "你好")))
+    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-2", _text("你好"))))
 
     assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
     assert events[-1]["message"] == SECRET
@@ -294,7 +314,7 @@ def test_stream_business_error_verbatim_in_prod(engine, make_service, monkeypatc
     )
     thread_id = uuid4()
 
-    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-3", "你好")))
+    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-3", _text("你好"))))
 
     assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
     assert events[-1]["message"] == "conversation not found"
@@ -308,7 +328,7 @@ def test_setup_error_marks_turn_failed(engine, make_service, monkeypatch):
     service = make_service(FakeAgentFactory(error=RuntimeError("agent build failed: " + SECRET)))
     thread_id = uuid4()
 
-    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-4", "你好")))
+    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-4", _text("你好"))))
 
     assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
     assert events[-1]["message"] == "agent build failed: " + SECRET
@@ -324,7 +344,7 @@ def test_setup_error_before_turn_row_still_emits_error_frame(engine, make_servic
     )
     thread_id = uuid4()
 
-    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-5", "你好")))
+    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-5", _text("你好"))))
 
     assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
     assert turn_status(engine, thread_id) is None
@@ -337,7 +357,7 @@ def test_happy_path_lifecycle(engine, make_service, monkeypatch):
     service = make_service(FakeAgentFactory(agent=FakeAgent(run)))
     thread_id = uuid4()
 
-    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-6", "hi")))
+    events = decode(list(service.run(TEST_USER_ID, thread_id, "run-6", _text("hi"))))
 
     assert [e["type"] for e in events] == [
         "RUN_STARTED",
@@ -362,7 +382,7 @@ def test_orchestration_passes_raw_query_to_agent(engine, make_service, monkeypat
     service = make_service(FakeAgentFactory(agent=FakeAgent(run)), memory=memory)
     thread_id = uuid4()
 
-    frames = list(service.run(TEST_USER_ID, thread_id, "run-7", "我上周聊到什么了？"))
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-7", _text("我上周聊到什么了？")))
 
     assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
     # FakeMemory 仅被 TurnFinalizer.remember 消费：编排层不触发快注
@@ -380,7 +400,7 @@ def test_client_disconnect_marks_turn_canceled(engine, make_service, monkeypatch
     service = make_service(FakeAgentFactory(agent=FakeAgent(run)), memory=memory)
     thread_id = uuid4()
 
-    gen = service.run(TEST_USER_ID, thread_id, "run-8", "hi")
+    gen = service.run(TEST_USER_ID, thread_id, "run-8", _text("hi"))
     frames = [next(gen), next(gen), next(gen)]  # RunStarted + 首条消息流式中途挂起
     gen.close()
 
@@ -403,7 +423,7 @@ def test_disconnect_before_turn_open_is_noop(engine, make_service, monkeypatch):
     service = make_service(FakeAgentFactory(agent=FakeAgent(run)))
     thread_id = uuid4()
 
-    gen = service.run(TEST_USER_ID, thread_id, "run-9", "hi")
+    gen = service.run(TEST_USER_ID, thread_id, "run-9", _text("hi"))
     assert next(gen) is not None
     gen.close()
 
@@ -416,7 +436,7 @@ def test_close_at_error_frame_keeps_failed(engine, make_service, monkeypatch):
     service = make_service(FakeAgentFactory(agent=FakeAgent(FakeRun(error=RuntimeError(SECRET)))))
     thread_id = uuid4()
 
-    gen = service.run(TEST_USER_ID, thread_id, "run-10", "hi")
+    gen = service.run(TEST_USER_ID, thread_id, "run-10", _text("hi"))
     frames = [next(gen), next(gen)]  # RunStarted + RunError（挂在错误帧 yield 上）
     gen.close()
 
@@ -451,7 +471,7 @@ def test_cancel_flag_stops_stream_silently(engine, make_service, monkeypatch):
     thread_id = uuid4()
     run._thread_id = thread_id
 
-    frames = list(service.run(TEST_USER_ID, thread_id, "run-11", "hi"))
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-11", _text("hi")))
 
     types = [e["type"] for e in decode(frames)]
     assert types[0] == "RUN_STARTED"
@@ -484,7 +504,7 @@ def test_cancel_flag_before_first_item_stops_stream(engine, make_service, monkey
     thread_id = uuid4()
     run._thread_id = thread_id
 
-    events = [e["type"] for e in decode(list(service.run(TEST_USER_ID, thread_id, "run-12", "hi")))]
+    events = [e["type"] for e in decode(list(service.run(TEST_USER_ID, thread_id, "run-12", _text("hi"))))]
 
     assert events == ["RUN_STARTED"]
     assert turn_status(engine, thread_id) == AgenticTurnStatus.CANCELED
@@ -501,7 +521,93 @@ def test_stale_cancel_flag_does_not_kill_new_turn(engine, make_service, monkeypa
 
     # 模拟 TTL 前的残留标志（绕开 cancel_run 的归属校验，属仓储级残留）
     store.fire(cancel_flag_key(thread_id), ttl_seconds=CANCEL_FLAG_TTL_SECONDS)
-    events = [e["type"] for e in decode(list(service.run(TEST_USER_ID, thread_id, "run-13", "hi")))]
+    events = [e["type"] for e in decode(list(service.run(TEST_USER_ID, thread_id, "run-13", _text("hi"))))]
 
     assert events[-1] == "RUN_FINISHED"
     assert turn_status(engine, thread_id) == AgenticTurnStatus.COMPLETED
+
+
+# ---- 多模态（图片输入）口径 ----
+
+
+def _image_content(url, mime="image/png"):
+    return [
+        {"type": "text", "text": "这是什么？"},
+        {"type": "image", "source": {"type": "url", "value": url, "mimeType": mime}},
+    ]
+
+
+def test_image_message_degrades_without_vision(engine, make_service, monkeypatch):
+    """模型未声明 vision：图片降级丢弃、文本尾注明；落库保留完整数组（展示仍可见）。"""
+    set_environment(monkeypatch, "dev")
+
+    run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run, supports_vision=False)))
+    thread_id = uuid4()
+
+    stored = service.attachments.save(TEST_USER_ID, "pic.png", "image/png", BytesIO(b"\x89PNG-fake"))
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-img1", _image_content(stored.url)))
+
+    assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
+    last = FakeAgent.captured_context.messages[-1]
+    assert isinstance(last.content, str)
+    assert "这是什么？" in last.content
+    assert "已忽略 1 张图片" in last.content
+    # 落库为完整内容数组，历史展示不受降级影响
+    rows = stored_messages(engine, thread_id)
+    user_row = next(r for r in rows if r.role == AgenticMessageRole.USER)
+    assert [p["type"] for p in user_row.content] == ["text", "image"]
+
+
+def test_image_message_resolves_attachment_with_vision(engine, make_service, monkeypatch):
+    """模型声明 vision：本域附件引用被读成 base64 图片块，文本块在前。"""
+    set_environment(monkeypatch, "dev")
+
+    run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run, supports_vision=True)))
+    thread_id = uuid4()
+
+    payload = b"\x89PNG-fake"
+    stored = service.attachments.save(TEST_USER_ID, "pic.png", "image/png", BytesIO(payload))
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-img2", _image_content(stored.url)))
+
+    assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
+    blocks = FakeAgent.captured_context.messages[-1].content
+    assert isinstance(blocks, list)
+    assert blocks[0] == {"type": "text", "text": "这是什么？"}
+    assert blocks[1]["type"] == "image"
+    assert base64.b64decode(blocks[1]["base64"]) == payload
+    assert blocks[1]["mime_type"] == "image/png"
+
+
+def test_unreadable_attachment_reference_degrades(engine, make_service, monkeypatch):
+    """vision 模型但附件引用不可解析（他人附件/不存在）：该图降级丢弃不炸流。"""
+    set_environment(monkeypatch, "dev")
+
+    run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run, supports_vision=True)))
+    thread_id = uuid4()
+
+    foreign_url = "/agentic/attachments/00000000-0000-0000-0000-000000000000/ghost.png"
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-img3", _image_content(foreign_url)))
+
+    assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
+    blocks = FakeAgent.captured_context.messages[-1].content
+    assert [b["type"] for b in blocks] == ["text"]
+
+
+def test_image_only_message_gets_placeholder_query_for_finalizer(engine, make_service, monkeypatch):
+    """纯图片消息：标题/记忆消费方拿占位语义（非空串）。"""
+    set_environment(monkeypatch, "dev")
+
+    title = FakeTitleGenerator()
+    run = FakeRun(items=[("messages", FakeChatModelStream("好"))])
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run, supports_vision=False)), title_generator=title)
+    thread_id = uuid4()
+
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-img4", [
+        {"type": "image", "source": {"type": "url", "value": "/agentic/attachments/00000000-0000-0000-0000-000000000000/a.png"}},
+    ]))
+
+    assert [e["type"] for e in decode(frames)][-1] == "RUN_FINISHED"
+    assert title.calls == 1

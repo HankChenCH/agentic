@@ -11,7 +11,13 @@
 """
 
 from app.exceptions.agent import AgentError, AgentNotFoundError
-from app.exceptions.conversation import ConversationError, ConversationNotFoundError
+from app.exceptions.conversation import (
+    AttachmentNotFoundError,
+    AttachmentTooLargeError,
+    ConversationError,
+    ConversationNotFoundError,
+    UnsupportedAttachmentTypeError,
+)
 from app.exceptions.knowledge import (
     KnowledgeAgentInvalidError,
     KnowledgeDocumentInvalidError,
@@ -43,6 +49,9 @@ from app.exceptions.user import (
 __all__ = [
     "ConversationError",
     "ConversationNotFoundError",
+    "UnsupportedAttachmentTypeError",
+    "AttachmentTooLargeError",
+    "AttachmentNotFoundError",
     "AgentError",
     "AgentNotFoundError",
     "MemoryComponentError",

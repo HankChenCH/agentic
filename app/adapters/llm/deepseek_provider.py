@@ -33,6 +33,9 @@ class ThinkingAwareChatDeepSeek(ChatDeepSeek):
 
     thinkable: bool = False
     features: tuple[str, ...] = ()
+    # capabilities.multimodal 声明（text/vision）；"vision" in multimodal 由
+    # BaseAgent.supports_vision 读取，决定图片输入透传还是降级
+    multimodal: tuple[str, ...] = ()
 
     # langchain-deepseek 的 method 别名：json_schema 实际重映射为 function_calling
     _METHOD_ALIASES: ClassVar[dict] = {"json_schema": "function_calling"}
@@ -98,5 +101,6 @@ class DeepSeekModelBuilder(ModelBuilder):
             request_timeout=entry.timeout,
             thinkable=entry.capabilities.thinkable,
             features=tuple(entry.capabilities.features),
+            multimodal=tuple(entry.capabilities.multimodal),
             **overrides,
         )

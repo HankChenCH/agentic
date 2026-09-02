@@ -1,6 +1,6 @@
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 
 class LocalFilesystemEntry(BaseModel):
@@ -24,6 +24,17 @@ class S3FilesystemEntry(BaseModel):
     ``http://127.0.0.1:9000``）；AWS 官方部署留空走默认寻址。
     本地 HTTP endpoint 需 ``allow_http: true`` 且
     ``virtual_hosted_style_request: false``（path-style 寻址）。
+
+    ``public_endpoint`` 为预签名 URL 的对外基地址（可选，部署形态自适应）：
+    预签名 URL 的 host/path 会被签进 SigV4 签名，浏览器访问的地址必须与
+    签名时一致——
+    - 直连形态（rustfs 地址对浏览器可达，含本地开发）：不配置，签名与读写
+      同一 store 实例；
+    - 反代形态（rustfs 藏在代理后）：配置浏览器可达的基地址（如
+      ``https://files.example.com`` 或子路径 ``https://app.example.com/s3``），
+      签名走用该 endpoint 构建的专用 store 实例（签名是纯本地 SigV4 计算，
+      无网络 I/O）。部署约束：代理必须把 host+path 原样透传给 rustfs——
+      子域名形态天然满足；子路径形态不可剥离前缀，否则签名不匹配。
     """
 
     type: Literal["s3"] = Field(default="s3", description="文件存储类型标识")
@@ -32,6 +43,16 @@ class S3FilesystemEntry(BaseModel):
         default=None,
         description="S3 兼容服务地址，eg: http://127.0.0.1:9000；AWS 官方部署留空",
     )
+    public_endpoint: str | None = Field(
+        default=None,
+        description="预签名 URL 的对外基地址；缺省与 endpoint 一致（直连形态）。反代形态填浏览器可达的基地址",
+    )
+
+    @field_validator("public_endpoint", mode="after")
+    @classmethod
+    def _empty_to_none(cls, value: str | None) -> str | None:
+        # 环境变量插值的空默认（${VAR:}）会得到空串，视为未配置
+        return value.strip() or None
     access_key_id: str | None = Field(default=None, description="访问密钥 ID；环境凭证部署可留空")
     secret_access_key: SecretStr | None = Field(default=None, description="访问密钥 Secret；环境凭证部署可留空")
     region: str | None = Field(default=None, description="region；S3 兼容服务通常可不填")

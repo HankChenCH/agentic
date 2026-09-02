@@ -25,6 +25,20 @@ from app.agents.tools_transformer import ToolsTransformer
 logger = logging.getLogger(__name__)
 
 
+def _content_text(content) -> str:
+    """消息内容的纯文本提取（agents 层本地实现，不越层依赖 domain 的
+    multimodal 翻译器）：str 原样；块列表取 text 块拼接；其余转 str。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+        )
+    return str(content)
+
+
 class BaseAgent(ABC):
     """智能体基类（模板方法）：标准 ReAct 型智能体只声明差异，机制归基类。
 
@@ -71,6 +85,16 @@ class BaseAgent(ABC):
         # 快速回忆门面：默认 memory 片段（与 RAG 折叠路径）消费（agents ──► components 合法边）
         self.recall = toolbox.memory.recall
         self._graph = self.build_graph()
+
+    @property
+    def supports_vision(self) -> bool:
+        """模型是否声明了图片输入能力（capabilities.multimodal 含 ``vision``）。
+
+        声明随模型实例走（``ThinkingAwareChatDeepSeek`` 由 builder 透传 entry
+        的 ``capabilities.multimodal``）；未包装的裸模型类无该属性，视为未
+        声明——编排层据此把图片输入降级为纯文本，宁可丢图不发模型不认的载荷。
+        """
+        return "vision" in getattr(self.model, "multimodal", ())
 
     def build_graph(self) -> CompiledStateGraph:
         """编译智能体图（实例化时调用一次，stream/invoke 复用）。
@@ -181,10 +205,18 @@ class BaseAgent(ABC):
         """图输入：历史消息原样回放（图无 checkpointer，多轮上下文靠输入携带），
         当前时间注入末条用户消息。人设与动态上下文不再进输入消息——人设基线
         烘在图上、动态槽由中间件每次模型调用渲染，任一时刻模型只收一条
-        system 消息。"""
+        system 消息。
+
+        时间前缀兼容两种末条内容形态：字符串拼接（纯文本，历史兼容）与
+        块列表（多模态，前缀作为首个 text 块插入，图片块原样保留）。"""
         messages = list(ctx.messages)
         if messages:
-            messages[-1] = HumanMessage(f"[当前时间：{ctx.now}]\n\n{messages[-1].content}")
+            prefix = f"[当前时间：{ctx.now}]\n\n"
+            last_content = messages[-1].content
+            if isinstance(last_content, str):
+                messages[-1] = HumanMessage(prefix + last_content)
+            else:
+                messages[-1] = HumanMessage(content=[{"type": "text", "text": prefix}, *last_content])
         return {"messages": messages}
 
     def _fast_memory_block(self, ctx: AgentRunContext) -> str:
@@ -198,7 +230,7 @@ class BaseAgent(ABC):
             return ""
         try:
             return self.recall.build_fast_context(
-                query=str(ctx.messages[-1].content),
+                query=_content_text(ctx.messages[-1].content),
                 user_id=UUID(ctx.user_id),
                 thread_id=UUID(ctx.thread_id),
             )

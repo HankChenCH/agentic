@@ -7,8 +7,6 @@ import threading
 from uuid import UUID, uuid4
 from wireup import injectable
 
-from langchain.messages import HumanMessage
-
 from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
@@ -16,12 +14,18 @@ from app.agents import AgentFactory, AgentRunContext
 
 from .translator import AgUiTranslator, StorageTranslator
 from .turn_finalizer import TurnFinalizer
+from app.services.domain.conversation.attachments import ConversationAttachmentStore
 from app.services.domain.conversation.conversation_service import ConversationService
+from app.services.domain.conversation.multimodal import text_of, user_message_from_content
 
 from app.models.domain.agentic import AgenticConversationTurn, AgenticTurnStatus
 
 # 显式取消标志的检查间隔：首项必查，之后节流——每帧一查是每秒几十次无谓 RTT
 CANCEL_CHECK_INTERVAL_SECONDS = 0.5
+
+# 纯图片消息的文本占位：标题生成/记忆抽取的纯文本消费方拿不到图，用占位
+# 语义提示而非空串（避免 transcript 出现「用户：」空提问）
+_IMAGE_ONLY_QUERY_PLACEHOLDER = "（图片）"
 
 
 @injectable
@@ -38,6 +42,8 @@ class AgenticService:
 
     conversations: ConversationService
 
+    attachments: ConversationAttachmentStore
+
     turn_finalizer: TurnFinalizer
 
     logger_factory: LoggerFactory
@@ -49,13 +55,17 @@ class AgenticService:
         self._active_lock = threading.Lock()
         self._active_runs: Counter[UUID] = Counter()
 
-    def run(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
+    def run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict]):
         """公共入口：登记在途 run（供优雅关闭取消）后委托 _stream_run 行程。
-        finally 兜底注销——含 GeneratorExit/异常路径。"""
+        finally 兜底注销——含 GeneratorExit/异常路径。
+
+        ``message_content`` 为存储形态的内容数组（端点经 RunMessage 归一，
+        含 text/image part）；纯文本消息是单 text part 的退化形态。
+        """
         with self._active_lock:
             self._active_runs[thread_id] += 1
         try:
-            yield from self._stream_run(user_id, thread_id, run_id, query)
+            yield from self._stream_run(user_id, thread_id, run_id, message_content)
         finally:
             with self._active_lock:
                 self._active_runs[thread_id] -= 1
@@ -79,7 +89,7 @@ class AgenticService:
             self.logger.info("优雅关闭：已为 %d 个在途 run 发出取消标志", len(thread_ids))
         return len(thread_ids)
 
-    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, query: str):
+    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict]):
         now = datetime.fromtimestamp(time())
 
         # 双翻译共存于同一次 interleave 遍历：
@@ -98,21 +108,35 @@ class AgenticService:
         storage_translator = None
         try:
             # 初始化会话（get-or-create + 归属校验）、会话轮次（create），并存储用户消息
-            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, query=query)
+            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content)
             storage_translator = StorageTranslator(thread_id=thread_id, turn_id=turn.turn_id)
 
             # 智能体实例由智能体层工厂创建（按会话绑定的 agentic_id，未注册回退默认）
             agent = self.agent_factory.create(conversation.agentic_id)
 
+            # 多模态口径以模型能力声明为准：未声明 vision 的模型图片降级丢弃
+            # （当前轮注明、历史回放静默）；本域附件引用由服务端读对象存储
+            # 转 base64（模型云端拉不到内网 rustfs，见 attachments.py 分域口径）
+            supports_vision = agent.supports_vision
+            image_resolver = self.attachments.own_url_resolver(user_id)
+
             # 多轮历史以库为准（服务端权威，不信任请求携带的历史）：
             # 最近轮次的 USER/ASSISTANT 文本 + 当前提问
-            history = self.conversations.replay_history(thread_id=thread_id, exclude_turn_id=turn.turn_id)
+            history = self.conversations.replay_history(
+                thread_id=thread_id,
+                exclude_turn_id=turn.turn_id,
+                supports_vision=supports_vision,
+                image_resolver=image_resolver,
+            )
 
             # 快速回忆的装配在 agent 层（BaseAgent._input 组装进 system prompt；
-            # RAG 折进末条用户消息）——编排层只透传原始 query，用户消息落库
-            # 与 LLM 输入保持同源，不在此拼接任何上下文
+            # RAG 折进末条用户消息）——编排层只透传结构化内容构造的用户消息，
+            # 用户消息落库与 LLM 输入保持同源，不在此拼接任何上下文
             run = agent.stream(AgentRunContext(
-                messages=[*history, HumanMessage(content=query)],
+                messages=[*history, user_message_from_content(
+                    message_content, supports_vision=supports_vision,
+                    image_resolver=image_resolver, note_on_degrade=True,
+                )],
                 thread_id=str(thread_id),
                 run_id=run_id,
                 user_id=str(user_id),
@@ -185,10 +209,11 @@ class AgenticService:
         # 流结束后批量落库 assistant 消息
         self.conversations.store_assistant_messages(storage_translator.messages)
 
-        # 收尾加工含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾
+        # 收尾加工含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾。
+        # 标题/记忆是纯文本消费方：只喂 text part（图片走占位语义）
         threading.Thread(
             target=self.turn_finalizer.run,
-            args=(conversation, turn, storage_translator.messages, query),
+            args=(conversation, turn, storage_translator.messages, text_of(message_content) or _IMAGE_ONLY_QUERY_PLACEHOLDER),
             daemon=True,
         ).start()
 

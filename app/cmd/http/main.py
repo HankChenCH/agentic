@@ -33,7 +33,7 @@ from app.api.middleware import (
     BodySizeSpec,
     RequestIDMiddleware,
 )
-from app.api.v1.endpoints import agent_knowledge, agentic, auth, knowledge, memory
+from app.api.v1.endpoints import agent_knowledge, agentic, attachments, auth, knowledge, memory
 from app.infrastructures.vector import VectorStoreFactory
 
 # .env 由 core/config/loader.py 在首次读取配置时加载（AGENTIC_ENV_FILE 可指定路径）
@@ -110,6 +110,7 @@ def create_app():
     # Depends(require_user) 取 UserPrincipal（依赖结果每请求缓存，验签只跑
     # 一次）。knowledge/agent_knowledge 的归属与可见性校验在知识库领域服务层。
     server.include_router(agentic.router, dependencies=[Depends(require_user)])
+    server.include_router(attachments.router, dependencies=[Depends(require_user)])
     server.include_router(knowledge.router, dependencies=[Depends(require_user)])
     server.include_router(agent_knowledge.router, dependencies=[Depends(require_user)])
     server.include_router(memory.router, dependencies=[Depends(require_user)])
@@ -123,8 +124,9 @@ def create_app():
     register_exception_handlers(server)
 
     # 请求体上限作用域：run 前缀含 /run/cancel；上传为 multipart 文档创建端点
+    # （知识库文档 + 会话附件）
     run_paths = re.compile(r"^/agentic/run")
-    upload_paths = re.compile(r"^/knowledge/[^/]+/document$")
+    upload_paths = re.compile(r"^/(knowledge/[^/]+/document|agentic/attachments)$")
     post_only = frozenset({"POST"})
 
     # 中间件后 add 者在外层（请求链 CORS → RequestID → BodySize → 路由）：
