@@ -20,6 +20,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   ├── stores/              # auth-store.ts（首个 zustand store：token/user + localStorage 持久化，
 │   │                        #   getToken() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
 │   │                        #   缓存 name→中文标题，幂等拉取一次，useToolDisplay 的降级链一环）
+│   │                        #   + agent-store.ts（智能体选择：目录缓存 + 选中项 localStorage 持久化，
+│   │                        #   run 请求经 prepareRunAgentInput 覆写注入 forwardedProps.agentId）
 │   ├── pages/               # 路由页面：login-page（登录/注册双 Tab，注册即登录）+
 │   │                        #   chat-page（纯对话；右上角「管理」按钮与用户菜单进管理侧/退出）
 │   ├── pages/admin/         # 管理侧：admin-home-page（模块启动页）+ knowledge-list-page / knowledge-detail-page
@@ -38,6 +40,7 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   └── services/            # REST 服务层：auth-service（register/login/me）、conversation-service、
 │       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
 │       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）、
+│       │                    #   agent-service（GET /agentic/agents 智能体目录，agent-store/选择器消费）、
 │       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）
 │       │                    #   + types.ts（后端 snake_case 镜像类型）+ translators/（后端历史→
 │       │                    #   ThreadMessageLike 翻译器；user 消息 image part 还原为附件卡片）
@@ -135,6 +138,20 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
 
 ## Gotchas
 
+- **智能体选择（新会话先选）**：无消息的新会话视图中，composer 上方渲染
+  AgentModeSwitch 分段 pills（thread.tsx 用 `AuiIf isNewChatView` 包裹）——
+  ≤3 个智能体直接切换，更多收进「更多」下拉（agent-selector.tsx，数据来自
+  `GET /agentic/agents`，agent-store 幂等拉取 + localStorage 持久化选中项）。
+  选中项只在**新会话首条 run** 时经 agentic-runtime 的 `prepareRunAgentInput`
+  覆写注入 `forwardedProps.agentId`。「新会话」判定 = threadId 不在
+  agent-store 的已知会话集合（knownThreads，由 use-conversation-list 每次
+  会话列表加载/刷新回填，含各会话绑定的 agentic_id）——**不能**用 run 输入
+  里的消息内容/条数判定：react-ag-ui 组装 run 输入时拿不到已加载的历史
+  消息，旧会话续聊会被误判成新会话而改写绑定（已踩坑验证）。新会话
+  threadId 是前端新生成的 UUID，必然不在列表中；首条 run 后会话落库、
+  列表刷新才进入集合，此后继续聊/重生成一律不携带。新会话视图的附件
+  加号按选中智能体的 `supportsVision` 显隐；既有会话绑定前端不感知，
+  入口保守显示（服务端降级兜底）。
 - 「停止生成」走**双通道取消**（`agentic-runtime.tsx` 的 `onCancel`）：先
   `POST /agentic/run/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
   工具执行中不可打断的场景），再 `agent.abortRun()` 本地断链（即时取消态 +

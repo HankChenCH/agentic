@@ -20,6 +20,7 @@ import { REST_BASE, SSE_URL } from "@/lib/config";
 import { attachmentService } from "@/services/attachment-service";
 import { conversationService } from "@/services/conversation-service";
 import { getToken, useAuthStore } from "@/stores/auth-store";
+import { getSelectedAgentId, isKnownThread } from "@/stores/agent-store";
 
 /**
  * 把流链路上的各类异常翻译成用户可读的一句话：
@@ -154,6 +155,36 @@ export const AgenticRuntimeProvider = ({
     () => new HttpAgent({ url: SSE_URL, fetch: authenticatedFetch }),
     [],
   );
+
+  // 智能体选择注入：覆写 prepareRunAgentInput，在 runtime 组装的请求体上合并
+  // forwardedProps.agentId（后端 run 链路消费该字段绑定新会话的智能体）。
+  // 只在「新会话」时携带：判定依据是 threadId 不在 agent-store 的已知会话
+  // 集合（会话列表回填）——runtime 组装的 run 输入拿不到已加载的历史消息，
+  // 按消息内容/条数判定不可靠（旧会话续聊会被误判为新会话而改写绑定）。
+  // 新会话 threadId 是前端新生成的 UUID，必然不在列表中；首条消息发出、
+  // 会话落库并刷新列表后才进入集合，此后继续聊/重生成一律不携带。请求时
+  // 现读 store（与 token 同口径，避免闭包陈旧）；prepareRunAgentInput 在
+  // @ag-ui/client 里是 protected，这里按鸭子类型赋值覆写。
+  useMemo(() => {
+    const target = agent as unknown as {
+      prepareRunAgentInput: (params?: unknown) => {
+        forwardedProps?: Record<string, unknown>;
+        threadId?: string;
+        resume?: unknown;
+      } & Record<string, unknown>;
+    };
+    const original = target.prepareRunAgentInput.bind(agent);
+    target.prepareRunAgentInput = (params?: unknown) => {
+      const input = original(params);
+      const agentId = getSelectedAgentId();
+      const isNewConversation = !input.resume && !isKnownThread(input.threadId);
+      if (!agentId || !isNewConversation) return input;
+      return {
+        ...input,
+        forwardedProps: { ...(input.forwardedProps ?? {}), agentId },
+      };
+    };
+  }, [agent]);
 
   // 会话列表的加载 / 切换 / 历史回放都封装在 hook 里（agent 传入用于
   // 订阅 RunFinished：轮次结束后轮询标题并刷新列表）。

@@ -4,9 +4,9 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
+import { AgentModeSwitch } from "@/components/assistant-ui/agent-selector";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
-import { MarkdownText } from "@/components/assistant-ui/markdown-text";
-import {
+import { MarkdownText } from "@/components/assistant-ui/markdown-text";import {
   Reasoning,
   ReasoningContent,
   ReasoningRoot,
@@ -21,6 +21,7 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { useAgentStore } from "@/stores/agent-store";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -152,6 +153,11 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           >
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
+            {/* 新会话先选智能体：分段 pills 只在无消息视图出现，会话开始后
+                不再切换（绑定在会话上，见 agent-selector.tsx 模块注释） */}
+            <AuiIf condition={isNewChatView}>
+              <AgentModeSwitch />
+            </AuiIf>
             <Composer />
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />
@@ -230,9 +236,23 @@ const Composer: FC = () => {
 };
 
 const ComposerAction: FC = () => {
+  // 图片入口按智能体能力显隐：新会话视图读选中智能体的能力目录
+  // （未声明 vision 的收不到图片，服务端会降级丢图，入口直接隐藏）；
+  // 既有会话绑定对前端不可知，保守显示（服务端兜底降级，行为不变）。
+  const isNewChat = useAuiState(isNewChatView);
+  const agents = useAgentStore((s) => s.agents);
+  const defaultAgentId = useAgentStore((s) => s.defaultAgentId);
+  const selectedAgentId = useAgentStore((s) => s.selectedAgentId);
+  const activeAgent = agents.find(
+    (a) => a.id === (selectedAgentId ?? defaultAgentId),
+  );
+  const supportsVision = !isNewChat || (activeAgent?.supportsVision ?? true);
+
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <ComposerAddAttachment />
+      <div className="flex items-center gap-1">
+        {supportsVision && <ComposerAddAttachment />}
+      </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>

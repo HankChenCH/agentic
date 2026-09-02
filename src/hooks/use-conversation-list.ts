@@ -21,6 +21,7 @@ import { toThreadMessages } from "@/services/translators/thread-message-translat
 import type { BackendConversation } from "@/services/types";
 import { BizError } from "@/lib/http";
 import { useAuthStore } from "@/stores/auth-store";
+import { useAgentStore } from "@/stores/agent-store";
 
 // ===========================================================================
 // Hook —— 会话列表的状态管理 + runtime adapter 装配
@@ -215,6 +216,15 @@ export function useConversationList(
       setIsLoadingMore(false);
     }
   }, [page, pageSize]);
+
+  // 会话列表 → agent-store 的已知会话集合回填：prepareRunAgentInput 判定
+  // 「新会话」（threadId 不在集合中才注入 agentId）的唯一事实源。列表数据
+  // 变化即同步（初始加载/刷新/追加/删除后 refresh 都会更换 conversations）。
+  useEffect(() => {
+    useAgentStore.getState().setKnownThreads(
+      conversations.map((c) => ({ threadId: c.thread_id, agenticId: c.agentic_id })),
+    );
+  }, [conversations]);
 
   // 初始加载按登录态门控：AgenticRuntimeProvider 包在路由外层（跨页保活），
   // 未登录挂载时也会走到这里——RequireAuth 会跳登录页，但不能先发一记必
