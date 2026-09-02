@@ -18,9 +18,11 @@ import type {
 } from "@/services/types";
 
 /**
- * knowledge_search 工具的溯源卡片渲染。
+ * knowledge_search / knowledge_context 工具的溯源卡片渲染（后端两者返回
+ * 同形的 ``{"sources": [...], "notes": [...]}`` JSON，前端共用同一套卡片
+ * 与 PDF 溯源抽屉，仅折叠标题不同；定位读取无检索分，卡片不显示相关度）。
  *
- * 后端把检索结果序列化为 JSON 字符串（LLM 与前端共用），经 ag-ui
+ * 后端把结果序列化为 JSON 字符串（LLM 与前端共用），经 ag-ui
  * ToolCallResultEvent.content 与历史 TOOL_RESULT 行原样透传到 tool-call
  * part 的 result——实时流与刷新后的历史回放走同一条渲染路径。
  *
@@ -74,9 +76,11 @@ function SourceCard({
             {pages}
           </span>
         )}
-        <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
-          相关度 {(source.score * 100).toFixed(0)}%
-        </span>
+        {typeof source.score === "number" && (
+          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+            相关度 {(source.score * 100).toFixed(0)}%
+          </span>
+        )}
       </div>
       {source.heading_path.length > 0 && (
         <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -99,76 +103,108 @@ function SourceCard({
   );
 }
 
-const KnowledgeSearchRender: ToolCallMessagePartComponent = ({
-  result,
-  status,
-}) => {
-  const [open, setOpen] = useState(false);
-  const pdfPreview = usePdfPreview();
-  const parsed = useMemo(() => parseResult(result), [result]);
-  const running = status?.type === "running";
+/** 折叠标题文案：检索与定位读取共用渲染体，仅标题不同 */
+interface ToolLabels {
+  running: string;
+  plain: string;
+  result: (count: number) => string;
+}
 
-  const openSource = (index: number) => {
-    // 溯源走右侧抽屉（非模态）：携带整批来源，打开后可随时切换
-    if (!parsed) return;
-    pdfPreview.openPanel({ sources: parsed.sources, activeIndex: index });
+function makeKnowledgeToolRender({
+  running: runningLabel,
+  plain: plainLabel,
+  result: resultLabel,
+}: ToolLabels): ToolCallMessagePartComponent {
+  const Render: ToolCallMessagePartComponent = ({ result, status }) => {
+    const [open, setOpen] = useState(false);
+    const pdfPreview = usePdfPreview();
+    const parsed = useMemo(() => parseResult(result), [result]);
+    const running = status?.type === "running";
+
+    const openSource = (index: number) => {
+      // 溯源走右侧抽屉（非模态）：携带整批来源，打开后可随时切换
+      if (!parsed) return;
+      pdfPreview.openPanel({ sources: parsed.sources, activeIndex: index });
+    };
+
+    const label = running
+      ? runningLabel
+      : parsed
+        ? resultLabel(parsed.sources.length)
+        : plainLabel;
+
+    return (
+      <Collapsible open={open} onOpenChange={setOpen} className="w-full">
+        <CollapsibleTrigger
+          className={cn(
+            "group/trigger text-muted-foreground hover:text-foreground flex w-fit items-center gap-2 py-1.5 text-sm transition-colors",
+          )}
+        >
+          {running ? (
+            <LoaderIcon className="size-4 shrink-0 animate-spin [animation-duration:0.6s]" />
+          ) : (
+            <SearchIcon className="size-4 shrink-0" />
+          )}
+          <span>{label}</span>
+          <ChevronDownIcon className="size-4 shrink-0 -rotate-90 transition-transform duration-200 group-data-open/trigger:rotate-0 group-data-panel-open/trigger:rotate-0" />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
+            {parsed ? (
+              <>
+                {parsed.sources.map((source, index) => (
+                  <SourceCard
+                    key={`${source.doc_id}-${source.position}`}
+                    source={source}
+                    onOpen={() => openSource(index)}
+                  />
+                ))}
+                {parsed.notes.map((note) => (
+                  <p key={note} className="text-xs text-muted-foreground">
+                    {note}
+                  </p>
+                ))}
+              </>
+            ) : typeof result === "string" ? (
+              // 历史纯文本结果（旧格式/未检索到/引导话术）：原样展示
+              <pre className="bg-muted/50 rounded-md p-2.5 text-xs whitespace-pre-wrap">
+                {result}
+              </pre>
+            ) : null}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    );
   };
+  return Render;
+}
 
-  const label = running
-    ? "知识库检索中…"
-    : parsed
-      ? `知识库检索 · ${parsed.sources.length} 个来源`
-      : "知识库检索";
+const KnowledgeSearchRender = makeKnowledgeToolRender({
+  running: "知识库检索中…",
+  plain: "知识库检索",
+  result: (count) => `知识库检索 · ${count} 个来源`,
+});
 
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="w-full">
-      <CollapsibleTrigger
-        className={cn(
-          "group/trigger text-muted-foreground hover:text-foreground flex w-fit items-center gap-2 py-1.5 text-sm transition-colors",
-        )}
-      >
-        {running ? (
-          <LoaderIcon className="size-4 shrink-0 animate-spin [animation-duration:0.6s]" />
-        ) : (
-          <SearchIcon className="size-4 shrink-0" />
-        )}
-        <span>{label}</span>
-        <ChevronDownIcon className="size-4 shrink-0 -rotate-90 transition-transform duration-200 group-data-open/trigger:rotate-0 group-data-panel-open/trigger:rotate-0" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
-          {parsed ? (
-            <>
-              {parsed.sources.map((source, index) => (
-                <SourceCard
-                  key={`${source.doc_id}-${source.position}`}
-                  source={source}
-                  onOpen={() => openSource(index)}
-                />
-              ))}
-              {parsed.notes.map((note) => (
-                <p key={note} className="text-xs text-muted-foreground">
-                  {note}
-                </p>
-              ))}
-            </>
-          ) : typeof result === "string" ? (
-            // 历史纯文本结果（旧格式/未检索到提示）：原样展示
-            <pre className="bg-muted/50 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-              {result}
-            </pre>
-          ) : null}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-};
+const KnowledgeContextRender = makeKnowledgeToolRender({
+  running: "片段读取中…",
+  plain: "片段读取",
+  result: (count) => `片段读取 · ${count} 个片段`,
+});
 
 /** 挂载即注册 knowledge_search 的渲染器（自身不渲染内容） */
 export const KnowledgeSearchToolUI = () => {
   useAssistantToolUI({
     toolName: "knowledge_search",
     render: KnowledgeSearchRender,
+  });
+  return null;
+};
+
+/** 挂载即注册 knowledge_context 的渲染器（与检索共用溯源卡片，仅标题不同） */
+export const KnowledgeContextToolUI = () => {
+  useAssistantToolUI({
+    toolName: "knowledge_context",
+    render: KnowledgeContextRender,
   });
   return null;
 };
