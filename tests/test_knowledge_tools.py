@@ -1,5 +1,5 @@
-"""检索工具：溯源结构化 JSON、空结果与非法 kb_ids 容错、config 身份透传；
-定位读取工具：窗口/读文 JSON 契约与容错。"""
+"""检索工具：溯源结构化 JSON、kb_ids 硬闸（缺省不检索）、空结果与非法
+kb_ids 容错、config 身份透传；定位读取工具：与检索同形的 sources 契约与容错。"""
 
 import json
 from types import SimpleNamespace
@@ -33,13 +33,8 @@ class StubNavigation:
         self.docs = docs
         self.captured = {}
 
-    def segment_context(self, user_id, doc_id, position, before=1, after=1):
-        self.captured = {"user_id": user_id, "doc_id": doc_id, "position": position,
-                         "before": before, "after": after}
-        return self.window
-
-    def read_document(self, user_id, doc_id, start=0, end=None):
-        self.captured = {"user_id": user_id, "doc_id": doc_id, "start": start, "end": end}
+    def segment_at(self, user_id, doc_id, position):
+        self.captured = {"user_id": user_id, "doc_id": doc_id, "position": position}
         return self.window
 
     def list_documents(self, user_id, kb_id):
@@ -69,7 +64,7 @@ def test_knowledge_search_returns_structured_sources():
         },
     )
     stub = StubRetrieval(result=([hit], ["知识库「旧库」嵌入模型与当前配置不一致，已跳过"]))
-    payload = json.loads(tools_from(stub)["knowledge_search"].invoke({"query": "如何安装"}))
+    payload = json.loads(tools_from(stub)["knowledge_search"].invoke({"query": "如何安装", "kb_ids": [str(uuid4())]}))
 
     source = payload["sources"][0]
     assert source["index"] == 1
@@ -94,13 +89,15 @@ def test_knowledge_search_source_without_bboxes_omits_field():
         position=0,
         meta={"page_start": 1, "page_end": 1},
     )
-    payload = json.loads(tools_from(StubRetrieval(result=([hit], [])))["knowledge_search"].invoke({"query": "问题"}))
+    payload = json.loads(tools_from(StubRetrieval(result=([hit], [])))["knowledge_search"].invoke(
+        {"query": "问题", "kb_ids": [str(uuid4())]}
+    ))
     assert "bboxes" not in payload["sources"][0]
 
 
 def test_knowledge_search_empty_result_and_notes():
     stub = StubRetrieval(result=([], ["知识库「A」未启用（ready），已跳过"]))
-    output = tools_from(stub)["knowledge_search"].invoke({"query": "问题"})
+    output = tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": [str(uuid4())]})
     assert "未检索到相关内容" in output
     assert "未启用" in output
 
@@ -129,63 +126,75 @@ def test_invalid_kb_ids_dropped_not_fatal():
     assert kb_ids == [valid]  # 非法项剔除，合法项保留
 
 
-def test_none_kb_ids_passes_through():
+def test_missing_kb_ids_gated_not_searched():
+    """kb_ids 硬闸：缺省不触发检索，返回引导话术强制先 list 后选库。"""
     stub = StubRetrieval()
-    tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": None})
-    assert stub.captured[0] is None  # 直调无 config → 无身份
-    assert stub.captured[2] is None  # 缺省 = 全部可用库
+    output = tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": None})
+    assert "knowledge_list" in output and "kb_ids" in output
+    assert stub.captured is None  # 检索服务未被触达
+
+    # 全部非法的 id 同样不检索（剔除后为空 → 同一硬闸）
+    output = tools_from(stub)["knowledge_search"].invoke({"query": "问题", "kb_ids": ["not-a-uuid"]})
+    assert "kb_ids" in output
+    assert stub.captured is None
 
 
-# ---------- 定位读取工具（knowledge_context / knowledge_document_read / knowledge_document_list） ----------
+# ---------- 定位读取工具（knowledge_context / knowledge_document_list） ----------
 
 
 def make_window():
     return SegmentWindow(
         kb_id=uuid4(), doc_id=uuid4(), doc_name="产品手册", seg_total=6,
-        start=1, end=2,
+        start=1, end=1,
         segments=[
-            SimpleNamespace(doc_id="d", position=1, content="上文片段", word_count=4,
+            SimpleNamespace(doc_id="d", position=1, content="命中片段", word_count=4,
                             meta={"page_start": 2, "page_end": 2, "heading_path": ["安装"]}),
-            SimpleNamespace(doc_id="d", position=2, content="命中片段", word_count=4, meta={}),
         ],
-        notes=["已达单次读取字符预算（6000 字符），可从 position 3 续读"],
+        notes=[],
     )
 
 
-def test_knowledge_context_returns_window_json():
+def test_knowledge_context_returns_search_shaped_sources():
     doc_id = uuid4()
     stub = StubNavigation(window=make_window())
     payload = json.loads(tools_from(StubRetrieval(), stub)["knowledge_context"].invoke(
-        {"doc_id": str(doc_id), "position": 1, "before": 2, "after": 2},
+        {"doc_id": str(doc_id), "position": 1},
         config={"configurable": {"user_id": str(uuid4())}},
     ))
 
-    assert payload["seg_total"] == 6 and payload["start"] == 1 and payload["end"] == 2
-    assert [seg["position"] for seg in payload["segments"]] == [1, 2]
-    assert payload["segments"][0]["heading_path"] == ["安装"]
-    assert "bboxes" not in payload["segments"][0]  # 阅读契约不带溯源框
+    source = payload["sources"][0]
+    assert source["index"] == 1
+    assert source["doc_name"] == "产品手册"
+    assert source["position"] == 1 and source["content"] == "命中片段"
+    assert source["page_start"] == 2
+    assert source["heading_path"] == ["安装"]
+    assert "score" not in source  # 定位读取无检索相关度，字段整体省略
+    assert "bboxes" not in source  # 无 bbox 同款省略（前端降级页码跳转）
+    assert any("共 6 段" in note for note in payload["notes"])  # notes 带合法 position 区间
     assert stub.captured["doc_id"] == doc_id
+    assert stub.captured["position"] == 1
     assert stub.captured["user_id"] is not None  # config 注入的身份透传
 
 
-def test_knowledge_read_document_passes_range():
-    stub = StubNavigation(window=make_window())
-    json.loads(tools_from(StubRetrieval(), stub)["knowledge_document_read"].invoke(
-        {"doc_id": str(uuid4()), "start": 3, "end": 8}
+def test_knowledge_context_out_of_range_kept_in_notes():
+    window = make_window()
+    window.segments = []
+    window.notes = ["position 9 超出文档范围（共 6 段，position 0-5）"]
+    payload = json.loads(tools_from(StubRetrieval(), StubNavigation(window=window))["knowledge_context"].invoke(
+        {"doc_id": str(uuid4()), "position": 9}
     ))
-    assert stub.captured["start"] == 3 and stub.captured["end"] == 8
+    assert payload["sources"] == []
+    assert any("超出" in note for note in payload["notes"])
 
 
 def test_knowledge_locate_tools_invalid_doc_id_guided():
     tools = tools_from(StubRetrieval())
     assert "doc_id 无效" in tools["knowledge_context"].invoke({"doc_id": "not-a-uuid", "position": 1})
-    assert "doc_id 无效" in tools["knowledge_document_read"].invoke({"doc_id": ""})
 
 
 def test_knowledge_locate_tools_invisible_doc_fallback():
     tools = tools_from(StubRetrieval(), StubNavigation(window=None))
     assert "不可见或不存在" in tools["knowledge_context"].invoke({"doc_id": str(uuid4()), "position": 0})
-    assert "不可见或不存在" in tools["knowledge_document_read"].invoke({"doc_id": str(uuid4())})
 
 
 def test_knowledge_document_list_output():

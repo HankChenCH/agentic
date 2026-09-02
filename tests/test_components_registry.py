@@ -41,8 +41,7 @@ def test_builtin_components_registered():
     demo = COMPONENT_REGISTRY["demo"]
     assert {t.name for t in memory.tools} == {"timeline", "expand", "state_at"}
     assert {t.name for t in knowledge.tools} == {
-        "knowledge_list", "knowledge_search", "knowledge_context",
-        "knowledge_document_read", "knowledge_document_list",
+        "knowledge_list", "knowledge_search", "knowledge_context", "knowledge_document_list",
     }
     assert {t.name for t in demo.tools} == {"get_weather"}
     for spec in (memory, knowledge, demo):
@@ -134,7 +133,7 @@ def test_real_components_no_tool_collision_and_assemble():
         demo=DemoComponent(weather=None),
     )
     names = [t.name for s in toolbox.specs for t in s.tools]
-    assert len(names) == len(set(names)) == 9
+    assert len(names) == len(set(names)) == 8
 
 
 def test_demo_weather_tool_returns_canned_report():

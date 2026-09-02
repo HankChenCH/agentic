@@ -1,4 +1,4 @@
-"""定位读取编排：可见性/启用守卫、邻域窗口边界、读文预算截断、文档清单。"""
+"""定位读取编排：可见性/启用守卫、精确单点读取（含越界引导）、文档清单。"""
 
 from uuid import uuid4
 
@@ -86,9 +86,9 @@ def test_context_rejects_invisible_and_disabled(engine):
         session.commit()
     service = make_service(engine)
 
-    assert service.segment_context(TEST_USER_ID, other_doc, 0) is None  # 他人私有库
-    assert service.segment_context(TEST_USER_ID, ready_doc, 0) is None  # 库未启用
-    assert service.segment_context(TEST_USER_ID, uuid4(), 0) is None  # 幻觉 doc_id
+    assert service.segment_at(TEST_USER_ID, other_doc, 0) is None  # 他人私有库
+    assert service.segment_at(TEST_USER_ID, ready_doc, 0) is None  # 库未启用
+    assert service.segment_at(TEST_USER_ID, uuid4(), 0) is None  # 幻觉 doc_id
 
 
 def test_context_rejects_disabled_document(engine):
@@ -96,90 +96,32 @@ def test_context_rejects_disabled_document(engine):
     with Session(engine) as session:
         session.get(KnowledgeDocument, doc).status = KnowledgeStatus.DISABLED
         session.commit()
-    assert make_service(engine).segment_context(TEST_USER_ID, doc, 0) is None
+    assert make_service(engine).segment_at(TEST_USER_ID, doc, 0) is None
 
 
-# ---------- 邻域窗口（knowledge_context） ----------
+# ---------- 精确单点读取（knowledge_context） ----------
 
 
-def test_context_returns_ordered_window(engine):
+def test_segment_at_returns_exact_segment(engine):
     _kb, doc = seed_doc(engine)
-    window = make_service(engine).segment_context(TEST_USER_ID, doc, 1, before=1, after=1)
+    service = make_service(engine)
 
+    window = service.segment_at(TEST_USER_ID, doc, 1)
     assert window.seg_total == 4
-    assert window.start == 0 and window.end == 2  # 两端被文档边界收拢
-    assert [seg.position for seg in window.segments] == [0, 1, 2]
-    assert window.segments[1].content == "二、配置。"
+    assert window.start == 1 and window.end == 1  # 单点：区间即该 position
+    assert [seg.position for seg in window.segments] == [1]
+    assert window.segments[0].content == "二、配置。"
     assert window.notes == []
 
+    # 首/末段同样可读（无邻域泛化）
+    assert [seg.position for seg in service.segment_at(TEST_USER_ID, doc, 0).segments] == [0]
+    assert [seg.position for seg in service.segment_at(TEST_USER_ID, doc, 3).segments] == [3]
 
-def test_context_clamps_span_and_edge(engine):
+
+def test_segment_at_position_out_of_range_noted(engine):
     _kb, doc = seed_doc(engine)
-    service = make_service(engine)
-
-    # before/after 钳制 ≤3；末段邻域向内收
-    window = service.segment_context(TEST_USER_ID, doc, 3, before=9, after=9)
-    assert window.start == 0 and window.end == 3
-    assert [seg.position for seg in window.segments] == [0, 1, 2, 3]
-
-
-def test_context_position_out_of_range_noted(engine):
-    _kb, doc = seed_doc(engine)
-    window = make_service(engine).segment_context(TEST_USER_ID, doc, 10)
+    window = make_service(engine).segment_at(TEST_USER_ID, doc, 10)
     assert window.segments == []  # 空窗口，不猜近似
-    assert any("超出" in note for note in window.notes)
-
-
-# ---------- 范围读文（knowledge_document_read）与预算截断 ----------
-
-
-def test_read_document_full_and_range(engine):
-    _kb, doc = seed_doc(engine)
-    service = make_service(engine)
-
-    whole = service.read_document(TEST_USER_ID, doc)
-    assert [seg.position for seg in whole.segments] == [0, 1, 2, 3]
-    assert whole.end == 3
-
-    tail = service.read_document(TEST_USER_ID, doc, start=2, end=3)
-    assert [seg.position for seg in tail.segments] == [2, 3]
-
-
-def test_read_document_truncates_by_segment_budget(engine, monkeypatch):
-    import app.components.knowledge.ability.navigation as navigation
-
-    monkeypatch.setattr(navigation, "_READ_MAX_SEGMENTS", 2)
-    kb, doc = seed_doc(engine)
-    window = navigation.KnowledgeNavigationService(
-        kb_repo=KnowledgeBaseRepository(engine=engine),
-        document_repo=KnowledgeDocumentRepository(engine=engine),
-        logger_factory=LoggerFactory(),
-    ).read_document(TEST_USER_ID, doc)
-
-    assert [seg.position for seg in window.segments] == [0, 1]
-    assert window.end == 1  # 实际返回区间收窄
-    assert any("续读" in note and "2" in note for note in window.notes)  # 指引从 position 2 续读
-
-
-def test_read_document_truncates_by_char_budget(engine, monkeypatch):
-    import app.components.knowledge.ability.navigation as navigation
-
-    monkeypatch.setattr(navigation, "_READ_MAX_CHARS", 12)  # 每段 5 字符：只装得下 2 段
-    kb, doc = seed_doc(engine)
-    window = navigation.KnowledgeNavigationService(
-        kb_repo=KnowledgeBaseRepository(engine=engine),
-        document_repo=KnowledgeDocumentRepository(engine=engine),
-        logger_factory=LoggerFactory(),
-    ).read_document(TEST_USER_ID, doc)
-
-    assert [seg.position for seg in window.segments] == [0, 1]
-    assert any("字符" in note for note in window.notes)
-
-
-def test_read_document_start_out_of_range(engine):
-    _kb, doc = seed_doc(engine)
-    window = make_service(engine).read_document(TEST_USER_ID, doc, start=99)
-    assert window.segments == []
     assert any("超出" in note for note in window.notes)
 
 
