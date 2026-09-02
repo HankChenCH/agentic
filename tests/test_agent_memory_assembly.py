@@ -115,3 +115,51 @@ def test_rag_input_without_block_keeps_plain_query():
     messages = agent._input(_ctx("查一下资料"))["messages"]
 
     assert messages[-1].content == f"[当前时间：{NOW}]\n\n查一下资料"
+
+
+# ---- 多模态（图片输入）输入装配口径 ----
+
+
+def test_supports_vision_follows_model_declaration():
+    """supports_vision 读模型实例的 multimodal 声明；无声明的裸模型视为不支持。"""
+    recall = FakeRecall(block="")
+    vision_model = SimpleNamespace(multimodal=("text", "vision"))
+    plain_model = SimpleNamespace(multimodal=())
+    bare_model = object()
+
+    assert _StubAgent(model=vision_model, toolbox=_toolbox(recall)).supports_vision is True
+    assert _StubAgent(model=plain_model, toolbox=_toolbox(recall)).supports_vision is False
+    assert _StubAgent(model=bare_model, toolbox=_toolbox(recall)).supports_vision is False
+
+
+def test_input_time_prefix_supports_block_content():
+    """末条内容为块列表（多模态）时，时间前缀作为首个 text 块插入，图片块原样保留。"""
+    agent = _StubAgent(model=None, toolbox=_toolbox(FakeRecall(block="")))
+    image_block = {"type": "image", "base64": "aGk=", "mime_type": "image/png"}
+    messages = [HumanMessage(content=[{"type": "text", "text": "这是什么？"}, image_block])]
+
+    out = agent._input(AgentRunContext(
+        messages=messages, thread_id=THREAD, run_id="run-1", user_id=TEST_USER, now=NOW,
+    ))["messages"]
+
+    assert out[-1].content == [
+        {"type": "text", "text": f"[当前时间：{NOW}]\n\n"},
+        {"type": "text", "text": "这是什么？"},
+        image_block,
+    ]
+
+
+def test_fast_memory_block_extracts_text_from_block_content():
+    """快注短路判别的 query 取块列表的纯文本（而非 repr），图片不进召回。"""
+    recall = FakeRecall(block=BLOCK)
+    agent = _StubAgent(model=None, toolbox=_toolbox(recall))
+    image_block = {"type": "image", "base64": "aGk=", "mime_type": "image/png"}
+    ctx = AgentRunContext(
+        messages=[HumanMessage(content=[{"type": "text", "text": "这是什么？"}, image_block])],
+        thread_id=THREAD, run_id="run-1", user_id=TEST_USER, now=NOW,
+    )
+
+    block = agent._fast_memory_block(ctx)
+
+    assert block == BLOCK
+    assert recall.queries[0][0] == "这是什么？"

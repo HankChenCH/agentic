@@ -28,6 +28,13 @@ class ResolutionConfig(BaseModel):
         default=0.85,
         description="实体消歧合并阈值，作用于客户端现算的嵌入余弦（不可对 hybrid 融合分比较）",
     )
+    grey_zone_lower: float = Field(
+        default=0.55,
+        description=(
+            "灰度带下限：余弦落在 [下限, 阈值) 的消歧候选交给 LLM 语义裁决"
+            "（同一现实事物才算同一）；≤0 关闭该层，退回两段式"
+        ),
+    )
 
 
 class DeepConfig(BaseModel):
@@ -57,6 +64,10 @@ class MemoryConfig(BaseModel):
     extraction_provider: str = Field(
         default="deepseek-flash",
         description="记忆抽取/裁决使用的裸聊天模型 entry key",
+    )
+    roster_limit: int = Field(
+        default=12,
+        description="抽取 prompt 注入的既有实体名册上限（向量按 transcript 提名；0 关闭名册）",
     )
     recall: RecallConfig = Field(default_factory=RecallConfig)
     score: ScoreConfig = Field(default_factory=ScoreConfig)

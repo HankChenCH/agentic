@@ -19,6 +19,7 @@ def _service(engine, **config_overrides):
         memory_repo=SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=FakeMemoryVectorIndex(),
         app_config=make_service_config(**config_overrides),
+        model_factory=None,
     )
 
 

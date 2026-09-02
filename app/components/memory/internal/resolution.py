@@ -1,16 +1,21 @@
-"""实体消歧单源：两段式「向量候选发现 + 真余弦判定」的唯一实现点。
+"""实体消歧单源：三层漏斗「精确/强余弦直并 + 灰度带语义裁决」的唯一实现点。
 
-两段式语义（docs/memory-v2-design.md §8 事故教训）：``MemoryVectorIndex.search``
-的 hybrid 融合分只是相对排序，仅用于圈定候选、绝不与绝对阈值比较；
-命中与否由 ``text_cosine`` 对候选档案文本（``entity_content``，与向量
-写入同内容）现算的真实余弦 ≥ similarity_threshold 决定。拆分禁令
-（attributes.merge_blocklist，人工拆分时互写）优先于余弦排序——阈值
-附近的余弦抖动不应推翻人工拆分意图。类型护栏只在「存在期望类型」时
-生效（写路的抽取候选自带 entity_type；读路锚点解析没有期望类型，
-结构性跳过）。本模块无状态：仓储与向量索引一律以参数传入。
+漏斗分层（docs/memory-v2-design.md §8 事故教训 + §12 指代归一）：
+- 精确名/别名命中 → 复用（``exact_entity_match``，确定性）；
+- ``MemoryVectorIndex.search`` 只做候选发现（hybrid 融合分是相对排序，
+  绝不与绝对阈值比较），合并判定用 ``text_cosine`` 客户端真余弦：
+  - 余弦 ≥ similarity_threshold → 强表面信号，直接复用；
+  - 余弦落 [grey_zone_lower, 阈值) 灰度带 → 交给 ``merge_adjudicator``
+    （LLM 语义裁决：同一现实事物才算同一，简称/代称归一在此收口）；
+  - 带外或裁决不可用 → 新建（保守默认，8-28「学校并入公司」取向）。
+拆分禁令（attributes.merge_blocklist，人工拆分时互写）优先于一切自动
+归并——阈值抖动与 LLM 判断都不应推翻人工拆分意图。类型护栏只在「存在
+期望类型」时生效（写路的抽取候选自带 entity_type；读路锚点解析没有期望
+类型，结构性跳过）。本模块无状态：仓储与向量索引一律以参数传入。
 """
 
 import logging
+from typing import Callable
 
 from app.components.memory.repositories import MemoryRepository
 from app.models.domain.memory import EntityType, MemoryEntity
@@ -20,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 向量候选圈定数量：融合分只排序，取最近几个进余弦复判
 _VECTOR_CANDIDATES = 3
+
+# 灰度带语义裁决回调：（指称, 期望类型, 灰度带候选行）→ 命中实体 id | None
+MergeAdjudicator = Callable[[str, str | None, list[MemoryEntity]], int | None]
 
 
 def entity_content(row: MemoryEntity) -> str:
@@ -54,12 +62,16 @@ def vector_entity_match(
     memory_repo: MemoryRepository,
     vector_index: MemoryVectorIndex,
     threshold: float,
+    grey_zone_lower: float = 0.0,
+    merge_adjudicator: MergeAdjudicator | None = None,
 ) -> MemoryEntity | None:
-    """两段式向量消歧：search 只圈 top-3 候选，合并判定用 text_cosine 真余弦。
+    """三层漏斗向量消歧：search 圈候选，真余弦分档判定。
 
-    达标候选多于一个时拆分禁令优先于余弦排序；``expected_type`` 非空时
-    类型冲突一律拒绝（OTHER 通配）。低分/冲突/失败一律返回 None，
-    由调用方按新建（写路）或未命中（读路）处理。
+    - 余弦 ≥ threshold：强表面信号，直接复用；
+    - 余弦落 [grey_zone_lower, threshold) 灰度带且有裁决器：LLM 语义判定
+      （同一现实事物才算同一），裁决结果同样过拆分禁令与类型护栏；
+    - 带外 / 裁决不可用 / 裁决判非同一：返回 None，由调用方按新建（写路）
+      或未命中（读路）处理。低分/冲突/失败一律记日志，杜绝静默错合并。
     """
     similar = vector_index.search(
         ref, kinds=(KIND_ENTITY,), top_k=_VECTOR_CANDIDATES, alpha=1.0
@@ -70,35 +82,78 @@ def vector_entity_match(
     cosines = vector_index.text_cosine(
         ref, [entity_content(row) for row in rows.values()]
     )
-    passing = [
-        (row, score) for row, score in zip(rows.values(), cosines) if score >= threshold
-    ]
+    scored = sorted(zip(rows.values(), cosines), key=lambda pair: pair[1], reverse=True)
+
+    passing = [(row, score) for row, score in scored if score >= threshold]
     if not passing:
+        return _grey_zone_resolve(
+            ref, expected_type, scored, grey_zone_lower, merge_adjudicator,
+        )
+    best_row, best_score = _switch_on_blocklist(
+        max(passing, key=lambda pair: pair[1]), passing, ref,
+    )
+    return _guard_type(best_row, best_score, expected_type, ref)
+
+
+def _grey_zone_resolve(
+    ref: str,
+    expected_type: str | None,
+    scored: list[tuple],
+    grey_zone_lower: float,
+    merge_adjudicator: MergeAdjudicator | None,
+) -> MemoryEntity | None:
+    """灰度带语义裁决层：余弦说不清的（简称/代称/变体）交给裁决器。
+
+    裁决器缺失、关闭（下限 ≤0）、判为不匹配或给了候选外 id → None（新建）。
+    """
+    if grey_zone_lower <= 0 or merge_adjudicator is None:
         logger.info(
-            "实体 %r 最近候选余弦均低于阈值 %.2f，按未命中处理", ref, threshold,
+            "实体 %r 最近候选余弦均低于阈值，按未命中处理（灰度带未启用）", ref,
         )
         return None
-    best_row, best_score = max(passing, key=lambda pair: pair[1])
-    for row, score in passing:
+    band = [(row, score) for row, score in scored if score >= grey_zone_lower]
+    if not band:
+        logger.info("实体 %r 余弦低于灰度带下限 %.2f，按新建处理", ref, grey_zone_lower)
+        return None
+    score_by_id = {row.id: score for row, score in band}
+    picked_id = merge_adjudicator(ref, expected_type, [row for row, _score in band])
+    picked = next((row for row, _score in band if row.id == picked_id), None)
+    if picked is None:
+        return None
+    picked, picked_score = _switch_on_blocklist((picked, score_by_id[picked.id]), band, ref)
+    return _guard_type(picked, picked_score, expected_type, ref, adjudicated=True)
+
+
+def _switch_on_blocklist(picked: tuple, pool: list[tuple], ref: str) -> tuple:
+    """拆分禁令优先于余弦排序与语义裁决：命中禁令对时改选对方。"""
+    best_row, best_score = picked
+    for row, score in pool:
         if row.id != best_row.id and block_paired(best_row, row):
             logger.info(
                 "实体 %r 命中人工拆分禁令对 #%s「%s」↔ #%s「%s」，禁令优先",
                 ref, best_row.id, best_row.name, row.id, row.name,
             )
-            best_row, best_score = row, score
-            break
+            return row, score
+    return best_row, best_score
+
+
+def _guard_type(
+    row: MemoryEntity, score: float, expected_type: str | None, ref: str,
+    *, adjudicated: bool = False,
+) -> MemoryEntity | None:
+    """类型护栏：期望类型与候选冲突（且双方均非 OTHER 通配）一律拒绝。"""
     if (
         expected_type is not None
-        and expected_type != best_row.entity_type
-        and EntityType.OTHER.value not in (expected_type, best_row.entity_type)
+        and expected_type != row.entity_type
+        and EntityType.OTHER.value not in (expected_type, row.entity_type)
     ):
         logger.warning(
-            "实体 %r(%s) 与候选 #%s「%s」(%s) 余弦 %.2f 达标但类型冲突，拒绝合并",
-            ref, expected_type,
-            best_row.id, best_row.name, best_row.entity_type, best_score,
+            "实体 %s(%s) 与候选 #%s「%s」(%s) 余弦 %.2f 达标%s但类型冲突，拒绝合并",
+            ref, expected_type, row.id, row.name, row.entity_type, score,
+            "（语义裁决通过）" if adjudicated else "",
         )
         return None
-    return best_row
+    return row
 
 
 def find_entity_by_ref(
@@ -106,8 +161,11 @@ def find_entity_by_ref(
     memory_repo: MemoryRepository,
     vector_index: MemoryVectorIndex,
     threshold: float,
+    grey_zone_lower: float = 0.0,
+    merge_adjudicator: MergeAdjudicator | None = None,
 ) -> MemoryEntity | None:
     """读路一站式锚点解析：精确名/别名 → 向量兜底（无期望类型）。"""
     return exact_entity_match(ref, memory_repo) or vector_entity_match(
-        ref, None, memory_repo, vector_index, threshold
+        ref, None, memory_repo, vector_index, threshold,
+        grey_zone_lower=grey_zone_lower, merge_adjudicator=merge_adjudicator,
     )

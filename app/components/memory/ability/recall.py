@@ -6,7 +6,8 @@
 组装进 system prompt（常驻摘要，非工具）；timeline/expand/state_at 深度
 工具由 manifest.py 薄封装成 agent 可调用的闭包。会话内已投喂的记忆经
 SessionInjectRegistry 登记，深度工具只返回增量。expand 的锚点解析复用
-resolution 的两段式消歧（与收尾写路同规）。
+resolution 的三层消歧漏斗（与收尾写路同规：精确/强余弦直并 + 灰度带
+LLM 语义裁决——model_factory 未注入时灰度带自动退化为不启用）。
 """
 
 import logging
@@ -18,8 +19,12 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
+from app.infrastructures.llm import ModelFactory
 from app.components.memory.internal import renderer, resolution
-from app.components.memory.internal.extraction import resolve_time_hint
+from app.components.memory.internal.extraction import (
+    adjudicate_entity_merge,
+    resolve_time_hint,
+)
 from app.components.memory.repositories import MemoryRepository
 from app.components.memory.internal.scoring import ScoreWeights, ScorableItem, score_item
 from app.services.domain.memory import KIND_EPISODE, MemoryVectorIndex
@@ -75,9 +80,13 @@ class MemoryRecallService:
     memory_repo: MemoryRepository
     vector_index: MemoryVectorIndex
     app_config: AppConfig
+    # 灰度带锚点裁决用的裸模型工厂（惯例同 consolidation；单测传 None，
+    # 灰度带随之退化为不启用——快注路径零 LLM 的语义不变，模型按需惰性创建）
+    model_factory: ModelFactory
 
     def __post_init__(self):
         self.inject_registry = SessionInjectRegistry()
+        self._model = None
 
     # ==================== 快速注入 ====================
 
@@ -156,6 +165,8 @@ class MemoryRecallService:
         anchor = resolution.find_entity_by_ref(
             entity_ref, repo, index,
             cfg.resolution.similarity_threshold,
+            grey_zone_lower=cfg.resolution.grey_zone_lower,
+            merge_adjudicator=self._anchor_adjudicator(repo),
         )
         if anchor is None:
             return f"（未找到与“{entity_ref}”相关的记忆对象）"
@@ -230,6 +241,26 @@ class MemoryRecallService:
             recency=score_cfg.recency_weight,
             importance=score_cfg.importance_weight,
         )
+
+    def _anchor_adjudicator(self, repo: MemoryRepository):
+        """expand 锚点的灰度带语义裁决回调；灰度带关闭或无模型工厂时返回 None。"""
+        if self.model_factory is None or self.app_config.memory.resolution.grey_zone_lower <= 0:
+            return None
+
+        def adjudicate(ref: str, expected_type: str | None, candidates: list) -> int | None:
+            grouped: dict[int, list[str]] = {}
+            for row in repo.find_active_statements([c.id for c in candidates]):
+                grouped.setdefault(row.subject_id, []).append(row.summary)
+            return adjudicate_entity_merge(
+                self._extraction_model(), ref, expected_type, candidates, grouped,
+            )
+
+        return adjudicate
+
+    def _extraction_model(self):
+        if self._model is None:
+            self._model = self.model_factory.create(self.app_config.memory.extraction_provider)
+        return self._model
 
 
 def _is_smalltalk(query: str) -> bool:

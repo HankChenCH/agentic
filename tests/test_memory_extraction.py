@@ -58,6 +58,41 @@ def test_extract_structure_degrades_to_empty_on_garbage():
     assert extract_structure(CannedLLM("[1,2,3] 不是对象"), "x", NOW).is_empty()
 
 
+def test_extraction_prompt_carries_identity_and_roster():
+    """身份卡与名册随 HumanMessage 下发；缺省时两节整段省略。"""
+    from app.models.domain.memory import MemoryEntity
+
+    llm = CannedLLM('{"entities":[],"episodes":[],"facts":[]}')
+    roster_row = MemoryEntity(id=3, name="广东禹通互联网科技有限公司",
+                              entity_type="ORG", aliases=["禹通"])
+    extract_structure(llm, "用户：略", NOW,
+                      identity_names=["demo", "张三"], roster=[roster_row])
+    human = llm.calls[0][-1].content
+    assert "【用户身份】用户本人已知称呼：demo、张三" in human
+    assert "#3|广东禹通互联网科技有限公司|ORG｜又名：禹通" in human
+    assert "必须回填其 ref_id" in human
+
+    bare = CannedLLM('{"entities":[],"episodes":[],"facts":[]}')
+    extract_structure(bare, "用户：略", NOW)
+    assert "【用户身份】" not in bare.calls[0][-1].content
+    assert "【已知对象名册】" not in bare.calls[0][-1].content
+
+
+def test_extraction_ref_id_validated_against_roster():
+    """名册外 ref_id 剥除（防幻觉编号把事实挂到任意实体），条目保留走正常消歧。"""
+    from app.models.domain.memory import MemoryEntity
+
+    payload = """{"entities": [
+        {"key": "a", "name": "禹通全称", "type": "ORG", "ref_id": 3},
+        {"key": "b", "name": "野实体", "type": "ORG", "ref_id": 99}
+      ], "episodes": [], "facts": []}"""
+    roster = [MemoryEntity(id=3, name="广东禹通互联网科技有限公司", entity_type="ORG")]
+    result = extract_structure(CannedLLM(payload), "x", NOW, roster=roster)
+
+    refs = {e.key: e.ref_id for e in result.entities}
+    assert refs == {"a": 3, "b": None}
+
+
 REF_JSON = """{
   "entities": [
     {"key": "ghost", "type": "ORG", "name": "#S14", "aliases": ["#S13", "禹通"]},

@@ -17,6 +17,12 @@ score:
 
 resolution:
   similarity_threshold: 0.85
+  # 灰度带 [0.55, 0.85)：余弦落带内交给 LLM 语义裁决（简称/代称归一），
+  # 不确定宁可新建；≤0 关闭该层
+  grey_zone_lower: 0.55
+
+# 抽取 prompt 注入的既有实体名册上限（向量按本轮 transcript 提名；0 关闭）
+roster_limit: 12
 
 deep:
   max_rounds: 3

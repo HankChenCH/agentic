@@ -267,6 +267,8 @@ embedding=bge-m3(既有)；换模型需 drop collection + `rebuild()` 全量重�
 | score.{relevance,recency,importance}_weight | .5/.2/.3 | 评分权重 |
 | score.recency_half_life_days | 14 | 衰减半衰期 |
 | resolution.similarity_threshold | 0.85 | 实体消歧阈值（作用于客户端现算的嵌入余弦） |
+| resolution.grey_zone_lower | 0.55 | 灰度带下限：余弦落 [下限, 阈值) 交 LLM 语义裁决；≤0 关闭（§12） |
+| roster_limit | 12 | 抽取 prompt 注入的既有实体名册上限（向量提名；0 关闭，§12） |
 | deep.max_rounds | 3 | 深度回忆轮数上限 |
 | render.max_fragments | 3 | 片段数上限 |
 | render.topology_max_edges / evidence_max_quotes | 8 / 3 | 片段内裁剪 |
@@ -345,3 +347,40 @@ Cytoscape 渲染力导向图；时间滑杆做时点回放视图）；编辑 API
 **P2 非目标**：写路径迁 Celery（`app/tasks/__init__.py` 已标注的未来工作）；
 ~~多用户作用域~~（2026-08-30 随用户模块落地，见 §3 修订）；周期巩固任务；
 >1 hop 检索；跨智能体共享记忆池。
+
+## 12. 指代归一：跨轮实体同一性（2026-09-02 增补）
+
+**问题**：抽取是无状态的——「我是xx」「我的公司是广东禹通」这类自指与
+代称，模型既不知道用户是谁、也不知道库里已有哪些对象，于是 xx 与
+「用户」节点、简称与全称各自裂成新实体（实证：demo 库中「广东禹通」
+与「广东禹通互联网科技有限公司」并存，用户名下所属公司双 ACTIVE），
+只能人工频繁合并。
+
+**三层机制**（原则与 §8 一致：语义判断不靠表面相似度，也不回到无护栏
+的融合分；不确定宁可新建）：
+
+- **Tier1 抽取上游预防**（`internal/extraction.py`）：抽取输入附
+  「用户身份卡」（用户节点名/别名/账号 username·nickname/姓名·称呼陈述
+  对象）与「既有实体名册」（`MemoryVectorIndex.search` 按本轮 transcript
+  提名，上限 `roster_limit`；用户节点不入册）。prompt 规则：指用户本人
+  一律保留键 `user`；指代名册对象（含简称/别名/代称）entities 必须回填
+  `ref_id`（清洗期校验，名册外剥除）；泛称/角色词（"公司""项目"）不得
+  作实体名，无名可指用字面量。ref_id 命中行把听到的叫法回填为别名——
+  精确匹配面随对话自增长。
+- **Tier2 三层消歧漏斗**（`internal/resolution.py`）：精确名/别名 →
+  余弦 ≥ `similarity_threshold` 直并 → 余弦落
+  `[grey_zone_lower, 阈值)` 灰度带交 LLM 语义裁决
+  （`adjudicate_entity_merge`：携候选档案+既有事实判「同一现实事物」，
+  简称/全称/代称归一在此收口；不确定/失败/候选外 id 一律新建）→ 带外
+  新建。裁决结果同样过类型护栏与拆分禁令（blocklist 优先于一切自动
+  归并）。写读同规：`expand` 锚点走同一漏斗（读路无期望类型，类型护栏
+  结构性跳过；`model_factory` 未注入时灰度带退化为不启用）。
+- **Tier3 用户身份专项**（`ability/consolidation.py`）：user 是唯一保留
+  指称——自报姓名/称呼事实（user-[姓名/称呼]->X）客体字面量化、不为 X
+  建实体、名字回填用户节点别名；候选名/别名命中用户已知称呼（身份卡
+  全集）一律归并到用户节点。方向合法性：用户节点只能做合并存留方
+  （§4.1 保护不变），归并方向恒为 他→用户。
+
+**存量治理**：历史裂开的重复实体走既有编辑面——`POST
+/memory/entities/{id}/merge`（或 `admin memory repair` 思路）合并后，
+被并行的重复陈述按重复归档。
