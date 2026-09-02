@@ -293,12 +293,12 @@ def _parse_kb_ids(kb_ids: list[str] | None) -> list[UUID] | None:
 
 
 def render_search_result(hits: list[RetrievalHit], notes: list[str]) -> str:
-    """检索结果 → 工具/图节点共用的结果串（KnowledgeSearchResult JSON 契约的唯一组装点）。
+    """检索结果 → 检索类消费方共用的结果串（KnowledgeSearchResult JSON 契约的唯一组装点）。
 
     未命中返回人类可读的未检到说明（有跳过说明则附在尾部），命中返回
     ``KnowledgeSearchResult`` 的 JSON（无 bbox 的来源整体省略该字段，
-    前端降级为页码跳转）。knowledge_search 工具与 builtin:rag 的检索节点
-    共用本函数，保证 LLM 与前端看到同一形状。
+    前端降级为页码跳转）。knowledge_search 工具与 knowledge_context 的
+    定位读取共用同一形状，保证 LLM 与前端看到一致结构。
     """
     if not hits:
         message = "知识库中未检索到相关内容"

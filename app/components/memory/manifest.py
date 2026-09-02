@@ -2,9 +2,8 @@
 
 能力导出 = 深度回忆三件套（timeline/expand/state_at）；快速回忆不走工具
 ——由 BaseAgent 默认 memory 片段经动态 system prompt 中间件把快注块渲染进
-模板 ``{memory}`` 槽（见 ability.recall 与 agents/middleware.py；RAG 因图
-节点按文本渲染历史，在其 _input 折进末条用户消息）。三件套均需当前会话
-thread 做去重登记与访问强化。
+模板 ``{memory}`` 槽（见 ability.recall 与 agents/middleware.py）。三件套
+均需当前会话 thread 做去重登记与访问强化。
 
 跨工具的两级记忆使用策略聚合在本清单（组件能力的唯一聚合点）：manifest
 文本对模型不可见，经 ``_DEEP_TOOL_POLICY`` 组合进各深度工具 description

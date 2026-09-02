@@ -1,9 +1,10 @@
 """知识库检索能力（knowledge 唯一能力模块）：可见性圈定 → 状态/模型守卫 →
 双通道召回（混合检索 + 邻域扩展）→ RRF 排名融合 → 命中组装。
 
-消费方是 manifest 的 agent 工具与 builtin:rag 的检索节点：LLM 先经
-knowledge_list 了解可用知识库，再按需以 kb_ids 自选库检索（缺省检索全部
-可用库）。可用口径是归属可见性：私有库仅属主可见，公开库所有人可见（与
+消费方是 manifest 的 agent 工具：LLM 先经 knowledge_list 了解可用知识库，
+再以 kb_ids 自选库检索（工具层运行时硬闸：缺省或全非法不触发检索，返回
+引导话术——服务签名上的 kb_ids=None 全库口径仅供非工具消费方使用）。可用
+口径是归属可见性：私有库仅属主可见，公开库所有人可见（与
 knowledge_base.user_id/is_public 的管理侧读路径同规则）。状态收敛规则：
 知识库须为 enabled、文档须为 enabled 才可被召回——管理侧的启停开关即检
 索开关。
