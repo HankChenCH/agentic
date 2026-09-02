@@ -16,7 +16,7 @@ server/                          # this directory is its own git repo (the works
 │                                #   sqlalchemy.url 留空——URL 由 migrations/env.py 从应用配置链解析
 ├── migrations/                  # Alembic 迁移：env.py（import app.models.domain 收集 SQLModel.metadata 作
 │                                #   target_metadata；URL 走 AppConfig → DatabaseFactory → engine.url，不手工拼）
-│                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表）
+│                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表（现 10 张——agent↔KB 绑定表已于 2026-09-02 移除））
 ├── docker-compose.yaml          # Middleware stack: PostgreSQL + Weaviate + RustFS + Redis (local dev)
 ├── .python-version              # 3.12
 ├── .env                         # 环境变量：APP_ENV、SQLITE_DB_PATH、WEAVIATE_*、DEEPSEEK_API_KEY、OPENAI_API_KEY（占位，OpenAI 兼容网关）、MINERU_API_KEY
@@ -54,6 +54,10 @@ server/                          # this directory is its own git repo (the works
 │                              #   （纯 ASGI:请求计数/时延直方图/在途 Gauge,handler=路由模板,404 落 unmatched）; v1/endpoints/ — agentic.py -> POST /agentic/run (StreamingResponse)
 │                              #   + POST /agentic/run/cancel 显式取消（fire thread 作用域取消信号，幂等）
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
+│                              #   + GET /agentic/agents 智能体目录（id/展示名/描述/
+│                              #   supportsVision——经 orchestration.AgentCatalogService 读
+│                              #   AGENT_REGISTRY 实例探测图片能力，默认智能体排首位；前端选择 UI
+│                              #   消费，选中项经 run 请求 forwardedProps.agentId 绑定/切换会话智能体）
 │                              #   + GET /agentic/tool-catalog 工具能力目录（组件 → 工具的名/
 │                              #   中文展示标题/描述/参数 schema——经 orchestration.ToolCatalogService
 │                              #   读静态注册表序列化，前端 UI 标识化消费）;
@@ -66,10 +70,9 @@ server/                          # this directory is its own git repo (the works
 │                              #   deps.py -> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
 │                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
-│                              #   （agentic/knowledge/agent_knowledge/memory 组，/auth、/health 公开）；
+│                              #   （agentic/knowledge/memory 组，/auth、/health 公开）；
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传——端点透传 UploadFile
 │                              #   底层流，服务层流式转存对象存储边计数/摘要，不整读入内存，文件落 rustfs）;
-│                              agent_knowledge.py -> /agent/{agent_id}/knowledge 绑定管理（GET/PUT 全量替换）;
 │                              memory.py -> /memory/graph 记忆图快照（at 参数做时点回放，
 │                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
 │                              + POST/PATCH/DELETE /memory/statements、PATCH/POST/DELETE
@@ -134,7 +137,7 @@ server/                          # this directory is its own git repo (the works
 │                            #   + attachments.py 附件对象存储门面（key 布局/上传校验/
 │                            #   预签名，多模态图片输入的分域读路径归属）
 │                            #   + multimodal.py 存储形态↔LangChain 块的唯一翻译点）、
-│                            #   knowledge/（KB/document/ingestion/binding 服务 +
+│                            #   knowledge/（KB/document/ingestion 服务 +
 │                            #   object_store/support 纯函数/document_chunker）与 memory/
 │                            #   （记忆向量适配器 MemoryVectorIndex+collection 显式 schema）
 ├── models/
@@ -146,7 +149,7 @@ server/                          # this directory is its own git repo (the works
 │   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
 │   │                        #   迁移回填存量数据的不可登录占位用户）
 │   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
-│                             #   knowledge_agent_binding (agent↔KB); KnowledgeStatus enum; segment.id doubles
+│                             #   KnowledgeStatus enum; segment.id doubles
 │                             #   as the Weaviate object UUID; knowledge_base 带 user_id（FK→users，属主）+
 │                             #   is_public（公开/私有标识，缺省私有），name 唯一性为每用户复合唯一 (user_id, name)
 │   └── domain/memory/       # 记忆 v2 双层图谱四表: entity / statement(双时间轴·SUPERSEDED 不删除可回放)
@@ -155,7 +158,6 @@ server/                          # this directory is its own git repo (the works
 │                             #   episode 继承）；向量侧每用户一 collection Memory_{uid.hex}
 ├── repositories/            # Data-access (@injectable) — ConversationRepository,
 │                             #   UserRepository, KnowledgeBaseRepository, KnowledgeDocumentRepository (docs+segments),
-│                             #   KnowledgeBindingRepository
 └── infrastructures/         # Shared drivers: llm/ (ModelFactory + ModelBuilder registry), db/ (DatabaseFactory +
                                  #   DatabaseBuilder registry — sqlite / postgresql via psycopg3, create_default_db
                                  #   singleton Engine), document_parser/ (DocumentParserFactory + DocumentParserBuilder
@@ -289,7 +291,7 @@ Server layer rules:
   ```
 
   补充约束：① domain 禁止 import orchestration/components/agents/api——领域需要的外部事实用端口倒置（如
-  `knowledge/ports.py` 的 `AgentCatalog`，实现在 agents 层 `catalog.py` 以 `as_type` 回填）；
+  无——各域端口协议住领域层，实现由外层以 `as_type` 回填，如 memory 的 `MemoryEditor`/`MemoryGraphReader`）；
   ② 编排不触碰 repositories（持久化一律经领域服务门面，如 `ConversationService` 是
   会话持久化规则的唯一归属）；③ 写入型组件工具必须过领域服务以遵守业务规则；
   检索组件消费领域向量适配器走的就是合法的 components→domain 边；④ services 根
@@ -364,7 +366,7 @@ Server layer rules:
   chunks into ag-ui events; it is the only place that should know both shapes.
 - **knowledge domain split** → 管理侧在 `services/domain/knowledge/`（one service per
   aggregate root + pipeline: `KnowledgeBaseService` / `KnowledgeDocumentService` /
-  `DocumentIngestionService` / `KnowledgeBindingService`），检索能力在
+  `DocumentIngestionService`），检索能力在
   `components/knowledge/`（拓扑见「服务层两层制」箭头表——检索编排既要被 agent
   工具消费又要碰 repositories/infra 与领域向量适配器，放 components 成环风险最小）。
   知识库归属与可见性：knowledge_base 带 user_id（端点层 UserPrincipal 注入）与
@@ -372,9 +374,8 @@ Server layer rules:
   可见，写路径（更新/删除/启停/上传/文档写/retry）经 `support.require_owned_kb`
   仅属主可操作，他人资源一律 404 不泄露存在性（与会话归属同口径）；名称唯一性每
   用户一作用域（`get_kb_by_name(name, user_id)` + 复合唯一索引）；Celery 摄取
-  （`process_document`）无身份上下文，仍走存在性锚定 `require_kb`；绑定管理
-  （`/agent/{agent_id}/knowledge`）仅要求登录——agent↔KB 绑定仅存于管理面，
-  **检索侧不消费绑定**：`knowledge_list`/`knowledge_search` 按归属可见性圈定
+  （`process_document`）无身份上下文，仍走存在性锚定 `require_kb`。
+  `knowledge_list`/`knowledge_search` 按归属可见性圈定
   （私有=属主本人 + 公开库，走 `KnowledgeBaseRepository.list_visible_kbs`，
   身份经 langgraph `configurable.user_id` 注入读取）。
   向量细节统一收敛在领域侧 `services/domain/knowledge/vector_index.py`
@@ -411,8 +412,8 @@ Server layer rules:
   `support.py`（状态机/上传策略；`complete_document` 在文档就绪时把 KB 从
   pending 提升为 ready——启用闸门要求），repos 按聚合拆分
   (`KnowledgeDocumentRepository` 管分段 + 跨聚合 `doc_num` 计数同事务；
-  `KnowledgeBindingRepository` 全量替换语义)。删库三段式第二步 = drop
-  collection + 清绑定行（不再全量分段 id 逐批删）。
+  段式删行同事务)。删库三段式第二步 = drop
+  collection（不再全量分段 id 逐批删）。
 - **core/logging** → unified logging on top of **loguru**, wrapped by the
   `AppLogger` ABC (`base.py`) whose method surface mirrors stdlib
   `logging.Logger` (lazy `%`-formatting, `exc_info`, `extra`, `exception`,
@@ -825,7 +826,7 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   ① **JWT 认证走 FastAPI 依赖而非中间件**：`api/deps.py` 的 `require_user`
   无状态验签（不查库）产出 `UserPrincipal(user_id, username)`，按 router
   在 `cmd/http/main.py` 的 `include_router` 处声明式挂载
-  （agentic/knowledge/agent_knowledge/memory 组），
+  （agentic/knowledge/memory 组），
   `/auth`、`/health` 公开——无路径白名单。不用中间件的
   原因：现有 `api/middleware.py` 是纯 ASGI 且在全局异常处理器之外，401 得
   手写信封（BodySize 的 413 直发同因）；`BaseHTTPMiddleware` 对 SSE 有缓冲风险。
@@ -850,9 +851,8 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   保持迁移前全员可见行为）；读路径 `require_visible_kb`（属主或公开）、
   写路径 `require_owned_kb`（仅属主，公开不让渡管理权），他人资源 404 不
   泄露存在性；名称唯一性每用户一作用域（复合唯一 `(user_id, name)`）；
-  Celery 摄取无身份走 `require_kb` 存在性锚定；绑定管理仅要求登录（绑定仅存
-  于管理面；检索工具 `knowledge_list`/`knowledge_search` 按归属可见性圈定，
-  不消费绑定）。前端配套：zustand auth-store（localStorage 持久化）+ axios 请求
+  Celery 摄取无身份走 `require_kb` 存在性锚定；检索工具
+  `knowledge_list`/`knowledge_search` 按归属可见性圈定。前端配套：zustand auth-store（localStorage 持久化）+ axios 请求
   拦截器注 Bearer + 401 登出跳转 + HttpAgent fetch 覆盖（SSE 401 在 200 头
   之后只能 fetch 层拦截）。
 - **builtin:rag（自建 LangGraph 图智能体）** → 与 `create_agent` 预置 ReAct

@@ -185,6 +185,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `GET` | `/agentic/conversation/{thread_id}` | 会话详情 |
 | `GET` | `/agentic/conversation/{thread_id}/history` | 会话历史消息 |
 | `DELETE` | `/agentic/conversation/{thread_id}` | 删除会话(硬删除,连同轮次/消息;长期记忆保留) |
+| `GET` | `/agentic/agents` | 智能体目录(id/展示名/描述/是否支持图片,默认智能体排首位;前端选择 UI 消费,选中项经 run 请求 `forwardedProps.agentId` 上送绑定/切换会话智能体) |
 | `GET` | `/agentic/tool-catalog` | 工具能力目录(组件 → 工具的名/中文展示标题/描述/参数 schema,供前端 UI 标识化) |
 | `POST` / `GET` | `/knowledge` | 创建(可带 `isPublic`,缺省私有) / 分页列出知识库(属主或公开库) |
 | `GET` / `PATCH` / `DELETE` | `/knowledge/{kb_id}` | 知识库详情 / 更新 / 删除 |
@@ -194,7 +195,6 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `GET` / `PATCH` / `DELETE` | `/knowledge/{kb_id}/document/{doc_id}` | 文档详情 / 更新 / 删除 |
 | `POST` | `/knowledge/{kb_id}/document/{doc_id}/retry` · `/enable` · `/disable` | 重试 / 启停文档 |
 | `GET` | `/knowledge/{kb_id}/document/{doc_id}/file` | 下载源文件 |
-| `GET` / `PUT` | `/agent/{agent_id}/knowledge` | 查看 / 全量替换 agent↔知识库绑定 |
 | `GET` | `/memory/graph` | 记忆图快照(`at` 做时点回放,含已取代历史) |
 | `POST` | `/memory/statements` | 手工补充事实(origin=MANUAL,抽取裁决恒不取代) |
 | `PATCH` / `DELETE` | `/memory/statements/{ref}` | 取代式纠正(旧行 SUPERSEDED 新行接续) / 归档(软删可回放) |
