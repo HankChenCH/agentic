@@ -5,11 +5,13 @@
 """
 
 from .agentic_service import AgenticService
+from .agent_catalog import AgentCatalogService
 from .tool_catalog import ToolCatalogService
 from .turn_finalizer import TurnFinalizer
 from .translator import AgUiTranslator, StorageTranslator
 
 __all__ = [
+    "AgentCatalogService",
     "AgUiTranslator",
     "AgenticService",
     "StorageTranslator",

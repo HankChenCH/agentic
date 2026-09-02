@@ -62,6 +62,24 @@ class ConversationRepository:
 
         return conversation
 
+    def update_agent_binding(self, thread_id: UUID, user_id: UUID, agentic_id: str) -> AgenticConversation:
+        """切换会话绑定的智能体（归属内强制：他人会话按不存在处理返回 None 语义
+        由上层前置比对，这里带 user_id 条件双保险）。"""
+        with Session(self.engine, expire_on_commit=False) as session:
+            conversation = session.exec(
+                select(AgenticConversation).where(
+                    AgenticConversation.thread_id == thread_id,
+                    AgenticConversation.user_id == user_id,
+                )
+            ).first()
+            if conversation is None:
+                raise ValueError(f"conversation not found: {thread_id}")
+            conversation.agentic_id = agentic_id
+            session.add(conversation)
+            session.commit()
+            session.refresh(conversation)
+        return conversation
+
     def store_conversation(self, conversation: AgenticConversation) -> AgenticConversation:
         with Session(self.engine, expire_on_commit=False) as session:
             session.add(conversation)

@@ -44,6 +44,8 @@ class RagAgent(BaseAgent):
     """内置 RAG 智能体（自建 StateGraph：理解 → 检索 → 过滤 → 引用生成）。"""
 
     agentic_id = "builtin:rag"
+    display_name = "知识库问答"
+    description = "基于知识库检索的问答助手，回答附带溯源引用（本期不支持图片输入）"
 
     def __init__(self, model, toolbox: AgentToolbox):
         # 检索门面在 build_graph 之前取好（构造顺序与 BaseAgent 同约束）

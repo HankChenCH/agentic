@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Optional, Union
 
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -80,6 +80,10 @@ class RunRequest(BaseModel):
     threadId: UUID = Field(..., description="会话标识")
     runId: str = Field(..., description="会话轮次标识", min_length=1, max_length=36)
     messages: List[RunMessage] = Field(..., description="消息列表")
+    # ag-ui 协议的透传字段（客户端 @ag-ui/client 会合并 forwardedProps 进请求体）：
+    # 本项目消费 ``agentId``——前端选择 UI 指定本轮绑定的智能体，缺省沿用会话
+    # 现有绑定（新建会话则用全局默认）。协议字段为 any，这里只收 dict 平铺形态。
+    forwardedProps: Optional[dict] = Field(None, description="客户端透传字段（消费 agentId）")
 
 class CancelRequest(BaseModel):
     # 显式取消按 thread 作用域：一个会话同一时刻只有一个活跃轮次，前端

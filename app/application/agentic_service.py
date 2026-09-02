@@ -55,17 +55,22 @@ class AgenticService:
         self._active_lock = threading.Lock()
         self._active_runs: Counter[UUID] = Counter()
 
-    def run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict]):
+    def run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict], agent_id: str | None = None):
         """公共入口：登记在途 run（供优雅关闭取消）后委托 _stream_run 行程。
         finally 兜底注销——含 GeneratorExit/异常路径。
 
         ``message_content`` 为存储形态的内容数组（端点经 RunMessage 归一，
         含 text/image part）；纯文本消息是单 text part 的退化形态。
+        ``agent_id`` 为前端显式指定的智能体（forwardedProps.agentId）：
+        未注册的 id 记警告后忽略（与工厂回退默认同口径，不炸流）。
         """
+        if agent_id is not None and not self.agent_factory.is_registered(agent_id):
+            self.logger.warning("run 请求指定了未注册的智能体，忽略: %s", agent_id)
+            agent_id = None
         with self._active_lock:
             self._active_runs[thread_id] += 1
         try:
-            yield from self._stream_run(user_id, thread_id, run_id, message_content)
+            yield from self._stream_run(user_id, thread_id, run_id, message_content, agent_id)
         finally:
             with self._active_lock:
                 self._active_runs[thread_id] -= 1
@@ -89,7 +94,7 @@ class AgenticService:
             self.logger.info("优雅关闭：已为 %d 个在途 run 发出取消标志", len(thread_ids))
         return len(thread_ids)
 
-    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict]):
+    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict], agent_id: str | None):
         now = datetime.fromtimestamp(time())
 
         # 双翻译共存于同一次 interleave 遍历：
@@ -107,8 +112,9 @@ class AgenticService:
         turn: AgenticConversationTurn | None = None
         storage_translator = None
         try:
-            # 初始化会话（get-or-create + 归属校验）、会话轮次（create），并存储用户消息
-            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content)
+            # 初始化会话（get-or-create + 归属校验，显式 agentId 切换绑定）、
+            # 会话轮次（create），并存储用户消息
+            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content, agent_id=agent_id)
             storage_translator = StorageTranslator(thread_id=thread_id, turn_id=turn.turn_id)
 
             # 智能体实例由智能体层工厂创建（按会话绑定的 agentic_id，未注册回退默认）

@@ -8,7 +8,7 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.services import AgenticService, ConversationService, ToolCatalogService
+from app.services import AgentCatalogService, AgenticService, ConversationService, ToolCatalogService
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.request.run import CancelRequest, RunRequest
@@ -94,6 +94,13 @@ def delete_conversation(
 ):
     return Response.success(conversations.delete_conversation(user_id=principal.user_id, thread_id=thread_id)).to_dict()
 
+@router.get("/agents")
+def list_agents(catalog: Injected[AgentCatalogService]):
+    # 智能体目录（id/展示名/描述/图片能力）：前端选择 UI 消费，选中项经 run
+    # 请求的 forwardedProps.agentId 上送绑定。目录与用户无关，认证由 router
+    # 级依赖统一覆盖，端点无需 principal。
+    return Response.success(catalog.describe()).to_dict()
+
 @router.get("/tool-catalog")
 def get_tool_catalog(catalog: Injected[ToolCatalogService]):
     # 工具能力目录（组件 → 工具的名/展示标题/描述/参数 schema）：前端 UI 标识化
@@ -110,7 +117,14 @@ def run(
     # service.run() 已输出 SSE 帧（"data: {...}\n\n"），endpoint 纯透传。
     # 多轮历史以服务端（库）为准：请求只取末条用户消息作为当前提问，payload 历史不回放。
     # content 经 RunMessage 归一为存储形态内容数组（纯文本 = 单 text part 的退化形态）。
-    events = service.run(principal.user_id, request.threadId, request.runId, request.messages[-1].storage_content())
+    # forwardedProps.agentId：前端选择的智能体（缺省/未知由编排层回退会话绑定）。
+    forwarded = request.forwardedProps or {}
+    agent_id = forwarded.get("agentId")
+    events = service.run(
+        principal.user_id, request.threadId, request.runId,
+        request.messages[-1].storage_content(),
+        agent_id=agent_id if isinstance(agent_id, str) and agent_id else None,
+    )
     return ClosingStreamingResponse(_stream_and_close(events), media_type="text/event-stream")
 
 @router.post("/run/cancel")

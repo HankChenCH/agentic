@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.exceptions import ConversationNotFoundError
 from app.models.domain.agentic import (
+    AgenticConversation,
     AgenticConversationMessage,
     AgenticConversationTurn,
     AgenticTurnStatus,
@@ -67,6 +68,32 @@ def test_open_turn_persists_conversation_turn_and_user_message(service, engine):
     assert len(messages) == 1
     assert messages[0].sequence_num == 0
     assert messages[0].content == [{"type": "text", "text": "你好"}]
+
+
+def test_open_turn_agent_binding_switch(service, engine):
+    """显式 agentId：新建绑定、缺省沿用、显式不同切换（前端选择智能体的落库口径）。"""
+    thread_id = uuid4()
+
+    # 新建会话：显式指定即绑定
+    conversation, _ = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-1", content=_text("你好"), agent_id="builtin:rag",
+    )
+    assert conversation.agentic_id == "builtin:rag"
+
+    # 缺省：沿用现有绑定，不改写
+    conversation, _ = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-2", content=_text("继续"))
+    assert conversation.agentic_id == "builtin:rag"
+
+    # 显式切换：本轮即生效并落库
+    conversation, _ = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-3", content=_text("换人"), agent_id="builtin:demo",
+    )
+    assert conversation.agentic_id == "builtin:demo"
+    with Session(engine) as session:
+        row = session.exec(
+            select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+        ).first()
+        assert row.agentic_id == "builtin:demo"
 
 
 def test_cancel_flag_roundtrip_and_open_turn_clears_it(engine):

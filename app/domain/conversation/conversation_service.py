@@ -53,7 +53,7 @@ class ConversationService:
 
     # ---- run 行程所需写路径（编排层准备段 / 收尾段下沉）----
 
-    def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, content: List[dict]) -> Tuple[AgenticConversation, AgenticConversationTurn]:
+    def open_turn(self, user_id: UUID, thread_id: UUID, run_id: str, content: List[dict], agent_id: str | None = None) -> Tuple[AgenticConversation, AgenticConversationTurn]:
         """get-or-create 会话（默认智能体兜底）+ 创建轮次 + 落库本轮用户消息。
 
         归属规则：会话已存在且属于他人时按不存在处理（404，不泄露存在性），
@@ -61,6 +61,9 @@ class ConversationService:
         续聊或注入消息。
         ``content`` 为存储形态的内容数组（端点已从 ag-ui 载荷归一，含
         text/image part；见 multimodal.py），原样落库。
+        ``agent_id``：前端显式指定的智能体（编排层已校验注册）——新建会话
+        用它绑定，已有会话显式不同则切换绑定（本轮即生效）；缺省沿用
+        会话现有绑定/全局默认，不做任何改写。
         """
         # 防御性清理遗留取消标志（上轮取消后 TTL 内残留会误杀本轮；正常收尾
         # 后标志本就应不存在，此处是无条件兜底）。清理失败不阻断开轮。
@@ -71,10 +74,14 @@ class ConversationService:
         conversation = self.conversation_repo.init_conversation(
             user_id=user_id,
             thread_id=thread_id,
-            agentic_id=self.app_config.default_agentic_id,
+            agentic_id=agent_id or self.app_config.default_agentic_id,
         )
         if conversation.user_id != user_id:
             raise ConversationNotFoundError("conversation not found")
+        if agent_id is not None and conversation.agentic_id != agent_id:
+            conversation = self.conversation_repo.update_agent_binding(
+                thread_id=thread_id, user_id=user_id, agentic_id=agent_id,
+            )
         turn = self.conversation_repo.create_conversation_turn(conversation=conversation, run_id=run_id, turn_id=uuid4())
         self.conversation_repo.store_conversation_message(AgenticConversationMessage(
             thread_id=conversation.thread_id,

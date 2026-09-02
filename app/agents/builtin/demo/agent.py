@@ -13,6 +13,8 @@ class DemoAgent(BaseAgent):
     """内置演示智能体：通用助手 + 天气查询 + 记忆召回 + 知识库检索工具。"""
 
     agentic_id = "builtin:demo"
+    display_name = "演示助手"
+    description = "通用对话助手，携带天气查询、长期记忆与知识库检索工具"
 
     def build_system_prompt(self) -> str:
         return SYSTEM_PROMPT

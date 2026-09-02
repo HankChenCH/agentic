@@ -73,6 +73,11 @@ class BaseAgent(ABC):
     ``build_tools`` 传参即可，不必新建智能体类。
     """
 
+    # 展示元数据：目录端点（GET /agentic/agents）消费的纯展示字段，
+    # 不进 LLM schema、不参与运行时行为（title 口径对齐组件 manifest）
+    display_name: ClassVar[str]
+    description: ClassVar[str]
+
     agentic_id: ClassVar[str]  # <agent_type:agent_name>，eg "builtin:demo"
     preferred_provider: ClassVar[str | None] = None
 
@@ -258,5 +263,11 @@ AGENT_REGISTRY: dict[str, type[BaseAgent]] = {}
 
 
 def register_agent(agent_cls: type[BaseAgent]) -> type[BaseAgent]:
+    # 展示元数据 fail-fast（对齐组件 manifest 的注册期校验风格）：
+    # 目录端点的消费方是前端选择 UI，缺名/缺描述直接漏展示
+    if not (agent_cls.display_name or "").strip() or not (agent_cls.description or "").strip():
+        raise ValueError(
+            f"agent {agent_cls.agentic_id} must declare non-empty display_name and description"
+        )
     AGENT_REGISTRY[agent_cls.agentic_id] = agent_cls
     return agent_cls

@@ -39,6 +39,18 @@ class AgentFactory:
     def default_agentic_id(self) -> str:
         return self.app_config.default_agentic_id
 
+    def is_registered(self, agentic_id: str) -> bool:
+        """id 是否已注册（只查注册表，不触发实例化）。"""
+        return agentic_id in AGENT_REGISTRY
+
+    def registered_ids(self) -> list[str]:
+        """已注册智能体 id 清单（注册表顺序，供目录类消费方枚举）。"""
+        return list(AGENT_REGISTRY)
+
+    def agent_class(self, agentic_id: str) -> type[BaseAgent] | None:
+        """取注册类（不实例化）；未注册返回 None。"""
+        return AGENT_REGISTRY.get(agentic_id)
+
     def create(self, agentic_id: str | None = None) -> BaseAgent:
         agent_cls = self._resolve(agentic_id)
         if agent_cls.agentic_id not in self._agent_cache:
