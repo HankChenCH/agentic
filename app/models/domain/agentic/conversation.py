@@ -139,6 +139,8 @@ class AgenticConversationMessage(TimeFieldMixin, SQLModel, table=True):
     turn: "AgenticConversationTurn" = Relationship(back_populates="messages", sa_relationship_kwargs={"lazy": "selectin"})
 
     message_id: UUID = Field(
+        unique=True,
+        index=True,  # parent_message_id 自引用外键的指向列，PostgreSQL 要求唯一索引
         title="消息id",
         description="消息id",
     )

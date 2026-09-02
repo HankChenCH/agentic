@@ -105,6 +105,19 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f('ix_memory_episode_occurred_at'), ['occurred_at'], unique=False)
         batch_op.create_index(batch_op.f('ix_memory_episode_thread_id'), ['thread_id'], unique=False)
 
+    # 自引用外键（parent_message_id → message_id）按方言分叉：SQLite 不校验被
+    # 引用列的唯一性、且不支持 ALTER 语句挂约束，随建表内联声明；PostgreSQL
+    # 在 CREATE TABLE 时刻即校验被引用列唯一性，先建表 + message_id 唯一索引，
+    # 再由下方 create_foreign_key 补挂。
+    on_sqlite = op.get_bind().dialect.name == "sqlite"
+    message_constraints = [
+        sa.ForeignKeyConstraint(['turn_id'], ['agentic_conversation_turn.turn_id'], ),
+        sa.PrimaryKeyConstraint('id')
+    ]
+    if on_sqlite:
+        message_constraints.append(
+            sa.ForeignKeyConstraint(['parent_message_id'], ['agentic_conversation_message.message_id'], ),
+        )
     op.create_table('agentic_conversation_message',
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
@@ -119,13 +132,18 @@ def upgrade() -> None:
     sa.Column('content', sa.JSON(), nullable=False),
     sa.Column('token_usage', sa.JSON(), nullable=False),
     sa.Column('latency_ms', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['parent_message_id'], ['agentic_conversation_message.message_id'], ),
-    sa.ForeignKeyConstraint(['turn_id'], ['agentic_conversation_turn.turn_id'], ),
-    sa.PrimaryKeyConstraint('id')
+    *message_constraints,
     )
     with op.batch_alter_table('agentic_conversation_message', schema=None) as batch_op:
         batch_op.create_index(batch_op.f('ix_agentic_conversation_message_thread_id'), ['thread_id'], unique=False)
         batch_op.create_index(batch_op.f('ix_agentic_conversation_message_turn_id'), ['turn_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_agentic_conversation_message_message_id'), ['message_id'], unique=True)
+    if not on_sqlite:
+        op.create_foreign_key(
+            'fk_conversation_message_parent_message_id',
+            'agentic_conversation_message', 'agentic_conversation_message',
+            ['parent_message_id'], ['message_id'],
+        )
 
     op.create_table('knowledge_agent_binding',
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
@@ -263,6 +281,7 @@ def downgrade() -> None:
     with op.batch_alter_table('agentic_conversation_message', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_agentic_conversation_message_turn_id'))
         batch_op.drop_index(batch_op.f('ix_agentic_conversation_message_thread_id'))
+        batch_op.drop_index(batch_op.f('ix_agentic_conversation_message_message_id'))
 
     op.drop_table('agentic_conversation_message')
     with op.batch_alter_table('memory_episode', schema=None) as batch_op:
