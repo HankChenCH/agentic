@@ -1,0 +1,27 @@
+# 版本控制与文档
+.git/
+.github/
+.gitignore
+AGENTS.md
+README.md
+docs/
+
+# 本机产物、缓存与本地数据，绝不进镜像
+.venv/
+data/
+runtime/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+*.pyc
+
+# 密钥：内含真实 API key，禁止打进镜像（容器一律经环境变量注入）
+.env
+
+# 单元测试（运行镜像不需要；uv sync --no-dev 也不会装 pytest）
+tests/
+
+# 构建自身与中间件编排（compose 只含 postgres/weaviate/rustfs/redis）
+Dockerfile
+.dockerignore
+docker-compose.yaml
