@@ -1,0 +1,48 @@
+# agentic-client 静态站点 + 同源反代（envsubst 模板：${BACKEND_URL} 来自容器环境变量）
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 与后端上传口径对齐（run 1 MiB / multipart 64 MiB，经 /api 反代时在此放开）
+    client_max_body_size 64m;
+
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/xml image/svg+xml;
+
+    # vite 产物带内容哈希 → 长缓存
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # SPA 路由回退（/、/chat/:threadId、/admin/*、/login 全是前端路由）
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 入口文档不缓存，保证发版即生效
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    # 同源反代模式：构建时 VITE_API_BASE=/api，前端全部请求落在 /api/ 下，
+    # 这里去掉前缀转发给后端（后端端点均挂顶级路径：/agentic... /knowledge... /auth... /memory...）
+    location /api/ {
+        proxy_pass ${BACKEND_URL}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE（POST /agentic/run）：禁缓冲 + 长读超时，事件才能逐帧到达浏览器
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
