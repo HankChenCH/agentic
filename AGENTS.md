@@ -100,8 +100,9 @@ server/                          # this directory is its own git repo (the works
     ├── exceptions/              # Business exceptions, user-defined per domain (subclass core's BusinessError):
     │                            #   conversation 1xxx / agent 2xxx / memory 3xxx / knowledge 4xxx
 ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents
-│                            #   (builtin/{demo,rag}/ 一 agent 一包；rag 为自建 StateGraph，
-│                            #   见 Gotchas「builtin:rag」) + middleware.py（动态 system
+│                            #   (builtin/{demo,rag}/ 一 agent 一包：均与 create_agent ReAct
+│                            #   循环直接组合、按组件装配工具面，见 Gotchas「builtin 智能体
+│                            #   工具面」) + middleware.py（动态 system
 │                            #   prompt：PromptTemplate 模板槽位 + 片段渲染中间件）
 ├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
 │                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
@@ -387,7 +388,7 @@ Server layer rules:
   （`list_visible_knowledge`/`search_for_user`）→enabled 收敛→
   嵌入模型一致性守卫（`KnowledgeBase.embedding_model` 的消费者）→文档 enabled 后滤→
   双通道召回 + RRF 融合（通道 A = 混合检索候选，默认
-  alpha=`DEFAULT_HYBRID_ALPHA`=0.5——工具与 builtin:rag 检索节点同管线；
+  alpha=`DEFAULT_HYBRID_ALPHA`=0.5，工具缺省即走该值；
   通道 B = 命中邻域扩展，经 `list_segments_by_doc` 按 position 取前后段，
   邻段双通道在榜即互证加分；RRF 排名融合只此一处，展示分与排序解耦——
   score=混合检索分，纯邻段命中继承种子分）→溯源组装；
@@ -460,7 +461,7 @@ Server layer rules:
   互斥项自动对齐——`function_calling`/`json_schema`（后者被 langchain-deepseek
   重映射为前者）为强制 tool_choice 通道，与思考模式互斥（400）→ 关思考副本
   执行；`json_mode` 走 response_format，思考兼容无需关思考。调用方不指定
-  method（记忆抽取/裁决、RAG understand/grade），规则归属供应商模型类；`deepseek-*` via `DEEPSEEK_API_KEY`,
+  method（记忆抽取/裁决），规则归属供应商模型类；`deepseek-*` via `DEEPSEEK_API_KEY`,
   `openai-chat`/`openai-embedding` via `OPENAI_API_KEY` for
   OpenAI-compatible gateways——这两条 entry 当前在 `llm.yaml` 中
   **注释未启用**（代码侧 openai builder 已注册，启用时取消注释即可）, `ollama-embedding` (bge-m3) is local —
@@ -542,9 +543,8 @@ Server layer rules:
   快速上下文注入的读路径装配归 agent 层：BaseAgent 默认 `prompt_fragments` 的
   memory 片段经 `agents/middleware.py` 的动态 prompt 中间件把快注块渲染进
   模板 `{memory}` 槽（每次模型调用；人设模板在各 agent 的 prompts.py，
-  占位符覆盖/空节移除/片段降级语义见 middleware 模块注释；RAG 因图节点按
-  文本渲染历史，在其 `_input` 折进末条用户消息）。轮次收尾不在 v1 能力范式内：
-  编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
+  占位符覆盖/空节移除/片段降级语义见 middleware 模块注释）。轮次收尾不在
+  v1 能力范式内：编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
   `MemoryConsolidationService`）。
 - **repositories** → data access for the conversation domain (`@injectable`),
   backed by the injected SQLAlchemy `Engine` (SQLModel sessions).
@@ -687,8 +687,7 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   天然失配按 404 处理。⑥ 部署形态：rustfs 直连（含 dev）不配
   `RUSTFS_PUBLIC_ENDPOINT`，签名与读写同实例；rustfs 藏反代后配置
   public endpoint，签名走专用 S3Store（SigV4 签 host+path，代理须原样
-  透传 host+path——子路径形态不可剥离前缀）。⑦ `builtin:rag` 因历史折叠
-  为纯文本，本期不支持图片（静默忽略，消息仍落库展示）；已知后续项：
+  透传 host+path——子路径形态不可剥离前缀）。已知后续项：
   会话删除不清理附件孤儿对象、知识库 PDF 下载未迁移预签名、智能体能力
   描述接口（前端按能力屏蔽上传入口）。
 - SSE (`/agentic/run`) is **outside** the global exception handlers: once the
@@ -807,9 +806,7 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   messages; fragment failure/empty degrades to dropping the section) — pure
   SQL scoring, no LLM/embedding — a stable top-10 standing digest: it neither
   skips session-fed ids nor bumps access counts, but still marks ids so deep
-  tools return only增量; `builtin:rag` folds the block into the last user
-  message since its nodes render history as text and would drop a
-  SystemMessage); deep recall = three tools (`timeline`/`expand`/`state_at`,
+  tools return only增量. Deep recall = three tools (`timeline`/`expand`/`state_at`,
   declared and built in `components/memory/manifest.py`, reading the current
   thread from the langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
   into `configurable`, and tools declare a `config: RunnableConfig` param that
@@ -855,35 +852,28 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   `knowledge_list`/`knowledge_search` 按归属可见性圈定。前端配套：zustand auth-store（localStorage 持久化）+ axios 请求
   拦截器注 Bearer + 401 登出跳转 + HttpAgent fetch 覆盖（SSE 401 在 200 头
   之后只能 fetch 层拦截）。
-- **builtin:rag（自建 LangGraph 图智能体）** → 与 `create_agent` 预置 ReAct
-  循环的关键差异与机制（包在 `app/agents/builtin/rag/`：state/prompts/nodes/
-  graph/stream/agent）：
-  - **图拓扑**：understand（一次结构化调用双职：chitchat/knowledge 分路 + 多轮
-    凝练 standalone question）→ retrieve（`KnowledgeRetrievalService`，alpha=0.5
-    混合、top_k=6）→ grade（一次结构化调用批量二元过滤）→ generate（带 [n] 引用，
-    chitchat 路由无资料直答）；grade 后未命中走 rewrite → retrieve 唯一循环边
-    （配额 1 次），用尽走 fallback（LLM 硬约束兜底话术，保证流式/落库路径统一）。
-    状态是显式 `RagState` TypedDict（`_input` 整体初始化），recursion_limit=12，
-    无 checkpointer。
-  - **中间调用抑制**：understand/grade/rewrite 的 LLM 调用（含
-    `with_structured_output` 的内部调用——它同样进 messages 通道且 node 归属
-    当前图节点）不进 UI 不落库：`RagRunStream` 包装 `interleave`，按
-    `ChatModelStream.node` ∈ `INTERNAL_LLM_NODES` 滤除。跳过项不消费投影也不卡
-    泵（mux 自驱拉流，投影仅缓冲）。generate/fallback 正常外流——invoke 靠
-    generate/fallback 向 state.messages 追加 AIMessage 兼容基类取尾逻辑。
-  - **检索步骤可见性**：图无模型发起的工具调用，原生 tools stream mode 恒空；
-    retrieve 节点内 `get_stream_writer()` 发 tool-started/tool-result/
-    tool-finished（tool 名复用 `knowledge_search`，result 内容经
-    `render_search_result` 与工具同一 JSON），`ToolEventsTransformer`
-    （required_stream_modes=("custom",) + `StreamChannel("tools")`）接进 tools
-    通道——AgUiTranslator/前端/落库零改动。`StorageTranslator` 相应把
-    tool-started 落 TOOL_CALL 行（按 tool_call_id 与模型 tool_call 去重，args
-    取事件可选字段），否则 RAG 轮只剩孤儿 TOOL_RESULT 行。
-  - **历史注入**：`RagAgent._input` 滤除历史中的 ToolMessage 与带 tool_calls 的
-    AIMessage（凝练上下文只需 user/assistant 文本），检索痕迹不进下一轮 LLM
-    上下文；时间前缀注入与 `BaseAgent._input` 同口径。
-  - 检索异常降级：retrieve 捕获异常发 tool-error 并按未命中继续（改写重试→兜底），
-    不炸整轮流（`KnowledgeVectorIndex.search` 自身已吞异常，此处兜服务层故障）。
+- **builtin 智能体工具面（builtin:demo / builtin:rag）** → 两个内置智能体均
+  与 `create_agent` 预置 ReAct 循环直接组合（一 agent 一包，仅声明人设模板
+  与工具面，机制归 BaseAgent；包在 `app/agents/builtin/{demo,rag}/`：
+  agent.py + prompts.py）：
+  - **工具面按组件划分**（`AgentToolbox.tools(agentic_id, only={组件名})`，
+    2026-09-02 拆分）：
+    `builtin:demo` = 记忆三件套 + 演示工具 `get_weather`（回归通用演示职责）；
+    `builtin:rag` = 知识四件 + 记忆三件套（检索问答职责）。快注块都经默认
+    `{memory}` 槽注入；工具工作流引导（先 list 后 search、kb_ids 硬闸、
+    [index] 引用）随各工具 description 走，人设零工具名。
+  - **引用与兜底**：rag 的 [n] 角标溯源与「未检索到如实说明」约束在人设与
+    `knowledge_search` 工具 description 双侧；查询凝练/相关性取舍/改写重试
+    /闲聊不检索等闭环由模型在工具循环内自主完成（原自建图的固定节点职责
+    全部移交）；检索管线不变——`KnowledgeRetrievalService.search_for_user`
+    （alpha=0.5 混合 + RRF 融合），top_k 走工具默认 4。
+  - **历史形态**：2026-09-02 前 builtin:rag 曾是自建 StateGraph（understand→
+    retrieve→grade→generate + rewrite/fallback，无工具挂载、内部 LLM 调用
+    滤除、伪工具事件进 tools 通道、快注折进末条用户消息、recursion_limit=12
+    ——相关机件 state/graph/nodes/stream 已随重构删除）。`BaseAgent.build_graph`
+    仍是自建图扩展点（覆写后中间件与模板机制不再适用），当前无内置消费者；
+    检索步骤可见性现走标准 `ToolsTransformer` 真实工具事件，前端/落库契约
+    不变（`StorageTranslator` 的 tool-started 补齐分支保留为通用机具）。
 - **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
   制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
   ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/

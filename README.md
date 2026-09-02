@@ -13,20 +13,17 @@
 - **长期记忆**:每轮结束后由 LLM 抽取记忆存储,聊天中经 `memory_recall` 工具召回。
 - **知识库(RAG)**:PDF 上传 → MinerU 云端解析 → 分块 → bge-m3 嵌入 → Weaviate
   向量检索(支持混合检索);`knowledge_list` / `knowledge_search` 检索双工具与
-  `knowledge_context` / `knowledge_document_read` / `knowledge_document_list`
-  定位读取三工具装配给 LLM:先列库再自选检索,命中片段可按 doc_id + position
-  看邻域、整篇通读或浏览库内文档清单。
-- **builtin:rag 图智能体**:自建 LangGraph 状态图的 RAG 专用智能体(非工具循环):
-  查询理解(闲聊/知识分路 + 多轮凝练)→ 混合检索(分路直达,无需 LLM 自选工具)→
-  相关性过滤 → 带 [n] 引用生成,未命中自动改写重试一次后如实兜底;检索步骤以
-  工具事件流式呈现(`AGENTIC_DEFAULT_AGENT_ID=builtin:rag` 启用)。
+  `knowledge_context` / `knowledge_document_list` 定位读取双工具装配给 LLM:
+  先列库再自选检索,命中片段可按 doc_id + position 精确读取或浏览库内文档清单。
+- **内置智能体**:`builtin:demo` 演示助手(天气查询 + 长期记忆)、`builtin:rag`
+  知识库问答(知识库检索 + 长期记忆,回答带 [n] 溯源引用)——均走 `create_agent`
+  工具循环,检索由 LLM 自主调用工具完成(`AGENTIC_DEFAULT_AGENT_ID` 可切换默认)。
 - **异步任务**:Celery + Redis 承载文档摄取流水线,上传接口即刻返回、文档状态
   经轮询收敛。
 
 ## 技术栈
 
-FastAPI · Celery · LangChain(`create_agent` + `stream_events`，自建图智能体
-经 `BaseAgent.build_graph()` 扩展点)· LangGraph ·
+FastAPI · Celery · LangChain(`create_agent` + `stream_events`)· LangGraph ·
 SQLModel · wireup(DI)· loguru · ag-ui-protocol · Weaviate(langchain-weaviate)·
 DeepSeek(默认聊天模型)· Ollama(本地嵌入 bge-m3)· MinerU(云端 PDF 解析)·
 rustfs/obstore(S3 兼容对象存储)· uv(包管理)
@@ -120,7 +117,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `WEAVIATE_HOST/PORT/GRPC_PORT` | Weaviate 地址 | `127.0.0.1:8080` / `50052` |
 | `RUSTFS_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET` | 对象存储 | `http://127.0.0.1:9000` / `agentic` / `agentic-secret` / `agentic` |
 | `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
-| `AGENTIC_DEFAULT_AGENT_ID` | 会话默认智能体(当前内置:`builtin:demo` 通用助手、`builtin:rag` 知识库 RAG 图智能体) | `builtin:demo` |
+| `AGENTIC_DEFAULT_AGENT_ID` | 会话默认智能体(当前内置:`builtin:demo` 演示助手、`builtin:rag` 知识库问答) | `builtin:demo` |
 | `CORS_ORIGINS` | CORS 源白名单(逗号分隔整体覆盖) | `http://localhost:5173,http://127.0.0.1:5173` |
 | `AUTH_JWT_SECRET` | JWT 签名密钥(HS256 建议 ≥32 字节;生产必须显式设置) | `dev-only-secret-…`(仅开发) |
 | `RUN_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | run / 上传请求体上限(字节) | 1 MiB / 64 MiB |
