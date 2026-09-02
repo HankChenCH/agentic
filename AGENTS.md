@@ -259,9 +259,11 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
     the signal store's Redis backend (`app/configs/redis.yaml`, same entry by
     default, keys prefixed `agentic:signal:`)
 - Redis is used by the task executor. The app's default db is still SQLite
-  (`db.yaml` `default: sqlite`); the matching `postgres` entry is wired through
+  (`db.yaml` `default: ${DB_DEFAULT:sqlite}` — env-overridable, e.g.
+  `DB_DEFAULT=postgres` for the containerized full stack in `../deploy/`);
+  the matching `postgres` entry is wired through
   `app/infrastructures/db/` (psycopg3 driver, lazy) — switch by changing
-  `default`. Schema is managed by Alembic migrations (`admin db` commands,
+  `default` or setting the env var. Schema is managed by Alembic migrations (`admin db` commands,
   see Commands) — nothing creates tables at process startup, and DDL changes
   must go through a new migration. Weaviate is reachable via `app/infrastructures/vector/` and rustfs
   via `app/infrastructures/filesystem/` (both lazy — nothing connects until
