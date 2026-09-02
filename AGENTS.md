@@ -15,7 +15,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   ├── App.tsx              # createBrowserRouter + RouterProvider（AgenticRuntimeProvider 挂在路由外层；
 │   │                        #   /login 公开，其余路由经 RequireAuth 守卫）+ sonner Toaster
 │   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 登出跳转）
-│   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）
+│   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）+ attachments 适配器
+│   │                        #   （ServerImageAttachmentAdapter：图片附件 send 阶段上传后端，成功才放行提交）
 │   ├── stores/              # auth-store.ts（首个 zustand store：token/user + localStorage 持久化，
 │   │                        #   getToken() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
 │   │                        #   缓存 name→中文标题，幂等拉取一次，useToolDisplay 的降级链一环）
@@ -36,8 +37,10 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   admin-modules.ts（管理模块注册表）
 │   └── services/            # REST 服务层：auth-service（register/login/me）、conversation-service、
 │       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
-│       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）
-│       │                    #   + types.ts（后端 snake_case 镜像类型）
+│       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）、
+│       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）
+│       │                    #   + types.ts（后端 snake_case 镜像类型）+ translators/（后端历史→
+│       │                    #   ThreadMessageLike 翻译器；user 消息 image part 还原为附件卡片）
 ├── .oxlintrc.json
 └── package.json
 ```
@@ -152,3 +155,14 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
 - 知识库/文档状态机：`pending/processing/deleting` 是过渡态，hooks 会在存在
   过渡态时每 3s 静默轮询；`failed` 的 `error_message` 通过状态徽章 tooltip
   展示。文档上传**仅支持 PDF**（后端解析流水线强校验后缀）。
+- **聊天图片附件（多模态输入）**：上传语义收口在附件适配器的 `send()` 阶段
+  （`agentic-runtime.tsx` 的 `ServerImageAttachmentAdapter`）——assistant-ui 在
+  用户点发送时逐附件调 `send()`，此处 `attachmentService.upload` 成功才返回
+  `CompleteAttachment`，失败抛错即中止本次提交（= 上传成功才能发消息）。
+  消息/历史里引用的是后端稳定相对 url（永不过期），`<img>` 直接指向
+  `${REST_BASE}${url}`（后端鉴权后 302 到预签名地址，浏览器直拉对象存储，
+  无需 Bearer 头也无需 blob 中转）；历史重载的还原在
+  `translators/thread-message-translator.ts` 的 `toUserThreadMessage`（image
+  part → attachments 卡片）。附件 UI（加号/拖拽/预览）是 assistant-ui 模板
+  自带的，注册适配器即激活。composer 里的语音按钮（Dictate）仍无适配器，
+  点了无效。

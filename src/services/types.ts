@@ -35,7 +35,25 @@ export type BackendMessageContent =
       name: string;
       args: Record<string, unknown>;
     }
-  | { type: "tool_result"; tool_call_id: string; content: unknown };
+  | { type: "tool_result"; tool_call_id: string; content: unknown }
+  | {
+      // 多模态 image part（ag-ui InputContent 存储形态，camelCase 特例）：
+      // source 为稳定附件引用（url）或 base64 内联（data）
+      type: "image";
+      source:
+        | { type: "url"; value: string; mimeType?: string }
+        | { type: "data"; value: string; mimeType: string };
+    };
+
+/** POST /agentic/attachments 返回的附件元数据 */
+export interface BackendAttachment {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  /** 稳定相对引用（API 根相对路径），入库进消息 content，永不过期 */
+  url: string;
+}
 
 export interface BackendMessage {
   id: number;
@@ -178,14 +196,15 @@ export type KnowledgeSourceBbox = [
   number,
 ];
 
-/** 检索单来源：LLM 引用（[index] 角标）与前端溯源卡片共用 */
+/** 检索单来源：LLM 引用（[index] 角标）与前端溯源卡片共用（检索与定位读取同形） */
 export interface KnowledgeSource {
   index: number;
   kb_id: string;
   doc_id: string;
   doc_name: string;
   position: number;
-  score: number;
+  /** 混合检索相关度（0-1）；定位读取（knowledge_context）无检索分，字段省略 */
+  score?: number;
   content: string;
   page_start: number | null;
   page_end: number | null;

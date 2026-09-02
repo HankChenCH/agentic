@@ -9,7 +9,10 @@ import {
   XIcon,
 } from "lucide-react";
 
-import { KnowledgeSearchToolUI } from "@/components/assistant-ui/knowledge-search-tool";
+import {
+  KnowledgeContextToolUI,
+  KnowledgeSearchToolUI,
+} from "@/components/assistant-ui/knowledge-search-tool";
 import { Thread } from "@/components/assistant-ui/thread";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { ThreadRouteSync } from "@/components/assistant-ui/thread-route-sync";
@@ -160,8 +163,9 @@ export const ChatPage: FC = () => {
           <div className="relative min-h-0 flex-1">
             <Thread />
           </div>
-          {/* 注册 knowledge_search 的溯源卡片渲染器（须在 runtime 内，自身不渲染） */}
+          {/* 注册 knowledge_search / knowledge_context 的溯源卡片渲染器（须在 runtime 内，自身不渲染） */}
           <KnowledgeSearchToolUI />
+          <KnowledgeContextToolUI />
         </main>
 
         {/* 检索溯源抽屉：fixed 定位不占布局，点来源卡片「查看原文」弹出 */}

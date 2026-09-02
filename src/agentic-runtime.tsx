@@ -3,7 +3,12 @@ import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
+import {
+  AssistantRuntimeProvider,
+  type AttachmentAdapter,
+  type CompleteAttachment,
+  type PendingAttachment,
+} from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { HttpAgent } from "@ag-ui/client";
 
@@ -11,7 +16,8 @@ import {
   ConversationActionsContext,
   useConversationList,
 } from "@/hooks/use-conversation-list";
-import { SSE_URL } from "@/lib/config";
+import { REST_BASE, SSE_URL } from "@/lib/config";
+import { attachmentService } from "@/services/attachment-service";
 import { conversationService } from "@/services/conversation-service";
 import { getToken, useAuthStore } from "@/stores/auth-store";
 
@@ -91,6 +97,50 @@ const authenticatedFetch: typeof fetch = async (input, init) => {
   return response;
 };
 
+/**
+ * 图片附件适配器：上传语义收口在 send 阶段（composer-send）。
+ *
+ * 流程：选中文件 → add() 进 composer 待发区（本地预览，File 对象直读）→
+ * 用户点发送 → assistant-ui 逐附件调 send() → 此处上传后端，成功才返回
+ * CompleteAttachment（含稳定引用 URL）——失败抛错会中止本次提交并把附件
+ * 标记为错误，即「附件上传成功后才能提交消息」。
+ *
+ * 引用 URL 为稳定相对路径拼 API 根；消息发出后 react-ag-ui 自动转成
+ * ag-ui 的 image url source（绝对 http URL → url source），后端落库该
+ * 引用并在渲染时 302 重定向到预签名地址（浏览器直拉对象存储）。
+ */
+class ServerImageAttachmentAdapter implements AttachmentAdapter {
+  accept = "image/png,image/jpeg,image/webp,image/gif";
+
+  async add({ file }: { file: File }): Promise<PendingAttachment> {
+    return {
+      id: crypto.randomUUID(),
+      type: "image",
+      name: file.name,
+      contentType: file.type || "image/png",
+      file,
+      status: { type: "requires-action", reason: "composer-send" },
+    };
+  }
+
+  async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
+    const uploaded = await attachmentService.upload(attachment.file);
+    return {
+      ...attachment,
+      id: uploaded.id,
+      status: { type: "complete" },
+      content: [
+        { type: "image", image: `${REST_BASE}${uploaded.url}` },
+      ],
+    };
+  }
+
+  async remove(): Promise<void> {
+    // 无需清理：对象删除不做（会话附件孤儿清理是后续项），本地预览
+    // 的 File 由 runtime 自行释放
+  }
+}
+
 export const AgenticRuntimeProvider = ({
   children,
 }: {
@@ -122,7 +172,12 @@ export const AgenticRuntimeProvider = ({
 
   const runtime = useAgUiRuntime({
     agent,
-    adapters: { threadList: threadListAdapter },
+    adapters: {
+      threadList: threadListAdapter,
+      // 图片附件适配器：thread.tsx 的附件 UI（加号/拖拽区/预览）已就绪，
+      // 注册即激活
+      attachments: new ServerImageAttachmentAdapter(),
+    },
     // 流异常的友好输出：runtime 把本轮错误同时写进助手消息的错误框（聊天气泡
     // 内联展示 friendlyStreamError 归类后的一句话）并回调到这里；toast 让
     // 错误离开消息流仍可见。401 时页面即将跳登录，不弹。

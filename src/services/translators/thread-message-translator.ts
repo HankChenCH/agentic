@@ -5,9 +5,11 @@ import type {
   ToolCallMessagePart,
 } from "@assistant-ui/core";
 
+import { REST_BASE } from "@/lib/config";
 import type {
   BackendConversationTurn,
   BackendMessage,
+  BackendMessageContent,
 } from "@/services/types";
 
 /**
@@ -35,11 +37,36 @@ import type {
  */
 
 function toUserThreadMessage(m: BackendMessage): ThreadMessageLike {
-  const text = m.content.find((c) => c.type === "text")?.text ?? "";
+  // 多模态：text parts 聚合为文本内容；image parts（稳定附件引用或 base64
+  // 内联）还原为附件卡片展示。引用 url 直接指向后端 302 路由（渲染时由
+  // 后端换发预签名地址，浏览器直拉对象存储），无需鉴权头也无需 blob 中转。
+  const text = m.content
+    .filter((c): c is Extract<BackendMessageContent, { type: "text" }> => c.type === "text")
+    .map((c) => c.text)
+    .filter(Boolean)
+    .join("\n");
+  const attachments = m.content
+    .filter((c): c is Extract<BackendMessageContent, { type: "image" }> => c.type === "image")
+    .map((part, index) => {
+      const mime = part.source.mimeType ?? "image/png";
+      const image =
+        part.source.type === "data"
+          ? `data:${mime};base64,${part.source.value}`
+          : `${REST_BASE}${part.source.value}`;
+      return {
+        id: `${m.message_id}-${index}`,
+        type: "image" as const,
+        name: "image",
+        contentType: mime,
+        status: { type: "complete" as const },
+        content: [{ type: "image" as const, image }],
+      };
+    });
   return {
     id: m.message_id,
     role: "user",
     content: [{ type: "text", text }],
+    ...(attachments.length > 0 ? { attachments } : {}),
     createdAt: new Date(m.created_at),
   };
 }
