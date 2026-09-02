@@ -150,8 +150,8 @@ class StorageTranslator:
 
         TOOL_CALL 行的落库来源有二：模型发起的调用由 messages 路径按
         ``stream.tool_calls`` 落库（先于 tool-started 处理，按 tool_call_id
-        去重）；图节点自造的工具步骤（无模型 tool_call，如 builtin:rag 的
-        检索节点）由 tool-started 在此补齐，args 取事件携带的可选字段。
+        去重）；无模型 tool_call 的自造工具步骤（如有）由 tool-started 在此
+        补齐，args 取事件携带的可选字段。
         tool-result 只落 TOOL_RESULT 行并关联父 TOOL_CALL；tool-finished /
         tool-error 不落库（结果在 tool-result，错误无结果可存）。
         """

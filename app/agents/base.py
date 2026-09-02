@@ -58,9 +58,9 @@ class BaseAgent(ABC):
     - ``preferred_provider``（默认走全局配置）：智能体级模型路由，取值为
       ``LLMConfig.providers`` 的 entry key。
 
-    自建 StateGraph 的智能体（如 RAG）覆写 ``build_graph`` 并按需覆写
-    ``stream/invoke/_input``——中间件与模板机制只服务默认 ReAct 路径（RAG
-    的快注仍经 ``_fast_memory_block`` 折进末条用户消息）。
+    特殊拓扑的智能体可覆写 ``build_graph`` 并按需覆写
+    ``stream/invoke/_input``——中间件与模板机制只服务默认 ReAct 路径（当前
+    内置智能体均走默认路径）。
 
     每轮运行事实（``AgentRunContext``）经 langgraph ``context=`` 参数传入，
     中间件经 ``request.runtime.context`` 取回——取消守卫（``CancelGuardMiddleware``，
@@ -227,9 +227,8 @@ class BaseAgent(ABC):
     def _fast_memory_block(self, ctx: AgentRunContext) -> str:
         """快速记忆块（用户级常驻摘要）；当前轮用户 query 仅作寒暄短路判别。
 
-        检索失败只记日志不阻断（口径同原编排层注入），降级为空块。两个消费
-        方：默认 memory 片段（ReAct 路径，进模板 ``{memory}`` 槽）与 RAG 的
-        ``_input`` 折叠（自建图路径）。
+        检索失败只记日志不阻断（口径同原编排层注入），降级为空块。当前唯一
+        消费方是默认 memory 片段（进模板 ``{memory}`` 槽，每次模型调用渲染）。
         """
         if not ctx.messages:
             return ""

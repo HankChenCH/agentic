@@ -135,8 +135,8 @@ class AgenticService:
                 image_resolver=image_resolver,
             )
 
-            # 快速回忆的装配在 agent 层（BaseAgent._input 组装进 system prompt；
-            # RAG 折进末条用户消息）——编排层只透传结构化内容构造的用户消息，
+            # 快速回忆的装配在 agent 层（动态 prompt 中间件每轮渲染进模板
+            # {memory} 槽）——编排层只透传结构化内容构造的用户消息，
             # 用户消息落库与 LLM 输入保持同源，不在此拼接任何上下文
             run = agent.stream(AgentRunContext(
                 messages=[*history, user_message_from_content(
