@@ -198,3 +198,23 @@ export interface KnowledgeSearchResult {
   sources: KnowledgeSource[];
   notes: string[];
 }
+
+/** 工具能力目录：后端 GET /agentic/tool-catalog 的展示元数据（title 仅用于 UI） */
+export interface ToolCatalogTool {
+  name: string;
+  /** 中文展示标题；后端未声明时为 null（前端走注册表/机器名降级链） */
+  title: string | null;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolCatalogComponent {
+  component: string;
+  title: string;
+  description: string;
+  tools: ToolCatalogTool[];
+}
+
+export interface ToolCatalog {
+  components: ToolCatalogComponent[];
+}

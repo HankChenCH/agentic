@@ -136,7 +136,9 @@ export const PdfSourcePanel = () => {
         </div>
         <p className="truncate text-xs text-muted-foreground">
           {pages && `${pages} · `}
-          相关度 {(source.score * 100).toFixed(0)}% · 检索片段 · 仅展示命中页
+          {typeof source.score === "number" &&
+            `相关度 ${(source.score * 100).toFixed(0)}% · `}
+          检索片段 · 仅展示命中页
         </p>
       </header>
       {/* 查看器随抽屉内容挂载/卸载：关闭即释放 canvas，重开重新取数 */}

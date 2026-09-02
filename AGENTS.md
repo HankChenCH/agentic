@@ -17,7 +17,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 登出跳转）
 │   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）
 │   ├── stores/              # auth-store.ts（首个 zustand store：token/user + localStorage 持久化，
-│   │                        #   getToken() 供非 React 环境读票）
+│   │                        #   getToken() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
+│   │                        #   缓存 name→中文标题，幂等拉取一次，useToolDisplay 的降级链一环）
 │   ├── pages/               # 路由页面：login-page（登录/注册双 Tab，注册即登录）+
 │   │                        #   chat-page（纯对话；右上角「管理」按钮与用户菜单进管理侧/退出）
 │   ├── pages/admin/         # 管理侧：admin-home-page（模块启动页）+ knowledge-list-page / knowledge-detail-page
@@ -34,7 +35,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   请求拦截器注 Bearer/401 登出跳转)、format.ts (文件大小/时间格式化)、
 │   │                        #   admin-modules.ts（管理模块注册表）
 │   └── services/            # REST 服务层：auth-service（register/login/me）、conversation-service、
-│       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）
+│       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
+│       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）
 │       │                    #   + types.ts（后端 snake_case 镜像类型）
 ├── .oxlintrc.json
 └── package.json
