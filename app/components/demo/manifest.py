@@ -45,6 +45,7 @@ _SPEC = register_component(ComponentSpec(
     tools=(
         ToolSpec(
             name="get_weather",
+            title="查询天气",
             description="查询对应城市的天气情况。",
             args_model=WeatherArgs,
             build=_build_weather_tool,

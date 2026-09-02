@@ -135,18 +135,21 @@ _SPEC = register_component(ComponentSpec(
     tools=(
         ToolSpec(
             name="timeline",
+            title="回忆时间线",
             description="深度·情节检索：按线索查过去发生的事件情节（何时何地发生了什么）。",
             args_model=TimelineArgs,
             build=_build_timeline_tool,
         ),
         ToolSpec(
             name="expand",
+            title="展开记忆网络",
             description="深度·图扩散：展开某个人/物/机构的关联记忆网（既有事实与经历事件）。",
             args_model=ExpandArgs,
             build=_build_expand_tool,
         ),
         ToolSpec(
             name="state_at",
+            title="回溯历史状态",
             description="深度·时点回放：查询某过去日期当时仍在生效的事实状态。",
             args_model=StateAtArgs,
             build=_build_state_at_tool,

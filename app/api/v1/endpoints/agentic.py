@@ -8,7 +8,7 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.services import AgenticService, ConversationService
+from app.services import AgenticService, ConversationService, ToolCatalogService
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.request.run import CancelRequest, RunRequest
@@ -93,6 +93,13 @@ def delete_conversation(
     thread_id: UUID,
 ):
     return Response.success(conversations.delete_conversation(user_id=principal.user_id, thread_id=thread_id)).to_dict()
+
+@router.get("/tool-catalog")
+def get_tool_catalog(catalog: Injected[ToolCatalogService]):
+    # 工具能力目录（组件 → 工具的名/展示标题/描述/参数 schema）：前端 UI 标识化
+    # 消费。目录与用户无关（纯静态注册表读），认证由 router 级依赖统一覆盖，
+    # 端点无需 principal。
+    return Response.success(catalog.describe()).to_dict()
 
 @router.post("/run")
 def run(

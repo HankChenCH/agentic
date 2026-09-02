@@ -5,6 +5,7 @@
 """
 
 from .agentic_service import AgenticService
+from .tool_catalog import ToolCatalogService
 from .turn_finalizer import TurnFinalizer
 from .translator import AgUiTranslator, StorageTranslator
 
@@ -12,5 +13,6 @@ __all__ = [
     "AgUiTranslator",
     "AgenticService",
     "StorageTranslator",
+    "ToolCatalogService",
     "TurnFinalizer",
 ]

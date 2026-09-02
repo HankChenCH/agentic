@@ -75,6 +75,10 @@ def test_describe_capabilities_exports_schema():
     search = next(t for t in knowledge["tools"] if t["name"] == "knowledge_search")
     assert "query" in search["parameters"]["properties"]
     assert search["description"]
+    # 工具级展示标题（纯 UI 元数据）随清单导出；已声明 title 的工具须正确透传
+    assert search["title"] == "知识库检索"
+    weather = next(t for t in caps["demo"]["tools"] if t["name"] == "get_weather")
+    assert weather["title"] == "查询天气"
 
 
 def _fake_component(name: str, tool_names: list[str]):

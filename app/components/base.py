@@ -70,12 +70,15 @@ class ToolSpec:
     ``name`` / ``description`` / ``args_model`` 面向 LLM 与能力清单导出；
     ``build`` 是构造工厂，签名由各组件自约（``(门面服务…, agentic_id?)``），
     装配器在 DI 语境下调它产出绑定服务后的 StructuredTool。
+    ``title`` 是纯展示元数据（中文短标签，经 describe_capabilities 提供给
+    前端做 UI 标识化）——不进 LLM 工具 schema、不改变协议层的机器名。
     """
 
     name: str
     description: str
     args_model: type[BaseModel]
     build: Callable[..., Any]
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,10 +118,10 @@ def register_component(spec: ComponentSpec) -> ComponentSpec:
 
 
 def describe_capabilities(specs: Iterable[ComponentSpec] | None = None) -> list[dict[str, Any]]:
-    """能力清单导出（后端结构化）：组件 → 工具（名/描述/参数 JSON schema）。
+    """能力清单导出（后端结构化）：组件 → 工具（名/展示标题/描述/参数 JSON schema）。
 
-    ``specs`` 缺省取全量注册表。v1 只服务测试与调试；未来对前端开放时，
-    HTTP 能力清单端点只需把本函数的返回序列化出去。
+    ``specs`` 缺省取全量注册表。HTTP 能力清单端点（GET /agentic/tool-catalog）
+    经编排层 ``ToolCatalogService`` 把本函数的返回序列化出去。
     """
     return [
         {
@@ -128,6 +131,7 @@ def describe_capabilities(specs: Iterable[ComponentSpec] | None = None) -> list[
             "tools": [
                 {
                     "name": tool.name,
+                    "title": tool.title,
                     "description": tool.description,
                     "parameters": tool.args_model.model_json_schema(),
                 }

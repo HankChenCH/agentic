@@ -412,18 +412,21 @@ _SPEC = register_component(ComponentSpec(
     tools=(
         ToolSpec(
             name="knowledge_list",
+            title="查看知识库清单",
             description="列出当前用户可用的知识库（名称、id、公开/私有、文档数、状态）。",
             args_model=KnowledgeListArgs,
             build=_build_knowledge_list_tool,
         ),
         ToolSpec(
             name="knowledge_search",
+            title="知识库检索",
             description="在指定（或全部可用）知识库中检索相关文档片段，返回带溯源信息的 JSON。",
             args_model=KnowledgeSearchArgs,
             build=_build_knowledge_search_tool,
         ),
         ToolSpec(
             name="knowledge_context",
+            title="读取文档片段",
             description="查看已检索片段的前后相邻片段（邻域窗口），补齐命中片段缺失的上下文。",
             args_model=KnowledgeContextArgs,
             build=_build_knowledge_context_tool,
@@ -436,6 +439,7 @@ _SPEC = register_component(ComponentSpec(
         ),
         ToolSpec(
             name="knowledge_document_list",
+            title="查看文档清单",
             description="列出知识库内的文档清单（名称、doc_id、分段数、状态），导航入口。",
             args_model=KnowledgeDocumentListArgs,
             build=_build_knowledge_document_list_tool,

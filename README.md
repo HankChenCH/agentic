@@ -185,6 +185,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `GET` | `/agentic/conversation/{thread_id}` | 会话详情 |
 | `GET` | `/agentic/conversation/{thread_id}/history` | 会话历史消息 |
 | `DELETE` | `/agentic/conversation/{thread_id}` | 删除会话(硬删除,连同轮次/消息;长期记忆保留) |
+| `GET` | `/agentic/tool-catalog` | 工具能力目录(组件 → 工具的名/中文展示标题/描述/参数 schema,供前端 UI 标识化) |
 | `POST` / `GET` | `/knowledge` | 创建(可带 `isPublic`,缺省私有) / 分页列出知识库(属主或公开库) |
 | `GET` / `PATCH` / `DELETE` | `/knowledge/{kb_id}` | 知识库详情 / 更新 / 删除 |
 | `POST` | `/knowledge/{kb_id}/enable` · `/disable` | 启用 / 停用 |

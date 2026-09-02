@@ -54,6 +54,9 @@ server/                          # this directory is its own git repo (the works
 │                              #   （纯 ASGI:请求计数/时延直方图/在途 Gauge,handler=路由模板,404 落 unmatched）; v1/endpoints/ — agentic.py -> POST /agentic/run (StreamingResponse)
 │                              #   + POST /agentic/run/cancel 显式取消（fire thread 作用域取消信号，幂等）
 │                              #   + GET/DELETE /agentic/conversation[/...] 会话列表/详情/历史/删除;
+│                              #   + GET /agentic/tool-catalog 工具能力目录（组件 → 工具的名/
+│                              #   中文展示标题/描述/参数 schema——经 orchestration.ToolCatalogService
+│                              #   读静态注册表序列化，前端 UI 标识化消费）;
 │                              #   deps.py -> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
 │                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
@@ -117,7 +120,9 @@ server/                          # this directory is its own git repo (the works
 │                            #   可被后端覆写；ttl 必选）+ RedisSignalStore（默认绑定）+
 │                            #   InMemorySignalStore（测试/单机）；详见「packages」条目
 ├── services/                # 两层制（依赖箭头表见下「服务层两层制」）—— orchestration/: 用户侧行程
-│                            #   （AgenticService run 编排 + translator/ 双翻译器 + TurnFinalizer 收尾）；
+│                            #   （AgenticService run 编排 + translator/ 双翻译器 + TurnFinalizer 收尾
+│                            #   + ToolCatalogService 工具能力目录——api 禁触 components，
+│                            #   由本层中转 describe_capabilities() 供 GET /agentic/tool-catalog）；
 │                            #   domain/: 领域服务，按聚合分包—— conversation/（signals.py
 │                            #   会话域信号 key/常量 + title_generator 裸模型标题生成）、
 │                            #   knowledge/（KB/document/ingestion/binding 服务 +
@@ -506,7 +511,10 @@ Server layer rules:
   `@injectable` 装配器（如 `MemoryComponent`）持门面服务，把 `ToolSpec.build`
   实例化为声明式 StructuredTool（args_schema 显式定义；`config:
   RunnableConfig` 是运行时注入参数，不进 LLM schema）。`describe_capabilities()`
-  无需实例化服务即可枚举导出能力清单（后端结构化；HTTP 端点待有消费方再加）。
+  无需实例化服务即可枚举导出能力清单（组件 + 工具的 name/title/description/参数
+  schema；HTTP 出口 = `GET /agentic/tool-catalog`，经 orchestration 的
+  `ToolCatalogService` 序列化——api 禁入 components，title 是纯展示元数据，
+  不进 LLM schema、不改协议机器名）。
   **新增组件三步**：① 建包按解剖学落位；② manifest.py 声明 spec + 装配器；
   ③ `agents/toolbox.py` 加一个装配器字段（全系统唯一显式组件清单点，构造期
   校验跨组件工具名冲突）——`AgentFactory` 与各 agent 的 `build_tools` 不变。
