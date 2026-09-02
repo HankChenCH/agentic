@@ -57,6 +57,12 @@ server/                          # this directory is its own git repo (the works
 │                              #   + GET /agentic/tool-catalog 工具能力目录（组件 → 工具的名/
 │                              #   中文展示标题/描述/参数 schema——经 orchestration.ToolCatalogService
 │                              #   读静态注册表序列化，前端 UI 标识化消费）;
+│                              #   attachments.py -> POST /agentic/attachments 会话附件上传（multipart，
+│                              #   本期仅图片、单件 10 MiB，校验收口在 ConversationAttachmentStore）+
+│                              #   GET /agentic/attachments/{path} 附件读取入口——属主校验后 302 到预签名
+│                              #   URL（浏览器直拉对象存储，签名即时签发不落库不进日志；presign 不可用
+│                              #   如 local 后端则降级流式回源）——分域口径见
+│                              #   services/domain/conversation/attachments.py;
 │                              #   deps.py -> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
 │                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
@@ -104,9 +110,9 @@ server/                          # this directory is its own git repo (the works
 │                            #   memory: ability/{recall,consolidation,user_node} + internal/{extraction,resolution,
 │                            #   renderer,scoring,vocab} + admin.py（MemoryEditor/MemoryGraphReader 端口
 │                            #   回填）+ repositories/ 图谱实现；knowledge: ability/{retrieval,
-│                            #   navigation}（检索 + 定位读取——邻域窗口/范围读文/文档清单，
+│                            #   navigation}（检索 + 定位读取——精确单点读取/文档清单，
 │                            #   守卫口径与检索一致：可见性 + KB/文档 enabled）+ manifest 契约模型
-│                            #   KnowledgeSearchResult 与 KnowledgeSegmentWindow（LLM/前端共用 JSON 形状）；
+│                            #   KnowledgeSearchResult（检索与定位读取共用同形 sources JSON）；
 │                            #   demo: ability/weather（演示工具 get_weather，mock 数据源收敛在
 │                            #   门面内部，未来替换实现工具层不动）。
 │                            #   能力（v1 仅 tools）经 manifest 静态登记注册表，装配器绑定服务产出
@@ -124,12 +130,17 @@ server/                          # this directory is its own git repo (the works
 │                            #   + ToolCatalogService 工具能力目录——api 禁触 components，
 │                            #   由本层中转 describe_capabilities() 供 GET /agentic/tool-catalog）；
 │                            #   domain/: 领域服务，按聚合分包—— conversation/（signals.py
-│                            #   会话域信号 key/常量 + title_generator 裸模型标题生成）、
+│                            #   会话域信号 key/常量 + title_generator 裸模型标题生成
+│                            #   + attachments.py 附件对象存储门面（key 布局/上传校验/
+│                            #   预签名，多模态图片输入的分域读路径归属）
+│                            #   + multimodal.py 存储形态↔LangChain 块的唯一翻译点）、
 │                            #   knowledge/（KB/document/ingestion/binding 服务 +
 │                            #   object_store/support 纯函数/document_chunker）与 memory/
 │                            #   （记忆向量适配器 MemoryVectorIndex+collection 显式 schema）
 ├── models/
-│   ├── schema/request/run.py     # RunRequest / RunMessage (camelCase fields for ag-ui)
+│   ├── schema/request/run.py     # RunRequest / RunMessage (camelCase fields for ag-ui；
+│                             #   content 为 str | ag-ui InputContent 数组——多模态口径，
+│                             #   storage_content() 归一为落库数组)
 │   ├── domain/agentic/      # SQLModel tables: conversation / turn / message（conversation 带 user_id FK→users.id，
 │   │                        #   归属过滤在仓储查询条件内强制）
 │   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
@@ -152,7 +163,10 @@ server/                          # this directory is its own git repo (the works
                                  #   + ParsedBlock), create_default_document_parser singleton), vector/ (VectorStoreFactory + VectorDBBuilder registry —
                                  #   Weaviate via langchain-weaviate; build_client/build + drop for collection
                                  #   deletion), filesystem/ (FilesystemFactory + FilesystemBuilder registry —
-                                 #   local pathlib / S3 via obstore), redis/ (RedisClientFactory +
+                                 #   local pathlib / S3 via obstore；契约含 presign_get 预签名 GET——
+                                 #   s3 走 obstore.sign、local 返回 None 由调用方降级流式回源；s3 entry
+                                 #   可配 public_endpoint 构建签名专用 store，适配 rustfs 藏反代后的
+                                 #   部署形态（直连形态不配，签名与读写同实例）), redis/ (RedisClientFactory +
                                  #   RedisClientBuilder registry — standalone via REDIS_URL)
 ```
 
@@ -376,18 +390,21 @@ Server layer rules:
   通道 B = 命中邻域扩展，经 `list_segments_by_doc` 按 position 取前后段，
   邻段双通道在榜即互证加分；RRF 排名融合只此一处，展示分与排序解耦——
   score=混合检索分，纯邻段命中继承种子分）→溯源组装；
-  `top_k` 纯返回口径（默认 4、上限 20，内部候选池 `_POOL_PER_KB=8` 与返回数解耦）；知识工具共五件，经 `AgentToolbox` 装配（LLM 先列库再自选 kb_ids
-  检索）：`knowledge_list`/`knowledge_search` 检索双工具 + `knowledge_context`
-  （命中片段邻域窗口）/`knowledge_document_read`（按 position 范围读文，段数
-  与字符预算截断并附续读指引）/`knowledge_document_list`（库内文档清单）定位
-  读取三工具——定位读取以检索结果自带的 `doc_id + position` 为句柄，门面在
-  `components/knowledge/ability/navigation.py`（`KnowledgeNavigationService`，
-  仓储读取通道 `get_document_by_id`/`list_segments_by_doc`），守卫口径与检索
+  `top_k` 纯返回口径（默认 4、上限 20，内部候选池 `_POOL_PER_KB=8` 与返回数解耦）；知识工具共四件，经 `AgentToolbox` 装配：
+  `knowledge_list`/`knowledge_search` 检索双工具（**kb_ids 运行时硬闸**——缺省
+  或全非法不触发检索而是返回引导话术，强制「先 list 选库再 search」两步流，
+  防跨库盲搜退化）+ `knowledge_context`（精确定位读取：以检索结果的
+  `doc_id + position` 为句柄读单个片段，无邻域泛化/无通读用法——检索结果
+  已自带命中邻域，防「多拉上下文」滥用；返回与 search 同形 sources JSON，
+  score 省略，前端溯源卡片复用）/`knowledge_document_list`（库内文档清单）
+  ——定位读取门面在 `components/knowledge/ability/navigation.py`
+  （`KnowledgeNavigationService.segment_at`，仓储读取通道
+  `get_document_by_id`/`list_segments_by_doc`），守卫口径与检索
   一致（可见性 + KB/文档 enabled；不涉向量故无嵌入模型守卫），工具使用引导
-  收在各工具 description（随工具走，不散落 agent 系统提示词），工具与图节点
-  共用的检索结果串组装收敛在 manifest 的
-  `render_search_result`（`KnowledgeSearchResult` JSON 契约唯一组装点；定位
-  读取同款为 `render_segment_window`）。`KnowledgeObjectStore` 仍在 services 侧拥有
+  收在各工具 description（随工具走，不散落 agent 系统提示词），检索与定位
+  读取共用同形结果串，组装收敛在 manifest 的
+  `render_search_result`/`render_context_result`（`KnowledgeSearchResult`
+  JSON 契约唯一组装点）。`KnowledgeObjectStore` 仍在 services 侧拥有
   `knowledge/{kb_id}/{doc_id}/...` key 布局 + best-effort 清理——服务不直接触碰
   `VectorStoreFactory`/raw `Filesystem`。不变量在服务层强制
   (`support.require_kb`/`require_document` raise 4001/4004)，纯函数在
@@ -435,7 +452,9 @@ Server layer rules:
   请求超时——deepseek/openai 走 `request_timeout`，ollama 走
   `client_kwargs={"timeout": ...}`；entry 级 `capabilities`（`thinkable` +
   `features`——支持的 `with_structured_output` method 白名单，Literal 未知值
-  加载期 fail-fast，声明顺序即自发现优先级）描述模型/部署能力；deepseek
+  加载期 fail-fast，声明顺序即自发现优先级；`multimodal`——多模态输入模态
+  白名单 `text`/`vision`，含 `vision` 即可接收图片输入，经模型实例上的
+  `multimodal` 属性被 `BaseAgent.supports_vision` 消费）描述模型/部署能力；deepseek
   builder 产物 `ThinkingAwareChatDeepSeek` 据此自发现/校验 method 并对思考
   互斥项自动对齐——`function_calling`/`json_schema`（后者被 langchain-deepseek
   重映射为前者）为强制 tool_choice 通道，与思考模式互斥（400）→ 关思考副本
@@ -635,14 +654,42 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   限流由网关层（反向代理/API 网关）按部署策略实现；应用自身不产生 429，
   `fastapi-limiter`/`pyrate-limiter` 依赖已从 pyproject 移除。Body-size caps
   remain in `api/middleware.py` via `http.yaml`
-  (run 1 MiB JSON, upload 64 MiB multipart > the 50 MiB service-level file cap).
+  (run 1 MiB JSON, upload 64 MiB multipart > the 50 MiB service-level file cap
+  —— upload 作用域含知识库文档创建与会话附件 `POST /agentic/attachments` 两个端点，
+  正则在 `cmd/http/main.py`).
   413 rejections use the standard `Response` envelope. Upload itself streams:
   the endpoint passes `UploadFile.file` through and
   `KnowledgeDocumentService.create_document` wraps it in a counting/sha256
   read-through reader (`_CountingDigestReader`) so the object-store `put` never
   holds the whole file in memory; seekable streams are size-probed up front,
   lying/chunked streams trip the reader mid-copy and the partial object is
-  cleaned up.
+  cleaned up.（会话附件同款：`ConversationAttachmentStore.save` 的
+  `_CountingLimitedReader` 边计数边转存，超限断流并清理半截对象。）
+- **多模态图片输入（chat vision）** → 链路与分域口径（2026-09-02 落地）：
+  ① 能力声明：`llm.yaml` entry 的 `capabilities.multimodal: [text, vision]`
+  （Literal fail-fast）经 builder 透传为模型实例属性，`BaseAgent.supports_vision`
+  读取；未声明的裸模型视为不支持。② 请求侧：`RunMessage.content` 为
+  `str | ag-ui InputContent[]`（图片 ≤4 张/条），图片以稳定 URL 引用（本域
+  附件）出现，`storage_content()` 归一为 camelCase 数组落库（`open_turn`
+  收全量数组，标题/记忆只喂 `text_of`，纯图消息用「（图片）」占位）。
+  ③ 模型侧：图片**永不经模型 API 拉取本域 URL**——`user_message_from_content`
+  （domain/conversation/multimodal.py）把 url 引用经 `ConversationAttachmentStore`
+  的 resolver 读成字节转 langchain base64 块（云端拉不到内网 rustfs）；
+  data source 直接转 base64，外部 http(s) URL 透传。④ 降级：模型未声明
+  vision 时丢图——当前轮文本尾注明「已忽略 N 张图片」（历史回放静默，
+  注明只服务一次防 prompt 污染）；附件读取失败按同路径降级不炸流。
+  ⑤ 附件分域（`attachments.py`）：上传永远过后端（image/* 校验 + 10 MiB
+  断流），展示走 `GET /agentic/attachments/{path}` 鉴权后 302 预签名
+  （obstore.sign，TTL 600s，`Cache-Control: no-store`），LLM 走内部
+  `read()`；签名 URL 不落库不进日志——消息里存的是稳定引用
+  `/agentic/attachments/{id}/{filename}`，key 首段为属主 id，跨用户引用
+  天然失配按 404 处理。⑥ 部署形态：rustfs 直连（含 dev）不配
+  `RUSTFS_PUBLIC_ENDPOINT`，签名与读写同实例；rustfs 藏反代后配置
+  public endpoint，签名走专用 S3Store（SigV4 签 host+path，代理须原样
+  透传 host+path——子路径形态不可剥离前缀）。⑦ `builtin:rag` 因历史折叠
+  为纯文本，本期不支持图片（静默忽略，消息仍落库展示）；已知后续项：
+  会话删除不清理附件孤儿对象、知识库 PDF 下载未迁移预签名、智能体能力
+  描述接口（前端按能力屏蔽上传入口）。
 - SSE (`/agentic/run`) is **outside** the global exception handlers: once the
   200/SSE headers are committed, in-stream errors can only surface as an ag-ui
   `RunErrorEvent`. `AgenticService.run` therefore yields `RunStarted` first,
@@ -717,24 +764,37 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   the LLM context from the DB (`ConversationRepository.list_replay_messages`,
   last ~20 COMPLETED turns — FAILED/CANCELED/stray RUNNING turns are skipped)
   plus the latest user message — the rest of the ag-ui `messages` payload is
-  ignored (only `messages[-1].content` is used). Replay is faithful:
+  ignored (only `messages[-1].content` is used, 经 `RunMessage.storage_content()`
+  归一为内容数组). Replay is faithful:
   `TOOL_CALL`/`TOOL_RESULT` rows become `AIMessage(tool_calls)` +
   `ToolMessage` pairs (unpaired calls dropped — tool errors persist no result
   row, and OpenAI-compatible APIs 400 on orphan tool_calls); `THOUGHT`
   (reasoning) is never replayed. `AgentRunContext` carries `messages`, and
-  `BaseAgent._input` injects the current time into the last user message.
+  `BaseAgent._input` injects the current time into the last user message
+  （多模态块列表形态下前缀作为首个 text 块插入）.
   Long-term memory is the v2 graph model (`docs/memory-v2-design.md` is the
   design contract): four tables in `app/models/domain/memory/` (entity /
   bi-temporal statement / episode / episode-link), consolidated into the
   component at `app/components/memory/` by `TurnFinalizer`'s third step
   (extract→resolve entities→adjudicate ADD/REPLACE/SKIP→persist+vector upsert).
-  Entity resolution is **two-stage**: `MemoryVectorIndex.search` only nominates
-  candidates — its hit score is a Weaviate hybrid fusion score (relative,
-  capped at 1.0; never compare it against absolute thresholds), and the merge
-  decision uses `text_cosine` (client-side embedding cosine, same model as the
-  writes) ≥ `resolution.similarity_threshold` plus an entity_type guard;
-  renderer-internal trace refs (`#S13`/`§E3` shapes) are barred from entity
-  names/aliases. The 2026-08-28 incident (a school merged into a company
+  Entity resolution is a **three-tier funnel** (`internal/resolution.py`;
+  指代归一见 docs/memory-v2-design.md §12): exact name/alias match →
+  `text_cosine` (client-side embedding cosine, same model as the writes)
+  ≥ `resolution.similarity_threshold` merges directly → cosine in the grey
+  band `[grey_zone_lower, threshold)` goes to an LLM semantic adjudication
+  (`adjudicate_entity_merge`: 同一现实事物才算同一，简称/代称归一在此收口；
+  uncertain/failed/out-of-candidates → create). `MemoryVectorIndex.search`
+  only nominates candidates — its hit score is a Weaviate hybrid fusion
+  score (relative, capped at 1.0; never compare it against absolute
+  thresholds). All merge paths pass the entity_type guard and
+  merge_blocklist（人工拆分禁令优先于一切自动归并）; renderer-internal
+  trace refs (`#S13`/`§E3` shapes) are barred from entity names/aliases.
+  抽取上游预防（Tier1, `internal/extraction.py`）：抽取输入附用户身份卡与
+  向量按 transcript 提名的既有实体名册（`roster_limit`，0 关闭）——指代
+  名册对象的 entities 回填 `ref_id`（清洗期按名册校验，名册外剥除），
+  自报姓名归保留键 `user`（客体字面量化 + 用户节点别名回填，
+  `consolidation.py` 身份专项 Tier3）；`expand` 锚点与写路同规走同一
+  漏斗。The 2026-08-28 incident (a school merged into a company
   entity on fusion score 1.0 / true cosine 0.44) is documented in
   `docs/memory-v2-design.md` §8; polluted archives are repairable via
   `python -m app.cmd.admin memory repair --apply`.
