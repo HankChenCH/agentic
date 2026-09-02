@@ -1,4 +1,4 @@
-default: sqlite # 切换 PostgreSQL 时改为 postgres（需先 docker compose up -d postgres）
+default: ${DB_DEFAULT:sqlite} # 切换 PostgreSQL 设 DB_DEFAULT=postgres 即可（容器编排走此路径，无需改文件；需先拉起 postgres）
 providers:
   sqlite:
     type: sqlite
