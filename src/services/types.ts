@@ -85,6 +85,10 @@ export interface BackendConversationTurn {
   turn_id: string;
   turn_num: number;
   status: BackendTurnStatus;
+  /** 分支基点轮次（兄弟语义：同 parent 的轮次互为同一问答的重试/编辑变体） */
+  parent_turn_id: string | null;
+  /** 同一问答（兄弟间）第几次尝试，从 1 开始 */
+  attempt_no: number;
   token_usage: Record<string, unknown>;
   messages: BackendMessage[];
   created_at: string;
@@ -181,6 +185,42 @@ export interface KnowledgePagedResult<T> extends PagedResult<T> {
 export type KnowledgeListResult = KnowledgePagedResult<BackendKnowledgeBase>;
 export type KnowledgeDocumentListResult =
   KnowledgePagedResult<BackendKnowledgeDocument>;
+
+/**
+ * 分段元数据（镜像后端 DocumentSegment.meta：解析/分块产出，管理侧只读）。
+ * 手动新增的分段无解析溯源，meta 为 null。
+ */
+export interface KnowledgeSegmentMeta {
+  page_start?: number | null;
+  page_end?: number | null;
+  /** 标题面包屑（h1 > h2 …） */
+  heading_path?: string[];
+  /** 块类型（text/table/image…） */
+  types?: string[];
+  /** 解析资产（图片等）的对象存储 key */
+  assets?: string[];
+  /** 原文位置框：page 0 起；bbox [x0,y0,x1,y1] 0-1 归一化（与 PdfHighlight 同坐标系） */
+  bboxes?: { page: number; bbox: number[] }[];
+}
+
+/** 文档分段实体（GET /knowledge/{kbId}/document/{docId}/segment 的 items 元素） */
+export interface BackendDocumentSegment {
+  id: string;
+  kb_id: string;
+  doc_id: string;
+  /** 段落位置（0 起，文档内唯一） */
+  position: number;
+  content: string;
+  meta: KnowledgeSegmentMeta | null;
+  /** 内容字数（按字符计） */
+  word_count: number;
+  status: KnowledgeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export type KnowledgeSegmentListResult =
+  KnowledgePagedResult<BackendDocumentSegment>;
 
 // ---------------------------------------------------------------------------
 // knowledge_search 工具结果（后端 app/components/knowledge/tools.py 输出的

@@ -11,7 +11,6 @@ import type {
   BackendMessage,
   BackendMessageContent,
 } from "@/services/types";
-
 /**
  * 后端历史（turn 两层结构）→ assistant-ui ThreadMessageLike[]（一维）的翻译器。
  *
@@ -31,6 +30,9 @@ import type {
  *     调用会产生多段 reasoning/text/tool-call part）
  *   - TOOL_RESULT           → 不单独成条，并回同 tool_call_id 的 tool-call part
  *     的 result 字段
+ *   - 轮次状态随消息下发：FAILED/CANCELED（及悬挂 RUNNING）轮次的 assistant
+ *     消息标注 incomplete（error/cancelled）；无任何 assistant 内容时合成
+ *     失败/已停止占位，避免悬空提问
  *
  * 注意：assistant-ui 没有 turn 概念，必须把 turn 拍扁成一维消息流。
  * 本模块是纯数据转换，不依赖 React。
@@ -49,10 +51,14 @@ function toUserThreadMessage(m: BackendMessage): ThreadMessageLike {
     .filter((c): c is Extract<BackendMessageContent, { type: "image" }> => c.type === "image")
     .map((part, index) => {
       const mime = part.source.mimeType ?? "image/png";
+      // url source 两种形态并存：当前发送链路存「API 根 + 相对路径」的绝对
+      // URL（浏览器 <img> 渲染需要），直接用；裸相对引用拼 REST_BASE。
       const image =
         part.source.type === "data"
           ? `data:${mime};base64,${part.source.value}`
-          : `${REST_BASE}${part.source.value}`;
+          : /^https?:\/\//i.test(part.source.value)
+            ? part.source.value
+            : `${REST_BASE}${part.source.value}`;
       return {
         id: `${m.message_id}-${index}`,
         type: "image" as const,
@@ -71,9 +77,44 @@ function toUserThreadMessage(m: BackendMessage): ThreadMessageLike {
   };
 }
 
+/**
+ * 轮次状态 → assistant 消息状态：非 COMPLETED 轮次如实标注为 incomplete
+ * （FAILED/悬挂 RUNNING → error，CANCELED → cancelled），不再伪装成正常完成。
+ * 返回 undefined 视为完成（complete）。
+ */
+function turnAssistantStatus(
+  status: BackendConversationTurn["status"],
+): NonNullable<ThreadMessageLike["status"]> {
+  switch (status) {
+    case "failed":
+    case "running": // 悬挂 RUNNING（进程崩溃等未收口轮次）按失败口径呈现
+      return { type: "incomplete", reason: "error" };
+    case "canceled":
+      return { type: "incomplete", reason: "cancelled" };
+    default:
+      return { type: "complete", reason: "stop" };
+  }
+}
+
+/** 失败/取消轮次无任何可渲染 assistant 内容时的占位消息（消除悬空提问）。 */
+function placeholderAssistantMessage(
+  turn: BackendConversationTurn,
+  status: NonNullable<ThreadMessageLike["status"]> & { type: "incomplete" },
+): ThreadMessageLike {
+  const text = status.reason === "cancelled" ? "（已停止生成）" : "（生成失败）";
+  return {
+    id: `${turn.turn_id}-placeholder`,
+    role: "assistant",
+    content: [{ type: "text", text }],
+    status,
+    createdAt: new Date(turn.created_at),
+  };
+}
+
 function toAssistantThreadMessage(
   group: BackendMessage[],
   toolResults: Map<string, unknown>,
+  status: ThreadMessageLike["status"],
 ): ThreadMessageLike | null {
   type AssistantPart =
     | TextMessagePart
@@ -114,7 +155,7 @@ function toAssistantThreadMessage(
     id: lastId || group[0].message_id,
     role: "assistant",
     content: parts,
-    status: { type: "complete", reason: "stop" },
+    status,
     createdAt: new Date(group[0].created_at),
   };
 }
@@ -133,6 +174,7 @@ export function toThreadMessages(
     const rows = [...turn.messages].sort(
       (a, b) => a.sequence_num - b.sequence_num,
     );
+    const assistantStatus = turnAssistantStatus(turn.status);
 
     // 1) 先收集 TOOL_RESULT：tool_call_id → result，待会并入 tool-call part
     const toolResults = new Map<string, unknown>();
@@ -147,10 +189,14 @@ export function toThreadMessages(
     // 2) user 单独成条；一个 turn 内 user 行之后的 assistant 系行累积进
     //    同一组，遇到下一个 user 行或 turn 结束时 flush 成一条消息
     let assistantRows: BackendMessage[] = [];
+    let assistantEmitted = false;
     const flushAssistant = () => {
       if (assistantRows.length === 0) return;
-      const message = toAssistantThreadMessage(assistantRows, toolResults);
-      if (message) out.push(message);
+      const message = toAssistantThreadMessage(assistantRows, toolResults, assistantStatus);
+      if (message) {
+        out.push(message);
+        assistantEmitted = true;
+      }
       assistantRows = [];
     };
 
@@ -164,6 +210,12 @@ export function toThreadMessages(
       assistantRows.push(m);
     }
     flushAssistant();
+
+    // 失败/取消轮次若没有任何 assistant 内容（如服务端异常时只落了用户行），
+    // 合成占位消息如实标注，避免历史里出现没有回答的悬空提问
+    if (!assistantEmitted && assistantStatus.type === "incomplete") {
+      out.push(placeholderAssistantMessage(turn, assistantStatus));
+    }
   }
 
   return out;
