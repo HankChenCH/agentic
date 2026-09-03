@@ -66,23 +66,24 @@ def detect_retry_of_latest(
     payload: list[tuple[str, list[dict]]],
     active_chain: list[TurnBranchSnapshot],
 ) -> UUID | None:
-    """自动检测"重试最新一轮"：payload 用户序列与活跃路径逐位内容等值时命中。
+    """自动检测"对最新一轮的重试/编辑"：payload 用户数与活跃路径轮次数相等，
+    且除末位外逐位内容等值 → 基点 = 活跃叶子。
 
-    ``payload`` 为本次 run 请求的 (role, 存储形态 content) 投影。客户端"重新生成"
-    会携带截断到目标问题的本地消息列表（user 开头 user 结尾，assistant 居中），
-    且该问题就是活跃路径最后一个已回答的问答——因此：
+    ``payload`` 为本次 run 请求的 (role, 存储形态 content) 投影。客户端只在
+    重新生成/编辑时截断本地消息列表（普通发送必然追加，用户数 = 轮次数+1，
+    被长度校验排除），因此截断到 N 个用户恰好对齐活跃路径的 N 轮时：
 
       1. payload 长度为奇数（2N-1），角色 user/assistant 严格交替；
       2. 奇数位（user）恰有 N 个，与活跃路径 N 个轮次一一对应；
-      3. 每个 user 的存储形态 content 与对应轮次的用户行完全等值
-         （两侧同经 RunMessage.storage_content 归一，纯文本会话逐字节一致；
-         多模态消息经前端 round-trip 可能变形——等值失败即放弃检测，退化为
-         普通续聊，不劣于无分支模型时的行为）。
+      3. 前 N-1 个 user 的存储形态 content 与对应轮次逐位等值（两侧同经
+         RunMessage.storage_content 归一，纯文本会话逐字节一致）；
+      4. 末位 user 等值 → 重新生成（同问题新尝试），不同 → 编辑（问题的
+         新变体）——两者语义相同：新轮次与活跃叶子成兄弟，attempt+1。
 
-    命中返回活跃叶子（被重试轮次）的 turn_id，否则 None。位置对齐保证"稍后
-    重新问一个旧问题"（payload 与活跃路径错位）不会误判。残余歧义：紧邻两次
-    发送完全相同的问题文本——语义上视为重试（旧答案被替换），前端接上显式
-    branch 信号后即消除。
+    多模态消息经前端 round-trip 可能变形——前缀等值失败即放弃检测，退化为
+    普通续聊，不劣于无分支模型时的行为；此时由前端显式 branch 信号
+    （forwardedProps.branch.baseMessageId）兜底精确定位。命中返回活跃叶子
+    的 turn_id，否则 None。
     """
     if not payload or not active_chain:
         return None
@@ -95,7 +96,7 @@ def detect_retry_of_latest(
     users = [content for _role, content in payload[0::2]]
     if len(users) != len(active_chain):
         return None
-    for content, snapshot in zip(users, active_chain):
+    for content, snapshot in zip(users[:-1], active_chain[:-1]):
         if content != snapshot.user_content:
             return None
     return active_chain[-1].turn_id

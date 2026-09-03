@@ -11,6 +11,7 @@ from app.api.deps import UserPrincipal, require_user
 from app.services import AgentCatalogService, AgenticService, ConversationService, ToolCatalogService
 
 from app.models.schema.request.pagination import PaginationRequest
+from app.models.schema.request.conversation import ActivateTurnRequest
 from app.models.schema.request.run import CancelRequest, RunRequest
 from app.models.schema.response.biz_response import Response
 
@@ -93,6 +94,21 @@ def delete_conversation(
     thread_id: UUID,
 ):
     return Response.success(conversations.delete_conversation(user_id=principal.user_id, thread_id=thread_id)).to_dict()
+
+@router.post("/conversation/{thread_id}/activate-turn")
+def activate_conversation_turn(
+    conversations: Injected[ConversationService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    thread_id: UUID,
+    request: ActivateTurnRequest,
+):
+    # 末梢扇形内的变体切换：把活跃叶子移动到所选轮次（持久化用户在分支
+    # 对比中的选择），后续 run 的 parent 与多轮回放均从新叶子派生。
+    # 校验在领域层（归属 + 已完成 + 末梢），违规按业务错误如实透出。
+    conversation = conversations.activate_turn(
+        user_id=principal.user_id, thread_id=thread_id, turn_id=request.turnId,
+    )
+    return Response.success(conversation).to_dict()
 
 @router.get("/agents")
 def list_agents(catalog: Injected[AgentCatalogService]):

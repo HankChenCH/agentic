@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage
 
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
-from app.exceptions import ConversationNotFoundError
+from app.exceptions import ConversationNotFoundError, TurnNotAtTipError
 from app.packages.signal.signal_store import SignalStore
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.domain.conversation.branching import (
@@ -110,6 +110,8 @@ class ConversationService:
         # 普通提问 → parent = 活跃叶子（线性续聊），attempt = 1
         base = self._resolve_branch_base(conversation, payload, branch, by_id)
         if base is not None:
+            # 末梢守卫：节点沿任一变体续聊后即定型，历史节点不再开分支
+            self._ensure_base_at_tip(conversation, base, by_id)
             parent_turn_id = base.parent_turn_id
             attempt_no = next_attempt_no(parent_turn_id, snapshots)
         else:
@@ -135,6 +137,23 @@ class ConversationService:
             latency_ms=0,
         ))
         return conversation, turn
+
+    def _ensure_base_at_tip(self, conversation: AgenticConversation, base, by_id: dict) -> None:
+        """末梢守卫：分支只允许发生在最新问答（"主干 + 末梢一层扇形"）。
+
+        判定"已定型槽位"：活跃路径（叶子自身除外）上任一轮次所在的位置。
+        base 落在已定型槽位——无论是历史轮次本身，还是其槽位在路径后方——
+        都说明该问答之后已有续聊，再开分支违反约束，抛业务错误。放行：
+        base == 叶子（末梢重试/编辑）、base 为叶子的兄弟变体（扇内定位）、
+        base 为叶子的失败子轮（重试最新失败提问）、无活跃叶子。
+        """
+        leaf = by_id.get(conversation.current_turn_id) if conversation.current_turn_id is not None else None
+        if leaf is None or base.turn_id == leaf.turn_id:
+            return
+        chain = ancestor_chain(leaf.turn_id, by_id)
+        settled_slot_parents = {s.parent_turn_id for s in chain[:-1]}
+        if base.parent_turn_id in settled_slot_parents:
+            raise TurnNotAtTipError("仅最新问答支持重新生成/编辑")
 
     def _resolve_branch_base(
         self,
@@ -314,26 +333,68 @@ class ConversationService:
             raise ConversationNotFoundError("conversation not found")
         return conversation
 
-    def list_history_messages(self, user_id: UUID, thread_id: UUID, offset: int | None = None, limit: int = 20):
-        """UI 历史回放集合：活跃路径上的 COMPLETED 轮次 + 全部非 COMPLETED 轮次。
+    def activate_turn(self, user_id: UUID, thread_id: UUID, turn_id: UUID) -> AgenticConversation:
+        """切换活跃叶子到指定轮次（末梢扇形内的变体切换）。
 
-        被重试替换的旧 COMPLETED 轮次不在活跃路径上，不返回——前端刷新后只
-        看到当前生效的问答，不再出现重复问答；失败/取消/悬挂 RUNNING 轮次
-        保留并按状态标注（前端渲染失败占位）。offset/limit 沿用"取最新一页"
-        语义（活跃过滤后按 turn_num 末端开窗），items 旧→新排序。
+        末梢规则：目标必须已完成，且是当前叶子本身或其兄弟——沿任一变体
+        续聊后节点即定型，历史节点不支持切换。切换只移动活跃叶子、不产生
+        新轮次；后续 run 的 parent 与 replay 均从新叶子派生（所见即上下文）。
+        """
+        conversation = self.describe_conversation(user_id=user_id, thread_id=thread_id)
+        turns = self.conversation_repo.list_thread_turns(thread_id)
+        by_id = {t.turn_id: snapshot_of(t, None) for t in turns}
+        target = by_id.get(turn_id)
+        if target is None:
+            raise ConversationNotFoundError("conversation not found")
+        if target.status != AgenticTurnStatus.COMPLETED:
+            raise TurnNotAtTipError("仅已完成的问答可切换分支")
+        leaf = by_id.get(conversation.current_turn_id) if conversation.current_turn_id is not None else None
+        if leaf is None:
+            raise TurnNotAtTipError("当前没有可切换的分支")
+        if target.turn_id != leaf.turn_id and target.parent_turn_id != leaf.parent_turn_id:
+            raise TurnNotAtTipError("仅最新问答可切换分支")
+        if target.turn_id == conversation.current_turn_id:
+            return conversation  # 幂等：叶子已在目标上
+        return self.conversation_repo.activate_turn(thread_id=thread_id, turn_id=turn_id)
+
+    def list_history_messages(self, user_id: UUID, thread_id: UUID, offset: int | None = None, limit: int = 20):
+        """UI 历史回放集合：活跃路径 + 末梢扇形 + 全部非 COMPLETED 轮次。
+
+        末梢扇形 = 活跃叶子的兄弟变体（同一问答的其他尝试）——刷新后仍可
+        对比与切换（激活接口只允许在末梢移动叶子）。被续聊定型的历史槽位
+        不返回；失败/取消/悬挂 RUNNING 轮次保留并按状态标注（前端渲染失败
+        占位）。响应携带 ``active_turn_id``（活跃叶子），前端据此确定树的
+        head。offset/limit 沿用"取最新一页"语义，items 旧→新排序。
         """
         conversation = self.describe_conversation(user_id=user_id, thread_id=thread_id)
         turns = self.conversation_repo.list_thread_turns(thread_id)
         by_id = {t.turn_id: snapshot_of(t, None) for t in turns}
         leaf = by_id.get(conversation.current_turn_id) if conversation.current_turn_id is not None else None
         active_ids = {s.turn_id for s in ancestor_chain(leaf.turn_id, by_id)} if leaf is not None else set()
+        # 末梢槽位取"最深"：叶子有子轮（进行中/失败的下一问）时，末梢是其子槽位，
+        # 叶子自身的变体扇形已被定型收回；否则末梢即叶子所在的变体扇形
+        leaf_has_children = any(t.parent_turn_id == leaf.turn_id for t in turns) if leaf is not None else False
+        tip_slot_parent = leaf.turn_id if leaf is not None and leaf_has_children else leaf.parent_turn_id if leaf is not None else None
+        fan_ids = {
+            t.turn_id
+            for t in turns
+            if leaf is not None and t.parent_turn_id == tip_slot_parent and t.turn_id != leaf.turn_id
+        } if leaf is not None else set()
         visible = [
             t for t in turns
-            if t.turn_id in active_ids or AgenticTurnStatus(t.status) != AgenticTurnStatus.COMPLETED
+            if t.turn_id in active_ids
+            or t.turn_id in fan_ids
+            or AgenticTurnStatus(t.status) != AgenticTurnStatus.COMPLETED
         ]
         total = len(visible)
         start = offset or 0
         # desc 开窗再反转：与旧"turn_num desc 分页取最新一页"的契约一致
         newest_first = list(reversed(visible))
         page = newest_first[start:start + limit]
-        return {"items": list(reversed(page)), "total": total, "offset": start, "limit": limit}
+        return {
+            "items": list(reversed(page)),
+            "total": total,
+            "offset": start,
+            "limit": limit,
+            "active_turn_id": conversation.current_turn_id,
+        }

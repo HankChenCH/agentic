@@ -16,6 +16,7 @@ from app.models.domain.agentic import (
     AgenticMessageType,
     AgenticTurnStatus,
 )
+from app.exceptions import ConversationNotFoundError, TurnNotAtTipError
 from app.repositories.conversation_repository import ConversationRepository
 from app.services.domain.conversation.branching import (
     ancestor_chain,
@@ -25,7 +26,7 @@ from app.services.domain.conversation.branching import (
 )
 from app.services.domain.conversation.conversation_service import ConversationService
 
-from conftest import TEST_USER_ID, StubLoggerFactory
+from conftest import TEST_USER_ID, OTHER_USER_ID, StubLoggerFactory
 
 
 def _text(text):
@@ -144,12 +145,15 @@ def test_detect_retry_of_latest_hits_and_misses():
     t1, t2 = uuid4(), uuid4()
     chain = [_snap(t1, content=q1), _snap(t2, content=q2)]
 
-    # 重试最新一轮：payload 截断到最后一个提问 [q1, a1, q2]
+    # 重新生成：payload 截断到最后一个提问 [q1, a1, q2]，末位等值
     assert detect_retry_of_latest(_user_payload("问题一", "回答一", "问题二"), chain) == t2
-    # 单轮重试
+    # 编辑最新问题：前缀等值、末位不同（q2 的编辑版）→ 同样命中，兄弟变体
+    assert detect_retry_of_latest(_user_payload("问题一", "回答一", "新问题二"), chain) == t2
+    # 单轮重试/编辑
     assert detect_retry_of_latest(_user_payload("问题一"), chain[:1]) == t1
-    # 非重试：新问题内容不等值
-    assert detect_retry_of_latest(_user_payload("问题一", "回答一", "新问题"), chain) is None
+    assert detect_retry_of_latest(_user_payload("问题一的编辑版"), chain[:1]) == t1
+    # 前缀错位：首问就不等值（普通续聊的新提问不在此形态——长度已不同）
+    assert detect_retry_of_latest(_user_payload("别的", "回答", "问题二"), chain) is None
     # 长度/结构不符：偶数条、角色不交替、user 数与轮次数不一致
     assert detect_retry_of_latest(_user_payload("问题一", "回答一"), chain) is None
     assert detect_retry_of_latest([("user", q1), ("user", q2)], chain) is None
@@ -236,43 +240,164 @@ def test_retry_completion_replaces_answer_in_llm_replay(service, engine):
 
 
 def test_explicit_branch_signal_locates_base_by_message_id(service, engine):
-    """显式信号：baseMessageId（目标问题前一条 assistant 行 id）精确定位兄弟基点。"""
+    """显式信号：baseMessageId 定位兄弟基点；仅末梢可分支（中段已定型拒绝）。"""
     thread_id = uuid4()
-    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
-    _answer(service, t1, "A1")
-    _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
-    _answer(service, t2, "A2")
-
-    # 会话中段重试 Q1：baseMessageId 指向 t1 的 assistant 行（简化：这里即唯一 assistant 行）
+    _, t0 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q0"))
+    _answer(service, t0, "A0")
     with Session(engine) as session:
-        assistant_row = session.exec(
+        t0_assistant = session.exec(
             select(AgenticConversationMessage)
-            .where(AgenticConversationMessage.turn_id == t1.turn_id)
+            .where(AgenticConversationMessage.turn_id == t0.turn_id)
             .where(AgenticConversationMessage.role == AgenticMessageRole.ASSISTANT)
         ).first()
-    _, t3 = service.open_turn(
-        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3",
-        content=_text("Q1-重试"), branch={"baseMessageId": str(assistant_row.message_id)},
+
+    # 末梢重新生成：baseMessageId = 叶子轮次自己的 assistant 行 → 兄弟变体
+    _, t2 = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2",
+        content=_text("Q0"), branch={"baseMessageId": str(t0_assistant.message_id)},
     )
-    assert t3.parent_turn_id == t1.parent_turn_id
-    assert t3.attempt_no == 2
+    assert t2.parent_turn_id == t0.parent_turn_id
+    assert t2.attempt_no == 2
 
-    # 中段重试完成后，活跃路径经 t3（叶子推进），Q2 子树出局
-    _answer(service, t3, "A1-重试")
-    conversation = service.describe_conversation(user_id=TEST_USER_ID, thread_id=thread_id)
-    assert conversation.current_turn_id == t3.turn_id
+    # 中段节点已定型：沿 t2 续聊后再对 t0（此时已是祖先）重试 → 末梢守卫拒绝
+    _answer(service, t2, "A2")
+    _, t3 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3", content=_text("Q3"))
+    _answer(service, t3, "A3")
+    with pytest.raises(TurnNotAtTipError):
+        service.open_turn(
+            user_id=TEST_USER_ID, thread_id=thread_id, run_id="r4",
+            content=_text("Q0-重试"), branch={"baseMessageId": str(t0_assistant.message_id)},
+        )
 
-    # 非法/跨会话 id 降级为普通续聊
+    # 非法/跨会话 id 降级为普通续聊（不拦截）
     _, t4 = service.open_turn(
-        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r4",
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r5",
         content=_text("Q4"), branch={"baseMessageId": str(uuid4())},
     )
     assert t4.parent_turn_id == t3.turn_id
     assert t4.attempt_no == 1
 
 
+def test_activate_turn_moves_leaf_within_tip_fan(service, engine):
+    """变体切换：末梢扇形内移动活跃叶子；续聊沿所选分支，LLM 回放随之切换。"""
+    thread_id = uuid4()
+    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    _answer(service, t1, "旧答案")
+    _, t2 = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2",
+        content=_text("Q1"), payload=_user_payload("Q1"),
+    )
+    _answer(service, t2, "新答案")
+    assert service.describe_conversation(user_id=TEST_USER_ID, thread_id=thread_id).current_turn_id == t2.turn_id
+
+    # 用户对比后选定旧变体：切换叶子 → 续聊挂在 t1 下、上下文走旧答案分支
+    service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=t1.turn_id)
+    assert service.describe_conversation(user_id=TEST_USER_ID, thread_id=thread_id).current_turn_id == t1.turn_id
+
+    _, t3 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3", content=_text("Q2"))
+    assert t3.parent_turn_id == t1.turn_id
+    _answer(service, t3, "A2-沿旧分支")
+    history = service.replay_history(thread_id=thread_id, base_turn_id=t3.turn_id)
+    texts = [m.content for m in history if m.type == "ai" and isinstance(m.content, str)]
+    assert texts == ["旧答案", "A2-沿旧分支"]
+
+    # 幂等：激活当前叶子无副作用；续聊定型后，旧节点不可再激活（末梢规则）
+    service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=t3.turn_id)
+    assert service.describe_conversation(user_id=TEST_USER_ID, thread_id=thread_id).current_turn_id == t3.turn_id
+    with pytest.raises(TurnNotAtTipError):
+        service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=t1.turn_id)
+
+
+def test_activate_turn_rejects_off_tip_and_incomplete(service, engine):
+    """末梢守卫：非末梢（祖先）与未完成轮次不可切换；跨会话按不存在处理。"""
+    thread_id = uuid4()
+    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    _answer(service, t1, "A1")
+    _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
+    _answer(service, t2, "A2")
+    _, failed = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3", content=_text("Q3"))
+    service.fail_turn(failed)
+
+    # 祖先节点（已定型）拒绝
+    with pytest.raises(TurnNotAtTipError):
+        service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=t1.turn_id)
+    # 未完成（失败）轮次拒绝
+    with pytest.raises(TurnNotAtTipError):
+        service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=failed.turn_id)
+    # 跨会话/不存在的轮次按不存在处理
+    with pytest.raises(ConversationNotFoundError):
+        service.activate_turn(user_id=TEST_USER_ID, thread_id=thread_id, turn_id=uuid4())
+    # 他人会话 404（归属校验前置）
+    with pytest.raises(ConversationNotFoundError):
+        service.activate_turn(user_id=OTHER_USER_ID, thread_id=thread_id, turn_id=t1.turn_id)
+
+
+def test_edit_latest_question_creates_sibling_attempt(service, engine):
+    """复刻线上场景：问 q1 → 问 q2 → 编辑 q2 重跑 → t3 与 t2 并列、父为 t1。"""
+    thread_id = uuid4()
+    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    _answer(service, t1, "A1")
+    _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
+    _answer(service, t2, "A2")
+
+    # 编辑 t2 的问题重跑：payload 截断到 [q1, a1, q2编辑版]
+    _, t3 = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3",
+        content=_text("Q2-编辑"), payload=_user_payload("Q1", "A1", "Q2-编辑"),
+    )
+    assert t3.parent_turn_id == t1.turn_id
+    assert t3.attempt_no == 2
+
+    _answer(service, t3, "A2-编辑")
+    # 编辑完成后活跃叶子推进到 t3，t2 出局
+    conversation = service.describe_conversation(user_id=TEST_USER_ID, thread_id=thread_id)
+    assert conversation.current_turn_id == t3.turn_id
+
+    # 后续普通提问：上下文走 t1 → t3 活跃路径，被替换的 A2 不再进 LLM
+    _, t4 = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r4",
+        content=_text("Q3"), payload=_user_payload("Q1", "A1", "Q2-编辑", "A2-编辑", "Q3"),
+    )
+    assert t4.parent_turn_id == t3.turn_id
+    history = service.replay_history(thread_id=thread_id, base_turn_id=t4.turn_id)
+    texts = [m.content for m in history if m.type == "ai" and isinstance(m.content, str)]
+    assert "A2" not in texts and "A2-编辑" in texts
+
+    # 历史展示：t2（被编辑替换的旧 COMPLETED 轮次）隐藏，活跃问答保留
+    items = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)["items"]
+    ids = {t.turn_id for t in items}
+    assert t2.turn_id not in ids
+    assert {t1.turn_id, t3.turn_id, t4.turn_id} <= ids
+
+
+def test_history_includes_tip_fan_for_offline_comparison(service, engine):
+    """刷新后仍可对比：末梢扇形随历史下发（带 active_turn_id）；定型后收回。"""
+    thread_id = uuid4()
+    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    _answer(service, t1, "旧答案")
+    _, t2 = service.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2",
+        content=_text("Q1"), payload=_user_payload("Q1"),
+    )
+    _answer(service, t2, "新答案")
+
+    result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
+    ids = {t.turn_id for t in result["items"]}
+    assert result["active_turn_id"] == t2.turn_id
+    assert {t1.turn_id, t2.turn_id} <= ids  # 末梢扇形可见，可切换
+
+    # 沿 t2 续聊定型后：扇形槽位退居路径后方，旧变体不再下发
+    _, t3 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3", content=_text("Q2"))
+    _answer(service, t3, "A2")
+    result2 = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
+    ids2 = {t.turn_id for t in result2["items"]}
+    assert result2["active_turn_id"] == t3.turn_id
+    assert t1.turn_id not in ids2
+    assert {t2.turn_id, t3.turn_id} <= ids2
+
+
 def test_history_returns_active_path_plus_incomplete_turns(service, engine):
-    """历史集合：被替换的旧 COMPLETED 轮次隐藏，失败/取消轮次保留（标注状态）。"""
+    """历史集合：末梢扇形（新旧变体）可见可切换，失败/取消轮次保留（标注状态）。"""
     thread_id = uuid4()
     _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
     _answer(service, t1, "A1")
@@ -281,7 +406,7 @@ def test_history_returns_active_path_plus_incomplete_turns(service, engine):
     _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
     service.fail_turn(t2)
 
-    # Q1 重试成功 → 旧 t1 出局（payload 截断到目标提问，单轮链即 [Q1]）
+    # Q1 重试成功 → 末梢变体扇形 = {t1, retry} 都可见可切换；t2 失败轮保留标注
     _, retry = service.open_turn(
         user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3",
         content=_text("Q1"), payload=_user_payload("Q1"),
@@ -290,10 +415,11 @@ def test_history_returns_active_path_plus_incomplete_turns(service, engine):
 
     result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
     items = result["items"]
-    ids = [t.turn_id for t in items]
-    assert result["total"] == len(items) == 2
-    assert retry.turn_id in ids          # 活跃叶子
-    assert t1.turn_id not in ids         # 被重试替换：隐藏
+    ids = {t.turn_id for t in items}
+    assert result["total"] == len(items) == 3
+    assert result["active_turn_id"] == retry.turn_id
+    assert retry.turn_id in ids          # 活跃叶子（新变体）
+    assert t1.turn_id in ids             # 末梢扇形旧变体：保留可切换
     assert t2.turn_id in ids             # 失败轮次：保留并标注
     by_id = {t.turn_id: t for t in items}
     assert AgenticTurnStatus(by_id[t2.turn_id].status) == AgenticTurnStatus.FAILED

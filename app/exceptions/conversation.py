@@ -34,3 +34,14 @@ class AttachmentNotFoundError(ConversationError):
 
     default_code = 1012
     default_http_status = 404
+
+
+class TurnNotAtTipError(ConversationError):
+    """分支操作只允许发生在末梢（最新问答）。
+
+    分支模型约束"主干 + 末梢一层扇形"：编辑/重新生成、变体切换都只作用于
+    最新问答；沿任一变体继续对话后节点即定型（冻结），不支持在历史节点上
+    开分支或切换。
+    """
+
+    default_code = 1013

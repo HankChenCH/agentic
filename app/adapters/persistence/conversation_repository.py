@@ -190,6 +190,25 @@ class ConversationRepository:
             )
             session.commit()
 
+    def activate_turn(self, thread_id: UUID, turn_id: UUID) -> AgenticConversation:
+        """把活跃叶子切换到指定轮次（末梢扇形内的变体切换持久化）。
+
+        只写 current_turn_id——后续 open_turn 的 parent 与 replay 的活跃路径
+        都从这个叶子派生。tip 校验（目标须为叶子或其兄弟）在领域层完成，
+        这里是纯写路径。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            conversation = session.exec(
+                select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+            ).first()
+            if conversation is None:
+                return None
+            conversation.current_turn_id = turn_id
+            session.add(conversation)
+            session.commit()
+            session.refresh(conversation)
+        return conversation
+
     def store_conversation_turn(self, conversation_turn: AgenticConversationTurn) -> AgenticConversationTurn:
         with Session(self.engine, expire_on_commit=False) as session:
             session.add(conversation_turn)

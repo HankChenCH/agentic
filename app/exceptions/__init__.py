@@ -16,6 +16,7 @@ from app.exceptions.conversation import (
     AttachmentTooLargeError,
     ConversationError,
     ConversationNotFoundError,
+    TurnNotAtTipError,
     UnsupportedAttachmentTypeError,
 )
 from app.exceptions.knowledge import (
@@ -50,6 +51,7 @@ from app.exceptions.user import (
 __all__ = [
     "ConversationError",
     "ConversationNotFoundError",
+    "TurnNotAtTipError",
     "UnsupportedAttachmentTypeError",
     "AttachmentTooLargeError",
     "AttachmentNotFoundError",
