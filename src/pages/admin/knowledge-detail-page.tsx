@@ -195,6 +195,9 @@ export const KnowledgeDetailPage: FC = () => {
         ) : (
           <DocumentTable
             documents={docs.documents}
+            onOpenDetail={(doc) => {
+              if (kbId) void navigate(`/admin/knowledge/${kbId}/document/${doc.id}`);
+            }}
             onPreview={(doc) => {
               if (kbId) {
                 pdfPreview.open({

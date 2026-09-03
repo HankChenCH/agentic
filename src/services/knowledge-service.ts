@@ -7,10 +7,12 @@ import {
   postJson,
 } from "@/lib/http";
 import type {
+  BackendDocumentSegment,
   BackendKnowledgeBase,
   BackendKnowledgeDocument,
   KnowledgeDocumentListResult,
   KnowledgeListResult,
+  KnowledgeSegmentListResult,
 } from "@/services/types";
 
 /**
@@ -147,6 +149,19 @@ export const knowledgeService = {
   },
 
   /**
+   * 查询单个文档。
+   * GET /knowledge/{kbId}/document/{docId}
+   */
+  async getDocument(
+    kbId: string,
+    docId: string,
+  ): Promise<BackendKnowledgeDocument> {
+    return getJson<BackendKnowledgeDocument>(
+      `/knowledge/${kbId}/document/${docId}`,
+    );
+  },
+
+  /**
    * 分页拉取知识库下的文档列表。
    * GET /knowledge/{kbId}/document?page=&pageSize=
    */
@@ -213,6 +228,100 @@ export const knowledgeService = {
   ): Promise<BackendKnowledgeDocument> {
     return postJson<BackendKnowledgeDocument>(
       `/knowledge/${kbId}/document/${docId}/${enabled ? "enable" : "disable"}`,
+    );
+  },
+
+  // -----------------------------------------------------------------------
+  // 文档分段管理（分段是文档的子资源；写操作要求文档处于稳定态）
+  // -----------------------------------------------------------------------
+
+  /**
+   * 分页拉取文档分段（按 position 有序，keyword 非空时按内容模糊过滤）。
+   * GET /knowledge/{kbId}/document/{docId}/segment?page=&pageSize=&keyword=
+   */
+  async listSegments(
+    kbId: string,
+    docId: string,
+    page = 1,
+    pageSize = 20,
+    keyword?: string,
+  ): Promise<KnowledgeSegmentListResult> {
+    return getJson<KnowledgeSegmentListResult>(
+      `/knowledge/${kbId}/document/${docId}/segment`,
+      { params: { page, pageSize, ...(keyword ? { keyword } : {}) } },
+    );
+  },
+
+  /**
+   * 手动新增分段：追加到文档末尾，即时就绪并写入向量库。
+   * POST /knowledge/{kbId}/document/{docId}/segment
+   */
+  async createSegment(
+    kbId: string,
+    docId: string,
+    input: { content: string },
+  ): Promise<BackendDocumentSegment> {
+    return postJson<BackendDocumentSegment>(
+      `/knowledge/${kbId}/document/${docId}/segment`,
+      input,
+    );
+  },
+
+  /**
+   * 编辑分段内容（整体替换，后端自动重新嵌入）。
+   * PATCH /knowledge/{kbId}/document/{docId}/segment/{segmentId}
+   */
+  async updateSegment(
+    kbId: string,
+    docId: string,
+    segmentId: string,
+    input: { content: string },
+  ): Promise<BackendDocumentSegment> {
+    return patchJson<BackendDocumentSegment>(
+      `/knowledge/${kbId}/document/${docId}/segment/${segmentId}`,
+      input,
+    );
+  },
+
+  /**
+   * 删除分段（后端同步删行并清理对应向量）。
+   * DELETE /knowledge/{kbId}/document/{docId}/segment/{segmentId}
+   */
+  async deleteSegment(
+    kbId: string,
+    docId: string,
+    segmentId: string,
+  ): Promise<BackendDocumentSegment> {
+    return deleteJson<BackendDocumentSegment>(
+      `/knowledge/${kbId}/document/${docId}/segment/${segmentId}`,
+    );
+  },
+
+  /**
+   * 启用/停用分段（禁用后不参与检索召回）。
+   * POST /knowledge/{kbId}/document/{docId}/segment/{segmentId}/enable | /disable
+   */
+  async setSegmentEnabled(
+    kbId: string,
+    docId: string,
+    segmentId: string,
+    enabled: boolean,
+  ): Promise<BackendDocumentSegment> {
+    return postJson<BackendDocumentSegment>(
+      `/knowledge/${kbId}/document/${docId}/segment/${segmentId}/${enabled ? "enable" : "disable"}`,
+    );
+  },
+
+  /**
+   * 整篇重分段：重新走解析→分块→向量全量重写（手动分段/禁用一并被替换）。
+   * POST /knowledge/{kbId}/document/{docId}/rechunk
+   */
+  async rechunkDocument(
+    kbId: string,
+    docId: string,
+  ): Promise<BackendKnowledgeDocument> {
+    return postJson<BackendKnowledgeDocument>(
+      `/knowledge/${kbId}/document/${docId}/rechunk`,
     );
   },
 };

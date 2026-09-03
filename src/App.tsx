@@ -29,6 +29,11 @@ const KnowledgeListPage = lazy(() =>
 const KnowledgeDetailPage = lazy(() =>
   import("@/pages/admin/knowledge-detail-page").then((m) => ({ default: m.KnowledgeDetailPage })),
 );
+const KnowledgeDocumentDetailPage = lazy(() =>
+  import("@/pages/admin/knowledge-document-detail-page").then((m) => ({
+    default: m.KnowledgeDocumentDetailPage,
+  })),
+);
 const MemoryGraphPage = lazy(() =>
   import("@/pages/admin/memory-graph-page").then((m) => ({ default: m.MemoryGraphPage })),
 );
@@ -86,6 +91,14 @@ const router = createBrowserRouter([
       { path: "/admin", element: <Suspense fallback={<LazyFallback />}><AdminHomePage /></Suspense> },
       { path: "/admin/knowledge", element: <Suspense fallback={<LazyFallback />}><KnowledgeListPage /></Suspense> },
       { path: "/admin/knowledge/:kbId", element: <Suspense fallback={<LazyFallback />}><KnowledgeDetailPage /></Suspense> },
+      {
+        path: "/admin/knowledge/:kbId/document/:docId",
+        element: (
+          <Suspense fallback={<LazyFallback />}>
+            <KnowledgeDocumentDetailPage />
+          </Suspense>
+        ),
+      },
       { path: "/admin/memory-graph", element: <Suspense fallback={<LazyFallback />}><MemoryGraphPage /></Suspense> },
       { path: "/knowledge", element: <Navigate to="/admin/knowledge" replace /> },
       {

@@ -1,5 +1,5 @@
 import type { FC } from "react";
-import { EyeIcon, FileTextIcon, MoreVerticalIcon } from "lucide-react";
+import { EyeIcon, FileTextIcon, LayersIcon, MoreVerticalIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,8 @@ import { KnowledgeStatusBadge } from "@/components/knowledge/status-badge";
 
 interface DocumentTableProps {
   documents: BackendKnowledgeDocument[];
+  /** 进入文档详情页（分段管理） */
+  onOpenDetail: (doc: BackendKnowledgeDocument) => void;
   onPreview: (doc: BackendKnowledgeDocument) => void;
   onEdit: (doc: BackendKnowledgeDocument) => void;
   onDelete: (doc: BackendKnowledgeDocument) => void;
@@ -40,6 +42,7 @@ interface DocumentTableProps {
 
 export const DocumentTable: FC<DocumentTableProps> = ({
   documents,
+  onOpenDetail,
   onPreview,
   onEdit,
   onDelete,
@@ -70,8 +73,8 @@ export const DocumentTable: FC<DocumentTableProps> = ({
                     <button
                       type="button"
                       className="max-w-full truncate text-left font-medium hover:underline"
-                      title="预览文档"
-                      onClick={() => onPreview(doc)}
+                      title="查看分段详情"
+                      onClick={() => onOpenDetail(doc)}
                     >
                       {doc.name}
                     </button>
@@ -87,7 +90,14 @@ export const DocumentTable: FC<DocumentTableProps> = ({
                 {formatFileSize(doc.file_size)}
               </TableCell>
               <TableCell className="text-muted-foreground tabular-nums">
-                {doc.seg_num}
+                <button
+                  type="button"
+                  className="hover:text-foreground hover:underline"
+                  title="查看分段详情"
+                  onClick={() => onOpenDetail(doc)}
+                >
+                  {doc.seg_num}
+                </button>
               </TableCell>
               <TableCell>
                 <KnowledgeStatusBadge
@@ -115,6 +125,10 @@ export const DocumentTable: FC<DocumentTableProps> = ({
                     <MoreVerticalIcon />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-36">
+                    <DropdownMenuItem onClick={() => onOpenDetail(doc)}>
+                      <LayersIcon />
+                      分段详情
+                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => onPreview(doc)}>
                       <EyeIcon />
                       预览
