@@ -32,6 +32,9 @@ import {
   AvatarFallback,
 } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { REST_BASE } from "@/lib/config";
+import { attachmentService } from "@/services/attachment-service";
+import { getToken } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 
 const useFileSrc = (file: File | undefined) => {
@@ -54,19 +57,107 @@ const useFileSrc = (file: File | undefined) => {
   return src;
 };
 
+// 预签名展示地址缓存：稳定引用 → { src, 签发时刻, 是否签名地址 }。缩略图
+// 与大图对话框共享同一缓存避免重复解析；blob 降级结果不参与 TTL 过期
+// （blob 无过期概念，复用到页面卸载即可）。
+const displayUrlCache = new Map<
+  string,
+  { src: string; issuedAt: number; presigned: boolean }
+>();
+// 后端签名 TTL 600s，取半程视为过期重签，避免渲染中途签名失效
+const DISPLAY_URL_TTL_MS = 5 * 60 * 1000;
+
+// 本域附件引用判定：裸相对路径或「API 根 + 相对路径」的绝对 URL（host
+// 任意）都算，与后端 resolve_own_key 的 path 比前缀口径一致
+const isAttachmentRef = (src: string) => {
+  try {
+    return new URL(src, REST_BASE).pathname.startsWith("/agentic/attachments/");
+  } catch {
+    return false;
+  }
+};
+
+// 无签名可用（后端返回 url=null，本地磁盘后端）时的降级：鉴权 fetch 稳定
+// 引用转 blob。本地后端无 302、同 API 源无跨域问题，字节可直接读取。
+const fetchAttachmentBlobUrl = async (
+  ref: string,
+): Promise<string | undefined> => {
+  try {
+    const token = getToken();
+    const res = await fetch(new URL(ref, REST_BASE).toString(), {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!res.ok) return undefined;
+    return URL.createObjectURL(await res.blob());
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * 本域附件引用 → 可展示 src。
+ *
+ * 稳定引用不能直接进 ``<img>``：图片标签带不上 Authorization 头，直接
+ * 渲染必 401（rustfs 的 302 预签名响应无 CORS 头，fetch 跟随也拿不到
+ * blob）。故先经后端 ``/agentic/attachments/url`` 换预签名地址再渲染；
+ * 外部 http(s) URL / data URL 原样使用，解析失败回落 undefined（缩略图
+ * 显示图标），不打断消息渲染。
+ */
+const useAttachmentDisplaySrc = (ref: string | undefined) => {
+  const [src, setSrc] = useState<string | undefined>(ref);
+
+  useEffect(() => {
+    if (!ref || !isAttachmentRef(ref)) {
+      setSrc(ref);
+      return;
+    }
+    const cached = displayUrlCache.get(ref);
+    if (
+      cached &&
+      (!cached.presigned || Date.now() - cached.issuedAt < DISPLAY_URL_TTL_MS)
+    ) {
+      setSrc(cached.src);
+      return;
+    }
+    let cancelled = false;
+    setSrc(undefined);
+    attachmentService
+      .getDisplayUrl(ref)
+      .then(async (presigned) => {
+        const resolved = presigned ?? (await fetchAttachmentBlobUrl(ref));
+        if (!resolved || cancelled) return;
+        displayUrlCache.set(ref, {
+          src: resolved,
+          issuedAt: Date.now(),
+          presigned: presigned != null,
+        });
+        setSrc(resolved);
+      })
+      .catch(() => {
+        // 保持 undefined：渲染回落图标，与加载中同态
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ref]);
+
+  return src;
+};
+
 const useAttachmentSrc = () => {
   const { file, src } = useAuiState(
     useShallow((s): { file?: File; src?: string } => {
       if (s.attachment.type !== "image") return {};
       if (s.attachment.file) return { file: s.attachment.file };
-      const src = s.attachment.content?.filter((c) => c.type === "image")[0]
+      const image = s.attachment.content?.filter((c) => c.type === "image")[0]
         ?.image;
-      if (!src) return {};
-      return { src };
+      if (!image) return {};
+      return { src: image };
     }),
   );
 
-  return useFileSrc(file) ?? src;
+  const displaySrc = useAttachmentDisplaySrc(src);
+  return useFileSrc(file) ?? displaySrc;
 };
 
 type AttachmentPreviewProps = {
