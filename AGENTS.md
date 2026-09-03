@@ -146,7 +146,10 @@ server/                          # this directory is its own git repo (the works
 │                             #   content 为 str | ag-ui InputContent 数组——多模态口径，
 │                             #   storage_content() 归一为落库数组)
 │   ├── domain/agentic/      # SQLModel tables: conversation / turn / message（conversation 带 user_id FK→users.id，
-│   │                        #   归属过滤在仓储查询条件内强制）
+│   │                        #   归属过滤在仓储查询条件内强制；current_turn_id 为分支树活跃叶子——
+│   │                        #   仅 COMPLETED 推进，turn 带 parent_turn_id 自引用 FK（兄弟=同一问答的
+│   │                        #   重试/编辑变体）+ attempt_no，活跃路径沿 parent 链回溯，见
+│   │                        #   domain/conversation/branching.py）
 │   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
 │   │                        #   迁移回填存量数据的不可登录占位用户）
 │   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
@@ -369,7 +372,9 @@ Server layer rules:
   chunks into ag-ui events; it is the only place that should know both shapes.
 - **knowledge domain split** → 管理侧在 `services/domain/knowledge/`（one service per
   aggregate root + pipeline: `KnowledgeBaseService` / `KnowledgeDocumentService` /
-  `DocumentIngestionService`），检索能力在
+  `KnowledgeSegmentService`（分段管理：查看/搜索/手动新增/编辑（自动重嵌）/启停/
+  删除/整篇 rechunk 受理——Celery 分发留端点层；分段写要求文档处于稳定态
+  ready/enabled/disabled）/ `DocumentIngestionService`），检索能力在
   `components/knowledge/`（拓扑见「服务层两层制」箭头表——检索编排既要被 agent
   工具消费又要碰 repositories/infra 与领域向量适配器，放 components 成环风险最小）。
   知识库归属与可见性：knowledge_base 带 user_id（端点层 UserPrincipal 注入）与
@@ -388,7 +393,9 @@ Server layer rules:
   <1 混合；search_many = 检索管线通道 A 的候选构建——逐库取回 + 分数合并）；
   `KnowledgeRetrievalService` 做可见性圈定
   （`list_visible_knowledge`/`search_for_user`）→enabled 收敛→
-  嵌入模型一致性守卫（`KnowledgeBase.embedding_model` 的消费者）→文档 enabled 后滤→
+  嵌入模型一致性守卫（`KnowledgeBase.embedding_model` 的消费者）→文档 enabled 后滤→（分段级禁用：行
+  status=disabled 的分段在候选构建期按行状态剔除，种子与邻段 alike——向量库不带
+  状态，行库是事实源；定位读取 knowledge_context 不受分段禁用约束）
   双通道召回 + RRF 融合（通道 A = 混合检索候选，默认
   alpha=`DEFAULT_HYBRID_ALPHA`=0.5，工具缺省即走该值；
   通道 B = 命中邻域扩展，经 `list_segments_by_doc` 按 position 取前后段，
@@ -678,14 +685,24 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   ③ 模型侧：图片**永不经模型 API 拉取本域 URL**——`user_message_from_content`
   （domain/conversation/multimodal.py）把 url 引用经 `ConversationAttachmentStore`
   的 resolver 读成字节转 langchain base64 块（云端拉不到内网 rustfs）；
-  data source 直接转 base64，外部 http(s) URL 透传。④ 降级：模型未声明
+  data source 直接转 base64，外部 http(s) URL 透传。本域判定取
+  `urlsplit().path` 比前缀（与 `resolve_own_key` 同口径）而非原始串
+  startswith——前端发送「API 根 + 相对路径」的绝对 URL（浏览器 `<img>`
+  渲染需要），host 任意；按原始串判定会把绝对引用误当外部 URL 透传厂商
+  （云端拉不到本域地址，run 400/RUN_ERROR，e2e 实测回归）。④ 降级：模型未声明
   vision 时丢图——当前轮文本尾注明「已忽略 N 张图片」（历史回放静默，
   注明只服务一次防 prompt 污染）；附件读取失败按同路径降级不炸流。
   ⑤ 附件分域（`attachments.py`）：上传永远过后端（image/* 校验 + 10 MiB
-  断流），展示走 `GET /agentic/attachments/{path}` 鉴权后 302 预签名
-  （obstore.sign，TTL 600s，`Cache-Control: no-store`），LLM 走内部
+  断流），浏览器展示经 `GET /agentic/attachments/url?ref=...` 鉴权后取
+  预签名 URL 的 JSON（obstore.sign，TTL 600s——`<img>` 带不上
+  Authorization 头，直渲稳定引用必 401；302 预签名响应无 CORS 头，
+  fetch 跟随跨域重定向也读不到 blob，故由端点换签后前端直渲；
+  `url=null` 即本地磁盘后端，前端降级鉴权回源转 blob），
+  `GET /agentic/attachments/{path}` 保留为鉴权直读入口（302 预签名/
+  本地降级流式回源），LLM 走内部
   `read()`；签名 URL 不落库不进日志——消息里存的是稳定引用
-  `/agentic/attachments/{id}/{filename}`，key 首段为属主 id，跨用户引用
+  `/agentic/attachments/{id}/{filename}`（前端发送为「API 根 + 相对
+  路径」的绝对 URL），key 首段为属主 id，跨用户引用
   天然失配按 404 处理。⑥ 部署形态：rustfs 直连（含 dev）不配
   `RUSTFS_PUBLIC_ENDPOINT`，签名与读写同实例；rustfs 藏反代后配置
   public endpoint，签名走专用 S3Store（SigV4 签 host+path，代理须原样
