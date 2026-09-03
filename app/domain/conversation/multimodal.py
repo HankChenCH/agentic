@@ -10,10 +10,12 @@ LangChain 形态（langchain_core 1.x 标准多模态块）：``{"type": "image"
 BaseChatOpenAI 系模型类（含 ChatDeepSeek）自动翻译为厂商请求格式。
 
 图片解析策略（vision 模型）：``data`` source 直接转 base64 块；``url``
-source 若为本域附件引用（``/agentic/attachments/...``）经 ``image_resolver``
-读对象存储字节转 base64 块（模型云端拉不到内网 rustfs，必须在服务端取回），
-外部 http(s) URL 透传 url 块。任何解析失败一律降级丢弃，不让单张坏图
-打断整轮流。
+source 若 path 命中本域附件引用（``/agentic/attachments/...``，前端引用
+为「API 根 + 相对路径」的绝对 URL 或裸相对路径，判定与
+``ConversationAttachmentStore.resolve_own_key`` 同口径——取 path 比前缀，
+host 部分任意）经 ``image_resolver`` 读对象存储字节转 base64 块（模型云端
+拉不到内网 rustfs，必须在服务端取回），外部 http(s) URL 透传 url 块。
+任何解析失败一律降级丢弃，不让单张坏图打断整轮流。
 
 降级策略（模型未声明 vision）：图片丢弃；当前轮消息文本尾追加注明
 （用户能从回答察觉图片没被看到），历史回放静默（注明只需服务一次，
@@ -23,6 +25,7 @@ source 若为本域附件引用（``/agentic/attachments/...``）经 ``image_res
 from typing import Callable
 
 import base64
+from urllib.parse import urlsplit
 
 from langchain.messages import HumanMessage
 
@@ -115,7 +118,11 @@ def _image_block(source: dict, image_resolver: Callable[[str], bytes | None] | N
 
     if source_type == "url" and source.get("value"):
         value = source["value"]
-        if value.startswith(_ATTACHMENT_URL_PREFIX):
+        # 本域判定取 path 比前缀而非原始串 startswith：前端引用为「API 根 +
+        # 相对路径」（浏览器 <img> 渲染需要绝对地址），裸相对路径与绝对 URL
+        # 都要命中——按原始串判定会把绝对引用误当外部 URL 透传给厂商（云端
+        # 拉不到本域地址，run 直接 400）。与 resolve_own_key 同口径。
+        if urlsplit(value).path.startswith(_ATTACHMENT_URL_PREFIX):
             # 本域附件引用：服务端读对象存储转 base64（解析失败降级丢弃）
             if image_resolver is None:
                 return None
