@@ -29,10 +29,10 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   ├── components/assistant-ui/  # assistant-ui chat UI (thread, reasoning, markdown-text, tool-*, ...)
 │   ├── components/ui/        # shadcn/ui 原语（base-nova 风格，Base UI 原语；table/input/select/dialog/... ）
 │   ├── components/shared/    # 聊天/管理两侧共用组件：confirm-dialog、PDF 预览通道（provider/查看器/预览弹窗/溯源抽屉）
-│   ├── components/knowledge/ # 知识库管理域组件：卡片列表、状态徽章、表单/上传弹窗、文档表格
+│   ├── components/knowledge/ # 知识库管理域组件：卡片列表、状态徽章、表单/上传弹窗、文档表格、分段列表/表单弹窗
 │   ├── components/memory-graph/ # 记忆图谱域组件：layout.ts（快照→径向布局+索引，实体类型配色）、
 │   │                        #   nodes/node-types（实体卡/事件卡）、detail-panel、legend
-│   ├── hooks/               # use-conversation-list（聊天；初始拉取按登录态门控）+ use-knowledge-list/-base/-documents
+│   ├── hooks/               # use-conversation-list（聊天；初始拉取按登录态门控）+ use-knowledge-list/-base/-documents/-document/-segments
 │   │                        #   （知识库，含 pending/processing/deleting 状态的条件轮询）+ use-memory-graph（快照）
 │   ├── lib/                 # utils.ts (cn())、config.ts (REST_BASE/SSE_URL)、http.ts (axios 信封封装 +
 │   │                        #   请求拦截器注 Bearer/401 登出跳转)、format.ts (文件大小/时间格式化)、
@@ -176,10 +176,18 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
   （`agentic-runtime.tsx` 的 `ServerImageAttachmentAdapter`）——assistant-ui 在
   用户点发送时逐附件调 `send()`，此处 `attachmentService.upload` 成功才返回
   `CompleteAttachment`，失败抛错即中止本次提交（= 上传成功才能发消息）。
-  消息/历史里引用的是后端稳定相对 url（永不过期），`<img>` 直接指向
-  `${REST_BASE}${url}`（后端鉴权后 302 到预签名地址，浏览器直拉对象存储，
-  无需 Bearer 头也无需 blob 中转）；历史重载的还原在
+  适配器 send 时把后端返回的稳定相对 url 拼成「REST_BASE + 相对路径」的
+  绝对 URL 上送（浏览器 `<img>` 渲染需要绝对地址，Vite 无 dev 代理），
+  消息/历史里存的就是这个绝对引用（永不过期）。
+  **展示必须先换预签名地址**：`<img>`/新标签页带不上 Authorization 头，
+  稳定引用直渲必 401（rustfs 的 302 预签名响应无 CORS 头，fetch 跟随
+  也读不到 blob）——`attachment.tsx` 的 `useAttachmentDisplaySrc` 经
+  `attachmentService.getDisplayUrl`（`GET /agentic/attachments/url`）
+  换签名地址再渲染，模块级缓存 + 半程 TTL 重签；后端返回 `url=null`
+  （本地磁盘后端）降级为鉴权 fetch 转 blob。历史重载的还原在
   `translators/thread-message-translator.ts` 的 `toUserThreadMessage`（image
-  part → attachments 卡片）。附件 UI（加号/拖拽/预览）是 assistant-ui 模板
-  自带的，注册适配器即激活。composer 里的语音按钮（Dictate）仍无适配器，
-  点了无效。
+  part → attachments 卡片）：绝对 URL 直接用，裸相对引用拼 `${REST_BASE}`，
+  最终都走同一换签 hook。后端按 path 前缀识别本域引用、服务端读对象存储
+  转 base64 喂模型（外部 URL 才透传）。附件 UI（加号/拖拽/预览）是
+  assistant-ui 模板自带的，注册适配器即激活。composer 里的语音按钮
+  （Dictate）仍无适配器，点了无效。
