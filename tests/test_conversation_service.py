@@ -58,8 +58,18 @@ def test_open_turn_persists_conversation_turn_and_user_message(service, engine):
     conversation, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-1", content=_text("你好"))
 
     assert conversation.agentic_id == "builtin:demo"
-    assert conversation.current_turn_id == turn.turn_id
+    # 活跃叶子语义：开轮不推进指针，完成才推进（重试失败保留旧叶子）
+    assert conversation.current_turn_id is None
     assert AgenticTurnStatus(turn.status) == AgenticTurnStatus.RUNNING
+    assert turn.parent_turn_id is None
+    assert turn.attempt_no == 1
+
+    service.complete_turn(turn)
+    with Session(engine) as session:
+        conversation_row = session.exec(
+            select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+        ).first()
+    assert conversation_row.current_turn_id == turn.turn_id
 
     with Session(engine) as session:
         messages = session.exec(

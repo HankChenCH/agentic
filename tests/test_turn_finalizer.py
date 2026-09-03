@@ -168,7 +168,7 @@ def seeded(engine):
     """一条空标题会话 + 一个 RUNNING 轮次。"""
     repo = ConversationRepository(engine=engine)
     conversation = repo.init_conversation(user_id=TEST_USER_ID, thread_id=uuid4(), agentic_id="builtin:demo")
-    turn = repo.create_conversation_turn(conversation=conversation, run_id="run-1", turn_id=uuid4())
+    turn = repo.create_conversation_turn(conversation=conversation, run_id="run-1", turn_id=uuid4(), parent_turn_id=None, attempt_no=1)
     return repo, conversation, turn
 
 

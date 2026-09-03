@@ -62,8 +62,10 @@ class AgenticConversation(TimeFieldMixin, SQLModel, table=True):
 
     current_turn_id: Union[UUID, None] = Field(
         default=None,
-        title="当前会话轮次id",
-        description="当前会话轮次id"
+        title="活跃叶子轮次id",
+        description="活跃路径的叶子轮次（分支树的 current_node，对齐 ChatGPT 语义）："
+                    "仅在轮次 COMPLETED 时推进；重试失败保留原叶子，被重试轮次经"
+                    " parent 链仍可达。沿叶子回溯 parent 链即 LLM 回放与历史展示的活跃路径"
     )
 
     conversation_title: str = Field(
@@ -88,8 +90,8 @@ class AgenticConversationTurn(TimeFieldMixin, SQLModel, table=True):
     )
 
     run_id: str = Field(
-        title="会话轮次id",
-        description="会话轮次id（前端）"
+        title="运行id",
+        description="前端本次运行标识（每次 run 新生成，与轮次非一一对应语义由 turn_id 承担）"
     )
 
     turn_id: UUID = Field(
@@ -101,7 +103,23 @@ class AgenticConversationTurn(TimeFieldMixin, SQLModel, table=True):
 
     turn_num: int = Field(
         title="会话轮次序号",
-        description="会话轮次序号，从1开始"
+        description="会话轮次序号（线程内插入序，从0开始）：只反映创建先后，"
+                    "活跃/展示顺序由 parent_turn_id 链派生"
+    )
+
+    parent_turn_id: Union[UUID, None] = Field(
+        default=None,
+        title="分支基点轮次id",
+        description="自引用 FK → 本表 turn_id。兄弟语义：与其共享同一 parent 的轮次互为"
+                    "同一问答的重试/编辑变体（对齐 ChatGPT 节点树 / LibreChat parentMessageId）；"
+                    "普通续聊 parent = 会话活跃叶子，NULL = 会话起点",
+        foreign_key="agentic_conversation_turn.turn_id",
+    )
+
+    attempt_no: int = Field(
+        title="尝试序号",
+        description="同一问答（兄弟轮次间）第几次尝试，从1开始；重试 = 兄弟间 max+1",
+        default=1,
     )
 
     status: AgenticTurnStatus = Field(

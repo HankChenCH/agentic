@@ -55,7 +55,16 @@ class AgenticService:
         self._active_lock = threading.Lock()
         self._active_runs: Counter[UUID] = Counter()
 
-    def run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict], agent_id: str | None = None):
+    def run(
+        self,
+        user_id: UUID,
+        thread_id: UUID,
+        run_id: str,
+        message_content: list[dict],
+        agent_id: str | None = None,
+        payload: list[tuple[str, list[dict]]] | None = None,
+        branch: dict | None = None,
+    ):
         """公共入口：登记在途 run（供优雅关闭取消）后委托 _stream_run 行程。
         finally 兜底注销——含 GeneratorExit/异常路径。
 
@@ -63,6 +72,9 @@ class AgenticService:
         含 text/image part）；纯文本消息是单 text part 的退化形态。
         ``agent_id`` 为前端显式指定的智能体（forwardedProps.agentId）：
         未注册的 id 记警告后忽略（与工厂回退默认同口径，不炸流）。
+        ``payload`` 为请求消息投影 (role, content)，供重试自动检测；
+        ``branch`` 为 forwardedProps.branch 显式分支信号（重试/编辑的
+        baseMessageId）。两者仅透传 open_turn 的分支定位，不参与回放。
         """
         if agent_id is not None and not self.agent_factory.is_registered(agent_id):
             self.logger.warning("run 请求指定了未注册的智能体，忽略: %s", agent_id)
@@ -70,7 +82,7 @@ class AgenticService:
         with self._active_lock:
             self._active_runs[thread_id] += 1
         try:
-            yield from self._stream_run(user_id, thread_id, run_id, message_content, agent_id)
+            yield from self._stream_run(user_id, thread_id, run_id, message_content, agent_id, payload, branch)
         finally:
             with self._active_lock:
                 self._active_runs[thread_id] -= 1
@@ -94,7 +106,16 @@ class AgenticService:
             self.logger.info("优雅关闭：已为 %d 个在途 run 发出取消标志", len(thread_ids))
         return len(thread_ids)
 
-    def _stream_run(self, user_id: UUID, thread_id: UUID, run_id: str, message_content: list[dict], agent_id: str | None):
+    def _stream_run(
+        self,
+        user_id: UUID,
+        thread_id: UUID,
+        run_id: str,
+        message_content: list[dict],
+        agent_id: str | None,
+        payload: list[tuple[str, list[dict]]] | None,
+        branch: dict | None,
+    ):
         now = datetime.fromtimestamp(time())
 
         # 双翻译共存于同一次 interleave 遍历：
@@ -113,8 +134,11 @@ class AgenticService:
         storage_translator = None
         try:
             # 初始化会话（get-or-create + 归属校验，显式 agentId 切换绑定）、
-            # 会话轮次（create），并存储用户消息
-            conversation, turn = self.conversations.open_turn(user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content, agent_id=agent_id)
+            # 会话轮次（create，含重试/编辑的分支定位）并存储用户消息
+            conversation, turn = self.conversations.open_turn(
+                user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content,
+                agent_id=agent_id, payload=payload, branch=branch,
+            )
             storage_translator = StorageTranslator(thread_id=thread_id, turn_id=turn.turn_id)
 
             # 智能体实例由智能体层工厂创建（按会话绑定的 agentic_id，未注册回退默认）
@@ -127,10 +151,11 @@ class AgenticService:
             image_resolver = self.attachments.own_url_resolver(user_id)
 
             # 多轮历史以库为准（服务端权威，不信任请求携带的历史）：
-            # 最近轮次的 USER/ASSISTANT 文本 + 当前提问
+            # 活跃路径（本轮次 parent 链）上的历史轮次 + 当前提问——重试时被
+            # 替换的旧答案是本轮次的兄弟，不在链上，自然不进上下文
             history = self.conversations.replay_history(
                 thread_id=thread_id,
-                exclude_turn_id=turn.turn_id,
+                base_turn_id=turn.turn_id,
                 supports_vision=supports_vision,
                 image_resolver=image_resolver,
             )

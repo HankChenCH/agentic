@@ -115,15 +115,22 @@ def run(
     request: RunRequest,
 ):
     # service.run() 已输出 SSE 帧（"data: {...}\n\n"），endpoint 纯透传。
-    # 多轮历史以服务端（库）为准：请求只取末条用户消息作为当前提问，payload 历史不回放。
+    # 多轮历史以服务端（库）为准：请求只取末条用户消息作为当前提问，payload 历史不回放
+    # （但整体投影给 open_turn 做"重试最新一轮"自动检测）。
     # content 经 RunMessage 归一为存储形态内容数组（纯文本 = 单 text part 的退化形态）。
     # forwardedProps.agentId：前端选择的智能体（缺省/未知由编排层回退会话绑定）。
+    # forwardedProps.branch：重试/编辑的显式分支信号（baseMessageId），服务端
+    # 据此精确定位兄弟基点；缺省走自动检测（纯文本会话同样可命中）。
     forwarded = request.forwardedProps or {}
     agent_id = forwarded.get("agentId")
+    branch = forwarded.get("branch")
+    payload = [(m.role, m.storage_content()) for m in request.messages]
     events = service.run(
         principal.user_id, request.threadId, request.runId,
         request.messages[-1].storage_content(),
         agent_id=agent_id if isinstance(agent_id, str) and agent_id else None,
+        payload=payload,
+        branch=branch if isinstance(branch, dict) else None,
     )
     return ClosingStreamingResponse(_stream_and_close(events), media_type="text/event-stream")
 
