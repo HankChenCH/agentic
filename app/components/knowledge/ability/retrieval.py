@@ -7,7 +7,8 @@
 口径是归属可见性：私有库仅属主可见，公开库所有人可见（与
 knowledge_base.user_id/is_public 的管理侧读路径同规则）。状态收敛规则：
 知识库须为 enabled、文档须为 enabled 才可被召回——管理侧的启停开关即检
-索开关。
+索开关；分段级禁用（行 status=disabled）同样不参与召回（种子与邻段在
+候选构建期按行状态剔除）。
 
 检索管线（``search``）：通道 A = Weaviate hybrid 混合检索（语义+BM25，
 每库固定池深，文档 enabled 后滤）；通道 B = 命中片段的邻域扩展（SQL 仓储
@@ -204,10 +205,30 @@ class KnowledgeRetrievalService:
         只记首见排名；已在通道 A 的邻段不重复建条目，仅补记 rank_b——融合
         时两通道贡献叠加，即邻域互证。种子只来自 enabled 文档，邻段同文档，
         状态守卫天然满足。
+
+        禁用分段（行 status=disabled）不参与召回：向量库不带状态字段，行库
+        是唯一事实源，种子与邻段 alike 在此按行状态剔除——被剔除的邻段不占
+        rank_b 名次，被剔除的种子不影响其余种子的通道 A 排名。
         """
+        # 先取窗口行（覆盖全部种子与邻段，含行级状态）：禁用分段过滤的事实源
+        windows: dict[str, Tuple[int, int]] = {}
+        for hit in seeds:
+            low, high = windows.get(hit.doc_id, (hit.position, hit.position))
+            windows[hit.doc_id] = (min(low, hit.position), max(high, hit.position))
+        rows: dict[Tuple[str, int], DocumentSegment] = {}
+        for doc_id, (low, high) in windows.items():
+            # 窗口越界侧查不到行即为文档边界（首/末段），无需 seg_total
+            for seg in self.document_repo.list_segments_by_doc(
+                UUID(doc_id), start=max(0, low - _NEIGHBOR_WINDOW), end=high + _NEIGHBOR_WINDOW
+            ):
+                rows[(str(seg.doc_id), seg.position)] = seg
+
         candidates: List[_Candidate] = []
         by_key: dict = {}
         for rank, hit in enumerate(seeds, start=1):
+            row = rows.get((hit.doc_id, hit.position))
+            if row is not None and row.status == KnowledgeStatus.DISABLED:
+                continue
             candidate = _Candidate(
                 key=(hit.doc_id, hit.position),
                 score=hit.score,
@@ -219,30 +240,20 @@ class KnowledgeRetrievalService:
             candidates.append(candidate)
             by_key[candidate.key] = candidate
 
-        windows: dict[str, Tuple[int, int]] = {}
-        for hit in seeds:
-            low, high = windows.get(hit.doc_id, (hit.position, hit.position))
-            windows[hit.doc_id] = (min(low, hit.position), max(high, hit.position))
-        rows = {}
-        for doc_id, (low, high) in windows.items():
-            # 窗口越界侧查不到行即为文档边界（首/末段），无需 seg_total
-            for seg in self.document_repo.list_segments_by_doc(
-                UUID(doc_id), start=max(0, low - _NEIGHBOR_WINDOW), end=high + _NEIGHBOR_WINDOW
-            ):
-                rows[(str(seg.doc_id), seg.position)] = seg
-
         seen: set = set()
         for seed in seeds:
             for offset in (-_NEIGHBOR_WINDOW, _NEIGHBOR_WINDOW):
                 key = (seed.doc_id, seed.position + offset)
                 if key not in rows or key in seen:
                     continue
+                seg: DocumentSegment = rows[key]
+                if seg.status == KnowledgeStatus.DISABLED:
+                    continue
                 rank_b = len(seen) + 1
                 seen.add(key)
                 if key in by_key:
                     by_key[key].rank_b = rank_b
                     continue
-                seg: DocumentSegment = rows[key]
                 candidates.append(_Candidate(
                     key=key,
                     score=seed.score,  # 纯邻域命中继承种子的混合检索分（展示口径）

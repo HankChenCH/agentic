@@ -25,6 +25,18 @@ class KnowledgeDocumentUpdateRequest(BaseModel):
     """仅元数据更新；doc_path 创建后不可变，更换文件需删除后重新上传。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=250, description="文档名称")
-    description: str | None = Field(default=None, max_length=500, description="文档详情描述")
+    description: str | None = Field(default=None, min_length=0, max_length=500, description="文档详情描述")
     weight: int | None = Field(default=None, description="管理侧排序权重")
+
+
+class KnowledgeSegmentCreateRequest(BaseModel):
+    """手动新增分段：追加到文档末尾（position = 现有最大值 +1），不走解析流水线。"""
+
+    content: str = Field(min_length=1, max_length=4000, description="分段内容")
+
+
+class KnowledgeSegmentUpdateRequest(BaseModel):
+    """分段内容整体替换：替换后自动重新嵌入（向量同 UUID 原地重写）。"""
+
+    content: str = Field(min_length=1, max_length=4000, description="分段内容")
 

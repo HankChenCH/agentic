@@ -291,6 +291,138 @@ class KnowledgeDocumentRepository:
             session.commit()
         return list(ids)
 
+    # ---------- 文档分段（管理侧） ----------
+
+    def list_segments(
+        self, doc_id: UUID, page: int, page_size: int, keyword: str | None = None
+    ) -> Tuple[List[DocumentSegment], int]:
+        """管理侧分段分页列表：按 position 有序，keyword 非空时按内容模糊过滤。"""
+        offset = (page - 1) * page_size
+        with Session(self.engine, expire_on_commit=False) as session:
+            statement = select(DocumentSegment).where(col(DocumentSegment.doc_id) == doc_id)
+            if keyword:
+                statement = statement.where(col(DocumentSegment.content).ilike(f"%{keyword}%"))
+            total = session.exec(select(func.count()).select_from(statement.subquery())).one()
+            rows = session.exec(
+                statement.order_by(col(DocumentSegment.position)).offset(offset).limit(page_size)
+            ).all()
+            session.commit()
+        return list(rows), int(total)
+
+    def get_segment(self, doc_id: UUID, segment_id: UUID) -> DocumentSegment | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            segment = session.exec(
+                select(DocumentSegment)
+                .where(col(DocumentSegment.id) == segment_id)
+                .where(col(DocumentSegment.doc_id) == doc_id)
+            ).first()
+            session.commit()
+        return segment
+
+    def next_segment_position(self, doc_id: UUID) -> int:
+        """追加分段的下一个 position（现有最大值 +1；空文档从 0 起）。"""
+        with Session(self.engine, expire_on_commit=False) as session:
+            current = session.exec(
+                select(func.max(col(DocumentSegment.position))).where(
+                    col(DocumentSegment.doc_id) == doc_id
+                )
+            ).one()
+            session.commit()
+        return (current or -1) + 1
+
+    def append_segment(self, doc_id: UUID, segment: DocumentSegment) -> DocumentSegment:
+        """追加分段：seg_num 与分段行同事务维护（与 doc_num 同一口径）。
+
+        (doc_id, position) 唯一约束冲突（并发追加）时提交失败整体回滚，
+        IntegrityError 由服务层映射为业务冲突。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            doc = session.get(KnowledgeDocument, doc_id)
+            if doc is not None:
+                doc.seg_num += 1
+            session.add(segment)
+            session.commit()
+            session.refresh(segment)
+        return segment
+
+    def update_segment_content(
+        self, doc_id: UUID, segment_id: UUID, *, content: str, word_count: int
+    ) -> DocumentSegment | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            segment = self._get_segment(session, doc_id, segment_id)
+            if segment is None:
+                session.commit()
+                return None
+            segment.content = content
+            segment.word_count = word_count
+            session.add(segment)
+            session.commit()
+            session.refresh(segment)
+        return segment
+
+    def set_segment_status(
+        self, doc_id: UUID, segment_id: UUID, status: KnowledgeStatus
+    ) -> DocumentSegment | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            segment = self._get_segment(session, doc_id, segment_id)
+            if segment is None:
+                session.commit()
+                return None
+            segment.status = status
+            session.add(segment)
+            session.commit()
+            session.refresh(segment)
+        return segment
+
+    def delete_segment(self, doc_id: UUID, segment_id: UUID) -> bool:
+        """删除单段：seg_num 与分段行同事务递减；向量清理由调用方负责。"""
+        with Session(self.engine, expire_on_commit=False) as session:
+            segment = self._get_segment(session, doc_id, segment_id)
+            if segment is None:
+                session.commit()
+                return False
+            doc = session.get(KnowledgeDocument, doc_id)
+            if doc is not None:
+                doc.seg_num = max(doc.seg_num - 1, 0)
+            session.delete(segment)
+            session.commit()
+        return True
+
+    def reset_document_for_rechunk(self, kb_id: UUID, doc_id: UUID) -> KnowledgeDocument | None:
+        """重分段受理：稳定态（ready/enabled/disabled）文档原子置回 pending 并清错误信息。
+
+        其余状态（pending/processing/deleting/failed）拒绝——pending/processing
+        期间流水线正在重写分段集合，failed 应走 retry，deleting 即将消失。
+        返回 None 表示状态不允许，由服务层映射为业务错误。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            doc = session.exec(
+                select(KnowledgeDocument)
+                .where(col(KnowledgeDocument.id) == doc_id)
+                .where(col(KnowledgeDocument.kb_id) == kb_id)
+            ).first()
+            if doc is None or doc.status not in (
+                KnowledgeStatus.READY,
+                KnowledgeStatus.ENABLED,
+                KnowledgeStatus.DISABLED,
+            ):
+                session.commit()
+                return None
+            doc.status = KnowledgeStatus.PENDING
+            doc.error_message = None
+            session.add(doc)
+            session.commit()
+            session.refresh(doc)
+        return doc
+
+    @staticmethod
+    def _get_segment(session: Session, doc_id: UUID, segment_id: UUID) -> DocumentSegment | None:
+        return session.exec(
+            select(DocumentSegment)
+            .where(col(DocumentSegment.id) == segment_id)
+            .where(col(DocumentSegment.doc_id) == doc_id)
+        ).first()
+
 
 # 落库的看门狗终结原因截断长度（与 domain support.ERROR_MESSAGE_MAX 同口径；
 # repositories 禁反向依赖 services，故本地声明）

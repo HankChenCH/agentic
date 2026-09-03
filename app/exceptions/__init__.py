@@ -25,6 +25,8 @@ from app.exceptions.knowledge import (
     KnowledgeError,
     KnowledgeNameDuplicatedError,
     KnowledgeNotFoundError,
+    KnowledgeSegmentNotFoundError,
+    KnowledgeSegmentStateError,
     KnowledgeStatusError,
 )
 from app.exceptions.memory import (
@@ -68,6 +70,8 @@ __all__ = [
     "KnowledgeDocumentNotFoundError",
     "KnowledgeDocumentStatusError",
     "KnowledgeDocumentInvalidError",
+    "KnowledgeSegmentNotFoundError",
+    "KnowledgeSegmentStateError",
     "UserError",
     "UsernameDuplicatedError",
     "InvalidCredentialsError",

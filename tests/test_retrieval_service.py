@@ -1,10 +1,10 @@
 """检索编排：可见性圈定、状态收敛、自选库子集、嵌入模型守卫、文档后滤、
-双通道召回（混合检索 + 邻域扩展）与 RRF 融合排序（top_k 只控返回数）。"""
+禁用分段剔除、双通道召回（混合检索 + 邻域扩展）与 RRF 融合排序。"""
 
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.components.knowledge.ability.retrieval import (
     KnowledgeRetrievalService,
@@ -305,3 +305,50 @@ def test_neighbor_window_respects_document_bounds(engine):
 
     hits = service.search([kb], "问题", top_k=6)
     assert [hit.position for hit in hits] == [0, 1, 4]  # 无 position=-1/3/5 越界项
+
+
+# ---------- 禁用分段剔除（分段级禁用 = 不参与召回） ----------
+
+
+def disable_segment(engine, doc_id: UUID, position: int) -> None:
+    """把指定 position 的分段置为 disabled（管理侧禁用语义的数据准备）。"""
+    with Session(engine) as session:
+        seg = session.exec(
+            select(DocumentSegment)
+            .where(col(DocumentSegment.doc_id) == doc_id)
+            .where(col(DocumentSegment.position) == position)
+        ).first()
+        seg.status = KnowledgeStatus.DISABLED
+        session.add(seg)
+        session.commit()
+
+
+def test_disabled_segment_seed_filtered(engine):
+    """禁用分段即使被向量召回也不入榜：向量库不带状态，行库是事实源。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "文档")
+    make_segments(engine, kb, doc, {0: "禁用段", 1: "可用段"})
+    disable_segment(engine, doc, 0)
+    vector = StubVectorIndex([
+        hit_for(doc, score=0.99, position=0),  # 禁用段分数最高也必须被剔除
+        hit_for(doc, score=0.90, position=1),
+    ])
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=4)
+    assert [hit.position for hit in hits] == [1]
+    assert all(hit.content != "禁用段" for hit in hits)
+
+
+def test_disabled_segment_neighbor_filtered(engine):
+    """禁用邻段不入榜也不占邻域名次：剩余邻段排名前移。"""
+    kb = make_kb(engine, "kb1")
+    doc = make_doc(engine, kb, "文档")
+    make_segments(engine, kb, doc, {4: "禁用邻段", 5: "种子", 6: "可用邻段"})
+    disable_segment(engine, doc, 4)
+    vector = StubVectorIndex([hit_for(doc, score=0.9, position=5)])
+    service = make_service(engine, vector)
+
+    hits = service.search([kb], "问题", top_k=4)
+    assert [hit.position for hit in hits] == [5, 6]
+    assert [hit.content for hit in hits] == ["片段内容", "可用邻段"]

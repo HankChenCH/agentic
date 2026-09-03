@@ -14,7 +14,7 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response as RawResponse
 from wireup import Injected
 
@@ -23,6 +23,8 @@ from app.models.schema.request.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseUpdateRequest,
     KnowledgeDocumentUpdateRequest,
+    KnowledgeSegmentCreateRequest,
+    KnowledgeSegmentUpdateRequest,
 )
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.response.biz_response import Response
@@ -30,6 +32,7 @@ from app.services import (
     DocumentIngestionService,
     KnowledgeBaseService,
     KnowledgeDocumentService,
+    KnowledgeSegmentService,
 )
 from app.tasks.knowledge import process_document
 
@@ -255,6 +258,123 @@ def disable_knowledge_document(
             kb_id, principal.user_id, doc_id, enabled=False
         )
     ).to_dict()
+
+
+# ---------- 文档分段管理 ----------
+
+
+@router.get("/{kb_id}/document/{doc_id}/segment")
+def list_knowledge_document_segments(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    pagination: Annotated[PaginationRequest, Depends()],
+    keyword: str | None = Query(default=None, max_length=100, description="分段内容关键词过滤"),
+):
+    return Response.success(
+        segment_service.list_segments(
+            kb_id, principal.user_id, doc_id, pagination.page, pagination.pageSize, keyword=keyword
+        )
+    ).to_dict()
+
+
+@router.post("/{kb_id}/document/{doc_id}/segment")
+def create_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    request: KnowledgeSegmentCreateRequest,
+):
+    return Response.success(
+        segment_service.create_segment(kb_id, principal.user_id, doc_id, request)
+    ).to_dict()
+
+
+@router.get("/{kb_id}/document/{doc_id}/segment/{segment_id}")
+def get_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    segment_id: UUID,
+):
+    return Response.success(
+        segment_service.describe_segment(kb_id, principal.user_id, doc_id, segment_id)
+    ).to_dict()
+
+
+@router.patch("/{kb_id}/document/{doc_id}/segment/{segment_id}")
+def update_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    segment_id: UUID,
+    request: KnowledgeSegmentUpdateRequest,
+):
+    return Response.success(
+        segment_service.update_segment_content(kb_id, principal.user_id, doc_id, segment_id, request)
+    ).to_dict()
+
+
+@router.delete("/{kb_id}/document/{doc_id}/segment/{segment_id}")
+def delete_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    segment_id: UUID,
+):
+    # 返回被删分段快照，调用方可确认删除已被受理
+    return Response.success(
+        segment_service.delete_segment(kb_id, principal.user_id, doc_id, segment_id)
+    ).to_dict()
+
+
+@router.post("/{kb_id}/document/{doc_id}/segment/{segment_id}/enable")
+def enable_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    segment_id: UUID,
+):
+    return Response.success(
+        segment_service.set_segment_enabled(
+            kb_id, principal.user_id, doc_id, segment_id, enabled=True
+        )
+    ).to_dict()
+
+
+@router.post("/{kb_id}/document/{doc_id}/segment/{segment_id}/disable")
+def disable_knowledge_document_segment(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+    segment_id: UUID,
+):
+    return Response.success(
+        segment_service.set_segment_enabled(
+            kb_id, principal.user_id, doc_id, segment_id, enabled=False
+        )
+    ).to_dict()
+
+
+@router.post("/{kb_id}/document/{doc_id}/rechunk")
+def rechunk_knowledge_document(
+    segment_service: Injected[KnowledgeSegmentService],
+    principal: Annotated[UserPrincipal, Depends(require_user)],
+    kb_id: UUID,
+    doc_id: UUID,
+):
+    """整篇重分段受理：稳定态文档置回 pending 并补发处理任务（解析→分块→向量全量重写）。"""
+    doc = segment_service.rechunk_document(kb_id, principal.user_id, doc_id)
+    _dispatch_processing(kb_id, doc_id)
+    # 返回受理快照：实际处理状态由后台任务推进
+    return Response.success(doc).to_dict()
 
 
 def _dispatch_processing(kb_id: UUID, doc_id: UUID) -> None:

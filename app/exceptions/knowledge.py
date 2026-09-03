@@ -47,3 +47,17 @@ class KnowledgeDocumentInvalidError(KnowledgeError):
 
     default_code = 4006
 
+
+class KnowledgeSegmentNotFoundError(KnowledgeError):
+    """知识库文档分段不存在。"""
+
+    default_code = 4007
+    default_http_status = 404
+
+
+class KnowledgeSegmentStateError(KnowledgeError):
+    """分段状态冲突（所属文档处理中/删除中不可管理分段，或并发追加 position 冲突）。"""
+
+    default_code = 4008
+    default_http_status = 409
+
