@@ -161,6 +161,185 @@ function toAssistantThreadMessage(
 }
 
 /**
+ * 收集「更新过的轮次」在 UI 消息流中的消息 id 集合。
+ *
+ * attempt_no > 1 = 该问答存在更早的尝试（被重新生成/编辑过），当前展示的是
+ * 新变体 —— UserMessage 组件据此渲染「已更新」标记。id 取值规则与
+ * toThreadMessages 一致：user 行取自身 message_id，assistant 组取末行
+ * message_id，刷新后与 ThreadMessage id 精确对上。
+ */
+export function collectUpdatedMessageIds(
+  turns: BackendConversationTurn[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const turn of turns) {
+    if ((turn.attempt_no ?? 1) <= 1) continue;
+    let lastAssistantId = "";
+    for (const m of [...turn.messages].sort(
+      (a, b) => a.sequence_num - b.sequence_num,
+    )) {
+      if (m.message_type === "tool_result") continue;
+      if (m.role === "user") ids.add(m.message_id);
+      else lastAssistantId = m.message_id;
+    }
+    if (lastAssistantId) ids.add(lastAssistantId);
+  }
+  return ids;
+}
+
+/**
+ * 收集「消息 id → 轮次 id」映射：分支切换的 activate 需要把 UI 消息流里的
+ * 消息映射回所属轮次。消息 id（user 行与 assistant 行的 message_id）与
+ * ThreadMessage id 同源，任意一行都能定位到轮次。
+ */
+export function collectTurnIdByMessageId(
+  turns: BackendConversationTurn[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const turn of turns) {
+    for (const m of turn.messages) {
+      map.set(m.message_id, turn.turn_id);
+    }
+  }
+  return map;
+}
+
+/**
+ * 末梢扇形树构建：活跃路径走 head，叶子的兄弟变体（同一问答的其他尝试）
+ * 作为分支节点挂在同槽位上，供 aui.thread().import 种入运行时的消息仓库 ——
+ * 刷新后 BranchPicker 依旧可对比/切换（切换经 activate-turn 同步服务端）。
+ *
+ * 节点模型：每个轮次展开为 user 节点 + assistant 节点；扇形内用户文本相同
+ * 的变体（重新生成场景）合并为一个 user 节点、各自的 assistant 成兄弟
+ * （"1/2" 出现在回答下方，对齐 ChatGPT），文本不同（编辑场景）各自成
+ * user 兄弟。items 父先于子，可直接喂 ExportedMessageRepository。
+ */
+export interface ThreadBranchNode {
+  parentId: string | null;
+  message: ThreadMessageLike;
+}
+
+export interface ThreadBranchTree {
+  /** 活跃路径的线性消息流（applyExternalMessages 契约） */
+  headMessages: ThreadMessageLike[];
+  /** 全量节点（父先于子），含扇形变体 */
+  branchItems: ThreadBranchNode[];
+  /** head 路径末尾（活跃叶子）的 assistant 消息 id */
+  headId: string | null;
+  /** 是否存在末梢扇形（branchItems 多于 headMessages） */
+  hasFan: boolean;
+}
+
+function userTextOf(turn: BackendConversationTurn): string {
+  const row = [...turn.messages]
+    .sort((a, b) => a.sequence_num - b.sequence_num)
+    .find((m) => m.role === "user");
+  return (
+    row?.content
+      .filter((c): c is Extract<BackendMessageContent, { type: "text" }> => c.type === "text")
+      .map((c) => c.text)
+      .join("\n") ?? ""
+  );
+}
+
+function buildTurnNodes(
+  turn: BackendConversationTurn,
+): { user: ThreadMessageLike; assistant: ThreadMessageLike | null } | null {
+  const rows = [...turn.messages].sort((a, b) => a.sequence_num - b.sequence_num);
+  const userRow = rows.find((m) => m.role === "user");
+  const assistantRows = rows.filter(
+    (m) => m.role !== "user" && m.message_type !== "tool_result",
+  );
+  const toolResults = new Map<string, unknown>();
+  for (const m of rows) {
+    if (m.message_type !== "tool_result") continue;
+    const c = m.content.find((c) => c.type === "tool_result");
+    if (c && c.type === "tool_result") toolResults.set(c.tool_call_id, c.content);
+  }
+  const status = turnAssistantStatus(turn.status);
+  const assistant =
+    toAssistantThreadMessage(assistantRows, toolResults, status) ??
+    (status.type === "incomplete" ? placeholderAssistantMessage(turn, status) : null);
+  if (!userRow) return assistant ? { user: { id: `turn-${turn.turn_id}`, role: "user", content: [] }, assistant } : null;
+  return { user: toUserThreadMessage(userRow), assistant };
+}
+
+export function toThreadBranchTree(
+  turns: BackendConversationTurn[],
+  activeTurnId: string | null | undefined,
+): ThreadBranchTree {
+  const ordered = [...turns].sort((a, b) => a.turn_num - b.turn_num);
+  const byId = new Map(ordered.map((t) => [t.turn_id, t]));
+
+  // 活跃路径：从活跃叶子沿 parent 链回溯（仅限本载荷内的轮次）
+  const chainIds: string[] = [];
+  const seen = new Set<string>();
+  let cursor = activeTurnId != null ? byId.get(activeTurnId) : undefined;
+  while (cursor && !seen.has(cursor.turn_id)) {
+    seen.add(cursor.turn_id);
+    chainIds.push(cursor.turn_id);
+    cursor = cursor.parent_turn_id != null ? byId.get(cursor.parent_turn_id) : undefined;
+  }
+  chainIds.reverse();
+  // 载荷里找不到活跃叶子（旧数据/异常）：整体按旧→新线性退化
+  const chain = chainIds.length > 0 ? chainIds : ordered.map((t) => t.turn_id);
+
+  const nodes = new Map<string, { user: ThreadMessageLike; assistant: ThreadMessageLike | null }>();
+  for (const t of ordered) {
+    const built = buildTurnNodes(t);
+    if (built) nodes.set(t.turn_id, built);
+  }
+
+  const branchItems: ThreadBranchNode[] = [];
+  const headMessages: ThreadMessageLike[] = [];
+  let prevAssistantId: string | null = null;
+  for (const id of chain) {
+    const n = nodes.get(id);
+    if (!n) continue;
+    headMessages.push(n.user);
+    branchItems.push({ parentId: prevAssistantId, message: n.user });
+    if (n.assistant) {
+      headMessages.push(n.assistant);
+      branchItems.push({ parentId: n.user.id ?? null, message: n.assistant });
+      prevAssistantId = n.assistant.id ?? prevAssistantId;
+    }
+  }
+
+  // 末梢扇形变体：非链上轮次按（锚点 assistant 节点, 用户文本）分组挂载
+  const chainSet = new Set(chain);
+  const fan = ordered.filter((t) => !chainSet.has(t.turn_id));
+  const groups = new Map<string, { anchorId: string | null; turns: string[] }>();
+  for (const t of fan) {
+    const anchorTurn = t.parent_turn_id != null ? byId.get(t.parent_turn_id) : undefined;
+    const anchor = anchorTurn ? nodes.get(anchorTurn.turn_id) : undefined;
+    if (!anchor?.assistant) continue; // 锚点不在载荷/无回答 → 放弃该变体
+    const key = `${anchor.assistant.id}|${userTextOf(t)}`;
+    const group: { anchorId: string | null; turns: string[] } =
+      groups.get(key) ?? { anchorId: anchor.assistant.id ?? null, turns: [] };
+    group.turns.push(t.turn_id);
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    const head = nodes.get(group.turns[0]);
+    if (!head) continue;
+    branchItems.push({ parentId: group.anchorId, message: head.user });
+    for (const tid of group.turns) {
+      const n = nodes.get(tid);
+      if (n?.assistant) {
+        branchItems.push({ parentId: n.user.id ?? null, message: n.assistant });
+      }
+    }
+  }
+
+  return {
+    headMessages,
+    branchItems,
+    headId: prevAssistantId,
+    hasFan: fan.length > 0,
+  };
+}
+
+/**
  * 把后端 history（turn 数组）拍扁成 assistant-ui 的 ThreadMessageLike[]。
  * 返回顺序：旧 → 新（与渲染顺序一致）。
  */

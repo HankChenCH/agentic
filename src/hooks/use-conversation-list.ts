@@ -17,8 +17,16 @@ import type { HttpAgent } from "@ag-ui/client";
 import { randomUUID } from "@ag-ui/client";
 
 import { conversationService } from "@/services/conversation-service";
-import { toThreadMessages } from "@/services/translators/thread-message-translator";
-import type { BackendConversation } from "@/services/types";
+import {
+  collectTurnIdByMessageId,
+  collectUpdatedMessageIds,
+  toThreadBranchTree,
+  toThreadMessages,
+} from "@/services/translators/thread-message-translator";
+import type {
+  BackendConversation,
+  BackendConversationTurn,
+} from "@/services/types";
 import { BizError } from "@/lib/http";
 import { useAuthStore } from "@/stores/auth-store";
 import { useAgentStore } from "@/stores/agent-store";
@@ -76,6 +84,23 @@ export interface ConversationActions {
    * `string` = 正在查看的会话 thread_id。
    */
   currentThreadId: string | null | undefined;
+  /**
+   * 「更新过的轮次」在 UI 消息流中的消息 id 集合（attempt_no > 1，即被重新
+   * 生成/编辑过的问答），随历史加载计算。UserMessage 据此渲染「已更新」标记。
+   */
+  updatedMessageIds: ReadonlySet<string>;
+  /**
+   * 「消息 id → 轮次 id」映射，供 BranchPicker 切换分支时把目标消息映射回
+   * 轮次（POST activate-turn 同步服务端活跃叶子）。
+   */
+  turnByMessageId: ReadonlyMap<string, string>;
+  /**
+   * 待种入运行时消息仓库的末梢扇形（历史加载发现叶子有兄弟变体时置位）。
+   * BranchTreeHydrator 消费：aui.thread().import 种入分支仓库，使刷新后
+   * BranchPicker 仍可对比/切换；消费后调用 clearPendingBranchTree 清除。
+   */
+  pendingBranchTree: PendingBranchTree | null;
+  clearPendingBranchTree: () => void;
 }
 
 export const ConversationActionsContext =
@@ -120,6 +145,20 @@ export interface UseConversationListResult {
   deleteConversation: (threadId: string) => Promise<boolean>;
   /** 当前会话 id 镜像（语义见 ConversationActions.currentThreadId） */
   currentThreadId: string | null | undefined;
+  /** 「更新过的轮次」消息 id 集合（语义见 ConversationActions.updatedMessageIds） */
+  updatedMessageIds: ReadonlySet<string>;
+  /** 「消息 id → 轮次 id」映射（语义见 ConversationActions.turnByMessageId） */
+  turnByMessageId: ReadonlyMap<string, string>;
+  /** 待种入运行时的末梢扇形（语义见 ConversationActions.pendingBranchTree） */
+  pendingBranchTree: PendingBranchTree | null;
+  /** 消费后清除待种树（BranchTreeHydrator 专用） */
+  clearPendingBranchTree: () => void;
+}
+
+/** 待种入运行时消息仓库的末梢扇形（BranchPicker 切换 = activate-turn 同步）。 */
+export interface PendingBranchTree {
+  headId: string | null;
+  items: { parentId: string | null; message: ThreadMessage }[];
 }
 
 /**
@@ -151,6 +190,45 @@ export function useConversationList(
   // loadMore 并发锁：state 异步更新，双击按钮时闭包里读到的 isLoadingMore
   // 还是旧值，用 ref 才能挡住并发的第二发请求。
   const loadMoreLockRef = useRef(false);
+  // 「已更新」标记集合 + 「消息 id → 轮次 id」映射：历史加载与每轮结束后
+  // 从后端重建，经 context 下发——前者驱动 UserMessage 的「已更新」标记，
+  // 后者供 BranchPicker 切换时把目标消息映射回轮次（activate-turn 同步）。
+  const [updatedMessageIds, setUpdatedMessageIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [turnByMessageId, setTurnByMessageId] = useState<ReadonlyMap<string, string>>(
+    () => new Map<string, string>(),
+  );
+  // 待种入运行时消息仓库的末梢扇形：历史加载发现活跃叶子有兄弟变体时置位，
+  // 由 BranchTreeHydrator（thread 树内）消费后清除
+  const [pendingBranchTree, setPendingBranchTree] = useState<PendingBranchTree | null>(null);
+  const clearPendingBranchTree = useCallback(() => setPendingBranchTree(null), []);
+
+  const applyBranchMeta = useCallback(
+    (items: BackendConversationTurn[]) => {
+      setUpdatedMessageIds(collectUpdatedMessageIds(items));
+      setTurnByMessageId(collectTurnIdByMessageId(items));
+    },
+    [],
+  );
+
+  /** 轮次结束后的静默元数据刷新：会话内新产生的变体（重试/编辑）补进映射
+   * 与「已更新」集合。失败静默——切换时查不到映射只降级为视觉切换。 */
+  const refreshBranchMeta = useCallback(
+    async (threadId: string) => {
+      try {
+        const result = await conversationService.listConversationHistory(
+          threadId,
+          0,
+          historyLimit,
+        );
+        applyBranchMeta(result.items ?? []);
+      } catch {
+        // 静默：主对话流不受影响
+      }
+    },
+    [applyBranchMeta, historyLimit],
+  );
 
   // runtime 主线程 id 的镜像（喂给 adapter.threadId）。平时保持 undefined，
   // 不干预既有切换路径；仅在删除当前激活会话后指向一个全新 id —— runtime
@@ -293,13 +371,19 @@ export function useConversationList(
       onRunFinishedEvent: ({ outcome, input }) => {
         if (outcome !== "success") return; // interrupt 不是完整轮次
         void pollConversationTitle(input.threadId, () => stopped.current);
+        // 静默刷新当前会话的分支元数据：会话内新产生的变体（重试/编辑）
+        // 补进「消息→轮次」映射与「已更新」集合；非当前会话切回时由
+        // onSwitchToThread 重建，无需这里刷新
+        if (input.threadId === agent.threadId) {
+          void refreshBranchMeta(input.threadId);
+        }
       },
     });
     return () => {
       stopped.current = true;
       unsubscribe();
     };
-  }, [agent, pollConversationTitle]);
+  }, [agent, pollConversationTitle, refreshBranchMeta]);
 
   // 后端 snake_case → adapter.threads 要的形状
   const threads = useMemo(
@@ -319,6 +403,10 @@ export function useConversationList(
     // get-or-create 到旧会话（后端无显式建会话接口，id 由前端决定）。
     agent.threadId = randomUUID();
     setCurrentThreadId(null);
+    // 新会话无历史，「已更新」标记与分支映射/待种树一并清空
+    setUpdatedMessageIds(new Set<string>());
+    setTurnByMessageId(new Map<string, string>());
+    setPendingBranchTree(null);
     // 后端 init_conversation 是 chat 时 get-or-create，无需显式建会话。
     // 新会话在第一次发消息时才落库；切回列表时 refresh 即可看到它。
     // TODO(可选): 若后端将来支持 POST /conversation 显式建空会话，在此调用
@@ -351,14 +439,40 @@ export function useConversationList(
             reason: "stop",
           }),
         );
+        // 「已更新」标记 + 分支映射：与消息流同源计算，刷新后与 ThreadMessage id 对上
+        applyBranchMeta(result.items ?? []);
+        // 末梢扇形种树：活跃叶子有兄弟变体时构建分支树（转换成 ThreadMessage），
+        // 由 BranchTreeHydrator 在运行时空闲时 aui.thread().import 种入仓库
+        const tree = toThreadBranchTree(
+          result.items ?? [],
+          result.active_turn_id ?? null,
+        );
+        setPendingBranchTree(
+          tree.hasFan
+            ? {
+                headId: tree.headId,
+                items: tree.branchItems.map(({ parentId, message }) => ({
+                  parentId,
+                  message: fromThreadMessageLike(
+                    message,
+                    message.id ?? `branch-${parentId}`,
+                    { type: "complete", reason: "stop" },
+                  ),
+                })),
+              }
+            : null,
+        );
         return { messages };
       } catch {
         // 切换失败时返回空，避免阻塞 runtime；列表加载错误另有 error 字段，
         // 这里若需要单独提示历史加载失败，可扩展返回值。
+        setUpdatedMessageIds(new Set<string>());
+        setTurnByMessageId(new Map<string, string>());
+        setPendingBranchTree(null);
         return { messages: [] };
       }
     },
-    [agent, historyLimit],
+    [agent, applyBranchMeta, historyLimit],
   );
 
   // ── 删除会话 ─────────────────────────────────────────────────────
@@ -427,5 +541,9 @@ export function useConversationList(
     loadMoreConversations,
     deleteConversation,
     currentThreadId,
+    updatedMessageIds,
+    turnByMessageId,
+    pendingBranchTree,
+    clearPendingBranchTree,
   };
 }

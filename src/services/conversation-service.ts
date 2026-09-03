@@ -76,6 +76,21 @@ export const conversationService = {
   },
 
   /**
+   * 切换活跃分支（末梢扇形内的变体切换）。
+   * POST /agentic/conversation/{threadId}/activate-turn（body: { turnId }）
+   *
+   * 把服务端活跃叶子移动到所选轮次：后续 run 的 parent 与多轮回放均从新
+   * 叶子派生（所见即上下文），刷新后停留在所选分支。仅已完成轮次且位于
+   * 末梢可切换，违规由后端按业务错误透出。
+   */
+  async activateTurn(threadId: string, turnId: string): Promise<void> {
+    await postJson(
+      `/agentic/conversation/${threadId}/activate-turn`,
+      { turnId },
+    );
+  },
+
+  /**
    * 显式取消当前会话的活跃轮次。
    * POST /agentic/run/cancel（body: { threadId }，幂等）
    *

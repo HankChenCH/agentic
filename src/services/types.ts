@@ -116,6 +116,8 @@ export interface ConversationListResult extends PagedResult<BackendConversation>
 export interface HistoryResult extends PagedResult<BackendConversationTurn> {
   offset: number;
   limit: number;
+  /** 活跃叶子轮次（末梢扇形的 head），前端据此确定分支树的当前路径 */
+  active_turn_id?: string | null;
 }
 
 // ---------------------------------------------------------------------------

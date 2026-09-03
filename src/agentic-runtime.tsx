@@ -1,5 +1,5 @@
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -8,12 +8,15 @@ import {
   type AttachmentAdapter,
   type CompleteAttachment,
   type PendingAttachment,
+  useAui,
+  useAuiState,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { HttpAgent } from "@ag-ui/client";
 
 import {
   ConversationActionsContext,
+  useConversationActions,
   useConversationList,
 } from "@/hooks/use-conversation-list";
 import { REST_BASE, SSE_URL } from "@/lib/config";
@@ -142,6 +145,31 @@ class ServerImageAttachmentAdapter implements AttachmentAdapter {
   }
 }
 
+/**
+ * 末梢扇形种树：历史加载发现活跃叶子有兄弟变体时（pendingBranchTree），
+ * 用 aui.thread().import 把分支树种入运行时的消息仓库 —— react-ag-ui 的
+ * 历史导入只认线性数组、无法表达兄弟关系，thread.import 是公开旁路
+ * （repository.clear+import），种入后 BranchPicker 原生可对比/切换。
+ *
+ * 时序约束：必须在 onSwitchToThread 的历史 hydration 完成之后（import 会
+ * 清空重建仓库），且运行中不种（放弃过期树，以运行态为准）。
+ */
+const BranchTreeHydrator = () => {
+  const aui = useAui();
+  const { pendingBranchTree, clearPendingBranchTree } = useConversationActions();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  useEffect(() => {
+    if (!pendingBranchTree) return;
+    clearPendingBranchTree();
+    if (isRunning) return;
+    aui.thread().import({
+      headId: pendingBranchTree.headId,
+      messages: pendingBranchTree.items,
+    });
+  }, [aui, pendingBranchTree, clearPendingBranchTree, isRunning]);
+  return null;
+};
+
 export const AgenticRuntimeProvider = ({
   children,
 }: {
@@ -156,15 +184,20 @@ export const AgenticRuntimeProvider = ({
     [],
   );
 
-  // 智能体选择注入：覆写 prepareRunAgentInput，在 runtime 组装的请求体上合并
-  // forwardedProps.agentId（后端 run 链路消费该字段绑定新会话的智能体）。
-  // 只在「新会话」时携带：判定依据是 threadId 不在 agent-store 的已知会话
-  // 集合（会话列表回填）——runtime 组装的 run 输入拿不到已加载的历史消息，
-  // 按消息内容/条数判定不可靠（旧会话续聊会被误判为新会话而改写绑定）。
-  // 新会话 threadId 是前端新生成的 UUID，必然不在列表中；首条消息发出、
-  // 会话落库并刷新列表后才进入集合，此后继续聊/重生成一律不携带。请求时
-  // 现读 store（与 token 同口径，避免闭包陈旧）；prepareRunAgentInput 在
-  // @ag-ui/client 里是 protected，这里按鸭子类型赋值覆写。
+  // 请求体加工（prepareRunAgentInput 覆写，@ag-ui/client 里是 protected，按鸭子
+  // 类型赋值）——两个互不门控的注入：
+  // 1) 分支信号提升：重新生成/编辑在 thread.tsx 经 RunConfig.custom 携带
+  //    branchBaseMessageId（基点消息 id，与库中 message_id 同源），runtime 组装时
+  //    落在 forwardedProps.runConfig；这里提升为 forwardedProps.branch 供后端
+  //    open_turn 定位兄弟轮次，runConfig 是内部载体提升后删除。重生成/编辑都
+  //    发生在已有会话上，不受 agentId 的 isNewConversation 门控。
+  // 2) 智能体选择：forwardedProps.agentId（后端 run 链路消费该字段绑定新会话的
+  //    智能体）。只在「新会话」时携带：判定依据是 threadId 不在 agent-store 的
+  //    已知会话集合（会话列表回填）——runtime 组装的 run 输入拿不到已加载的
+  //    历史消息，按消息内容/条数判定不可靠（旧会话续聊会被误判为新会话而改写
+  //    绑定）。新会话 threadId 是前端新生成的 UUID，必然不在列表中；首条消息
+  //    发出、会话落库并刷新列表后才进入集合，此后继续聊/重生成一律不携带。
+  // 请求时现读 store（与 token 同口径，避免闭包陈旧）。
   useMemo(() => {
     const target = agent as unknown as {
       prepareRunAgentInput: (params?: unknown) => {
@@ -176,13 +209,17 @@ export const AgenticRuntimeProvider = ({
     const original = target.prepareRunAgentInput.bind(agent);
     target.prepareRunAgentInput = (params?: unknown) => {
       const input = original(params);
+      const forwarded: Record<string, unknown> = { ...(input.forwardedProps ?? {}) };
+      const custom = forwarded.runConfig as Record<string, unknown> | undefined;
+      const baseMessageId = custom?.branchBaseMessageId;
+      if (typeof baseMessageId === "string" && baseMessageId) {
+        forwarded.branch = { baseMessageId };
+      }
+      delete forwarded.runConfig;
       const agentId = getSelectedAgentId();
       const isNewConversation = !input.resume && !isKnownThread(input.threadId);
-      if (!agentId || !isNewConversation) return input;
-      return {
-        ...input,
-        forwardedProps: { ...(input.forwardedProps ?? {}), agentId },
-      };
+      if (agentId && isNewConversation) forwarded.agentId = agentId;
+      return { ...input, forwardedProps: forwarded };
     };
   }, [agent]);
 
@@ -199,6 +236,10 @@ export const AgenticRuntimeProvider = ({
     currentThreadId,
     error: listError,
     refreshConversations,
+    updatedMessageIds,
+    turnByMessageId,
+    pendingBranchTree,
+    clearPendingBranchTree,
   } = useConversationList(agent);
 
   const runtime = useAgUiRuntime({
@@ -241,13 +282,18 @@ export const AgenticRuntimeProvider = ({
       currentThreadId,
       listError,
       refreshConversations,
+      updatedMessageIds,
+      turnByMessageId,
+      pendingBranchTree,
+      clearPendingBranchTree,
     }),
-    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId, listError, refreshConversations],
+    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId, listError, refreshConversations, updatedMessageIds, turnByMessageId, pendingBranchTree, clearPendingBranchTree],
   );
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ConversationActionsContext.Provider value={actions}>
+        <BranchTreeHydrator />
         {children}
       </ConversationActionsContext.Provider>
     </AssistantRuntimeProvider>

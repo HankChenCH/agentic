@@ -21,6 +21,8 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { useConversationActions } from "@/hooks/use-conversation-list";
+import { conversationService } from "@/services/conversation-service";
 import { useAgentStore } from "@/stores/agent-store";
 import { cn } from "@/lib/utils";
 import {
@@ -36,6 +38,7 @@ import {
   SuggestionPrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -46,6 +49,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  HistoryIcon,
   MicIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -56,6 +60,7 @@ import {
 import {
   createContext,
   useContext,
+  useEffect,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -381,7 +386,33 @@ const AssistantMessage: FC = () => {
   );
 };
 
+/**
+ * 分支基点信号：重新生成/编辑在触发时经 RunConfig.custom 携带 branchBaseMessageId，
+ * runtime 组装请求时落在 forwardedProps.runConfig，由 agentic-runtime 的
+ * prepareRunAgentInput 覆写提升为 forwardedProps.branch（后端 open_turn 据此把
+ * 新轮次定位为基点轮次的兄弟变体，即同一问答的重试/编辑分支）。
+ */
+const BRANCH_BASE_KEY = "branchBaseMessageId";
+
+/** 编辑基点：被编辑问题**之后**最近的 assistant 消息——即该轮自己的回答
+ * （流式注入 id 与库中 message_id 同源）。服务端把新轮次挂为"基点所在轮次"
+ * 的兄弟变体，因此基点必须是目标轮次本身而非其前驱。取不到（失败轮无
+ * 回答）时返回 undefined —— 不带信号，服务端走「编辑最新一轮」自动检测兜底。 */
+const useEditBranchBaseId = (): string | undefined =>
+  useAuiState((s) =>
+    s.thread.messages
+      .slice(s.message.index + 1)
+      .find((m) => m.role === "assistant")?.id,
+  );
+
 const AssistantActionBar: FC = () => {
+  // 重新生成带分支信号：本条 assistant 消息 id 即其所属轮次的定位键。不能用
+  // ActionBarPrimitive.Reload —— 其 hook 无参，带不了 runConfig；运行中禁用
+  // 由外层 ActionBarPrimitive.Root 的 hideWhenRunning 承担，行为不变。
+  const aui = useAui();
+  const messageId = useAuiState((s) => s.message.id);
+  // 末梢锁：重新生成只出现在最后一条消息（定型节点不可再开分支）
+  const isLast = useAuiState((s) => s.message.isLast);
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
@@ -393,7 +424,19 @@ const AssistantActionBar: FC = () => {
                     </AuiIf><AuiIf condition={(s) => !s.message.isCopied}>
                       <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
                     </AuiIf></ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload render={<TooltipIconButton tooltip="重新生成" />}><RefreshCwIcon /></ActionBarPrimitive.Reload>
+      {/* 重新生成只在末梢可用（同编辑：定型节点不支持再开分支），复制/导出不受限 */}
+      {isLast && (
+        <TooltipIconButton
+          tooltip="重新生成"
+          onClick={() =>
+            aui
+              .message()
+              .reload({ runConfig: { custom: { [BRANCH_BASE_KEY]: messageId } } })
+          }
+        >
+          <RefreshCwIcon />
+        </TooltipIconButton>
+      )}
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger render={<TooltipIconButton tooltip="更多" className="data-[state=open]:bg-accent" />}><MoreHorizontalIcon /></ActionBarMorePrimitive.Trigger>
         <ActionBarMorePrimitive.Content
@@ -411,6 +454,12 @@ const AssistantActionBar: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  // 「已更新」标记：该问答被重新生成/编辑过（attempt_no > 1，历史加载时算好
+  // 的消息 id 集合经 context 下发）。刷新后仍可见，作为无分支切换时的替代指示。
+  const { updatedMessageIds } = useConversationActions();
+  const messageId = useAuiState((s) => s.message.id);
+  const isUpdated = messageId != null && updatedMessageIds.has(messageId);
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -420,6 +469,15 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
+        {isUpdated && (
+          <span
+            data-slot="aui-user-message-updated"
+            className="text-muted-foreground mb-1 flex items-center gap-1 text-xs"
+          >
+            <HistoryIcon className="size-3" />
+            已更新
+          </span>
+        )}
         <div className="aui-user-message-content peer rounded-2xl bg-primary/10 px-4 py-2.5 text-foreground wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
@@ -437,18 +495,37 @@ const UserMessage: FC = () => {
 };
 
 const UserActionBar: FC = () => {
+  // 编辑只在末梢（最后一条消息）可用：续聊定型后历史节点冻结，不支持在
+  // 旧节点上开分支（服务端 activate/base 守卫兜底，这里从入口隐藏）
+  const isLast = useAuiState((s) => s.message.isLast);
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
       className="aui-user-action-bar-root flex flex-col items-end"
     >
-      <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑" className="aui-user-action-edit" />}><PencilIcon /></ActionBarPrimitive.Edit>
+      {isLast && (
+        <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑" className="aui-user-action-edit" />}><PencilIcon /></ActionBarPrimitive.Edit>
+      )}
     </ActionBarPrimitive.Root>
   );
 };
 
 const EditComposer: FC = () => {
+  // 编辑保存 = 对被编辑问题轮次的兄弟变体重跑：挂载时把基点（前驱 assistant
+  // 消息 id）写进 composer runConfig，send() 会随消息带给 runtime（append →
+  // startRun → forwardedProps.runConfig → 提升为 forwardedProps.branch）。
+  // 首条消息编辑（无前驱）不带信号，服务端走「编辑最新一轮」自动检测兜底。
+  const aui = useAui();
+  const branchBaseId = useEditBranchBaseId();
+  useEffect(() => {
+    if (!branchBaseId) return;
+    aui
+      .message()
+      .composer()
+      .setRunConfig({ custom: { [BRANCH_BASE_KEY]: branchBaseId } });
+  }, [aui, branchBaseId]);
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
@@ -470,10 +547,55 @@ const EditComposer: FC = () => {
   );
 };
 
+/** 变体切换单键：调用运行时切到相邻分支，并把服务端活跃叶子同步到目标
+ * 轮次（POST activate-turn）——「切换即对比基准移动」，后续对话与多轮
+ * 回放都沿所选分支。目标消息映射不到轮次（极端时序）时只做视觉切换。 */
+const BranchPickButton: FC<{ direction: "previous" | "next" }> = ({
+  direction,
+}) => {
+  const aui = useAui();
+  const { turnByMessageId, currentThreadId } = useConversationActions();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const atBound = useAuiState((s) =>
+    direction === "previous"
+      ? s.message.branchNumber <= 1
+      : s.message.branchNumber >= s.message.branchCount,
+  );
+
+  const switchBranch = () => {
+    aui.message().switchToBranch({ position: direction });
+    const tail = aui.thread().getState().messages.at(-1);
+    const turnId = tail ? turnByMessageId.get(tail.id) : undefined;
+    if (turnId && currentThreadId) {
+      void conversationService
+        .activateTurn(currentThreadId, turnId)
+        .catch(() => {});
+    }
+  };
+
+  return (
+    <TooltipIconButton
+      tooltip={direction === "previous" ? "上一个分支" : "下一个分支"}
+      disabled={isRunning || atBound}
+      onClick={switchBranch}
+    >
+      {direction === "previous" ? (
+        <ChevronLeftIcon />
+      ) : (
+        <ChevronRightIcon />
+      )}
+    </TooltipIconButton>
+  );
+};
+
 const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
   className,
   ...rest
 }) => {
+  // 末梢锁（"续聊即定型"）：仅最后一条消息上允许切换变体；沿所选分支发出
+  // 新消息后该节点不再是末梢，切换入口随之消失，历史由此保持线性。
+  const isLast = useAuiState((s) => s.message.isLast);
+  if (!isLast) return null;
   return (
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch
@@ -483,11 +605,11 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
       )}
       {...rest}
     >
-      <BranchPickerPrimitive.Previous render={<TooltipIconButton tooltip="上一个分支" />}><ChevronLeftIcon /></BranchPickerPrimitive.Previous>
+      <BranchPickButton direction="previous" />
       <span className="aui-branch-picker-state font-medium">
         <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
       </span>
-      <BranchPickerPrimitive.Next render={<TooltipIconButton tooltip="下一个分支" />}><ChevronRightIcon /></BranchPickerPrimitive.Next>
+      <BranchPickButton direction="next" />
     </BranchPickerPrimitive.Root>
   );
 };
