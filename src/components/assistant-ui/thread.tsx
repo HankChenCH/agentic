@@ -20,6 +20,7 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { isTailTurnMessage } from "@/components/assistant-ui/branch-picker-gate";
 import { Button } from "@/components/ui/button";
 import { useConversationActions } from "@/hooks/use-conversation-list";
 import { conversationService } from "@/services/conversation-service";
@@ -564,13 +565,18 @@ const BranchPickButton: FC<{ direction: "previous" | "next" }> = ({
 
   const switchBranch = () => {
     aui.message().switchToBranch({ position: direction });
-    const tail = aui.thread().getState().messages.at(-1);
-    const turnId = tail ? turnByMessageId.get(tail.id) : undefined;
-    if (turnId && currentThreadId) {
-      void conversationService
-        .activateTurn(currentThreadId, turnId)
-        .catch(() => {});
-    }
+    // 仓库切换是同步的，但 aui 状态快照要等 React 提交后才更新 —— 立即读
+    // 末梢会拿到切换前的旧消息，activate-turn 会映射失败。推迟到下一个
+    // 宏任务（通知已 flush）再读。
+    window.setTimeout(() => {
+      const tail = aui.thread().getState().messages.at(-1);
+      const turnId = tail ? turnByMessageId.get(tail.id) : undefined;
+      if (turnId && currentThreadId) {
+        void conversationService
+          .activateTurn(currentThreadId, turnId)
+          .catch(() => {});
+      }
+    }, 0);
   };
 
   return (
@@ -592,10 +598,18 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
   className,
   ...rest
 }) => {
-  // 末梢锁（"续聊即定型"）：仅最后一条消息上允许切换变体；沿所选分支发出
-  // 新消息后该节点不再是末梢，切换入口随之消失，历史由此保持线性。
-  const isLast = useAuiState((s) => s.message.isLast);
-  if (!isLast) return null;
+  // 末梢锁（"续聊即定型"）：仅末梢轮次允许切换变体 —— 末梢 assistant
+  // （isLast，重新生成型扇形挂回答下方）与末梢 user（其后仅剩末梢回答，
+  // 编辑型扇形挂问题行）。沿所选分支发出新消息后该节点不再是末梢，切换
+  // 入口随之消失，历史由此保持线性。判定逻辑见 branch-picker-gate.ts。
+  const isTailTurn = useAuiState((s) =>
+    isTailTurnMessage(
+      s.message.isLast,
+      s.message.index,
+      s.thread.messages.length,
+    ),
+  );
+  if (!isTailTurn) return null;
   return (
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch

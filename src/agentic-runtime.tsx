@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -8,15 +8,12 @@ import {
   type AttachmentAdapter,
   type CompleteAttachment,
   type PendingAttachment,
-  useAui,
-  useAuiState,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { HttpAgent } from "@ag-ui/client";
 
 import {
   ConversationActionsContext,
-  useConversationActions,
   useConversationList,
 } from "@/hooks/use-conversation-list";
 import { REST_BASE, SSE_URL } from "@/lib/config";
@@ -147,29 +144,13 @@ class ServerImageAttachmentAdapter implements AttachmentAdapter {
 }
 
 /**
- * 末梢扇形种树：历史加载发现活跃叶子有兄弟变体时（pendingBranchTree），
- * 用 aui.thread().import 把分支树种入运行时的消息仓库 —— react-ag-ui 的
- * 历史导入只认线性数组、无法表达兄弟关系，thread.import 是公开旁路
- * （repository.clear+import），种入后 BranchPicker 原生可对比/切换。
- *
- * 时序约束：必须在 onSwitchToThread 的历史 hydration 完成之后（import 会
- * 清空重建仓库），且运行中不种（放弃过期树，以运行态为准）。
+ * 分支展示策略（历史 vs 会话中）：
+ *   - 历史查看：不种分支树，按服务端激活叶子线性展示，无 1/2 切换入口；
+ *   - 会话中：重新生成/编辑产生的兄弟变体由 runtime 仓库原生维护，
+ *     BranchPicker（thread.tsx，末梢轮次门控）实时可对比/切换。
+ * 曾经尝试在历史加载后用 aui.thread().import 种入末梢扇形，但 react-ag-ui
+ * 的 store 同步只认线性数组，会在加载后把扇形抹平（实测），故移除该链路。
  */
-const BranchTreeHydrator = () => {
-  const aui = useAui();
-  const { pendingBranchTree, clearPendingBranchTree } = useConversationActions();
-  const isRunning = useAuiState((s) => s.thread.isRunning);
-  useEffect(() => {
-    if (!pendingBranchTree) return;
-    clearPendingBranchTree();
-    if (isRunning) return;
-    aui.thread().import({
-      headId: pendingBranchTree.headId,
-      messages: pendingBranchTree.items,
-    });
-  }, [aui, pendingBranchTree, clearPendingBranchTree, isRunning]);
-  return null;
-};
 
 export const AgenticRuntimeProvider = ({
   children,
@@ -222,8 +203,6 @@ export const AgenticRuntimeProvider = ({
     refreshConversations,
     updatedMessageIds,
     turnByMessageId,
-    pendingBranchTree,
-    clearPendingBranchTree,
   } = useConversationList(agent);
 
   const runtime = useAgUiRuntime({
@@ -268,16 +247,13 @@ export const AgenticRuntimeProvider = ({
       refreshConversations,
       updatedMessageIds,
       turnByMessageId,
-      pendingBranchTree,
-      clearPendingBranchTree,
     }),
-    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId, listError, refreshConversations, updatedMessageIds, turnByMessageId, pendingBranchTree, clearPendingBranchTree],
+    [deleteConversation, loadMoreConversations, hasMore, isLoadingMore, currentThreadId, listError, refreshConversations, updatedMessageIds, turnByMessageId],
   );
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ConversationActionsContext.Provider value={actions}>
-        <BranchTreeHydrator />
         {children}
       </ConversationActionsContext.Provider>
     </AssistantRuntimeProvider>
