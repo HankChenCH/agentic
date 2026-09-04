@@ -24,14 +24,17 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   run 请求经 prepareRunAgentInput 覆写注入 forwardedProps.agentId）
 │   ├── pages/               # 路由页面：login-page（登录/注册双 Tab，注册即登录）+
 │   │                        #   chat-page（纯对话；右上角「管理」按钮与用户菜单进管理侧/退出）
+│   │                        #   + profile-page（/profile 用户资料）
 │   ├── pages/admin/         # 管理侧：admin-home-page（模块启动页）+ knowledge-list-page / knowledge-detail-page
-│   │                        #   + memory-graph-page（记忆图谱：React Flow 径向布局，时点回放/详情面板）
+│   │                        #   / knowledge-document-detail-page + memory-graph-page（React Flow 径向布局，时点回放/详情面板）
 │   ├── components/assistant-ui/  # assistant-ui chat UI (thread, reasoning, markdown-text, tool-*, ...)
 │   ├── components/ui/        # shadcn/ui 原语（base-nova 风格，Base UI 原语；table/input/select/dialog/... ）
-│   ├── components/shared/    # 聊天/管理两侧共用组件：confirm-dialog、PDF 预览通道（provider/查看器/预览弹窗/溯源抽屉）
+│   ├── components/shared/    # 聊天/管理两侧共用组件：confirm-dialog、dialog-footer、password-input、
+│   │                        #   use-dialog-submit、PDF 预览通道（provider/查看器/预览弹窗/溯源抽屉/渲染边界）
 │   ├── components/knowledge/ # 知识库管理域组件：卡片列表、状态徽章、表单/上传弹窗、文档表格、分段列表/表单弹窗
 │   ├── components/memory-graph/ # 记忆图谱域组件：layout.ts（快照→径向布局+索引，实体类型配色）、
-│   │                        #   nodes/node-types（实体卡/事件卡）、detail-panel、legend
+│   │                        #   graph-canvas/header、nodes/node-types（实体卡/事件卡）、detail-panel、legend、
+│   │                        #   edit/identity/maintenance 对话框 + use-memory-graph-actions
 │   ├── hooks/               # use-conversation-list（聊天；初始拉取按登录态门控）+ use-knowledge-list/-base/-documents/-document/-segments
 │   │                        #   （知识库，含 pending/processing/deleting 状态的条件轮询）+ use-memory-graph（快照）
 │   ├── lib/                 # utils.ts (cn())、config.ts (REST_BASE/SSE_URL)、http.ts (axios 信封封装 +
@@ -57,10 +60,30 @@ All commands run with CWD = `client/agentic-client/` (this directory).
 - Build: `yarn build` (runs `tsc -b` then `vite build`)
 - Lint: `yarn lint` (oxlint)
 - Typecheck: `yarn typecheck` (`tsc -b`，即 build 的前半步单拆，供 CI 单独跑)
+- Unit tests: `yarn test` (vitest run；最小纯逻辑集，见下「Tests」)
 - CI: `.github/workflows/ci.yml`（node 24 —— react-router 8.3 的 engines
   要求 ≥22.22.0，本机 fnm 的 22.18 不满足；frozen-lockfile 安装 + lint +
-  typecheck + build）
+  typecheck + test + build）
 - Preview prod build: `yarn preview`
+
+## Tests
+
+Vitest 最小集（`vitest.config.ts` 独立配置，**不加载** react/tailwind 插件
+——被测模块均为纯 .ts，与应用 vite 的插件链解耦；`@` alias 需与
+vite.config.ts 保持一致）。`environment: "node"`，无 jsdom：zustand persist
+在无 window 时静默跳过 hydration（仅有一条 storage 不可用告警，无碍断言）。
+测试文件与源码同目录（`*.test.ts`），随 `tsc -b` 进入严格检查（显式
+`import { describe, it, expect } from "vitest"`，type-only 一律 `import type`）。
+
+覆盖三块纯逻辑：
+
+- `src/services/translators/thread-message-translator.test.ts` —— 分支树构建
+  （`toThreadBranchTree`：线性/末梢扇形/激活切换/活跃叶子缺失退化/失败占位）
+  与附件解析（image part → attachments：data/相对/绝对 URL、mime 缺省、复合 id）；
+- `src/services/run-input.test.ts` —— run 请求体注入（`applyRunInputInjections`
+  纯函数：agentId 新会话门控、branchBaseMessageId 提升、runConfig 载体删除）；
+- `src/stores/agent-store.test.ts` —— 注入决策的数据面（select /
+  getSelectedAgentId / isKnownThread / setKnownThreads）。
 
 需要 **node ^20.19 || ≥ 22.12**（Vite 8 的 engines 要求）。node 由 **fnm** 管理
 （不是 nvm）：非交互 shell 里 `/usr/local/bin/node` 是系统 v16，fnm 的 `default`
@@ -129,8 +152,9 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
   (`@tailwindcss/vite`) + **shadcn/ui** primitives in `src/components/ui/`
   (`components.json` present, style `base-nova` → 底层是 **Base UI**（`@base-ui/react`），
   不是 Radix —— 组件 API（如 `render={...}`、`data-open`）按 Base UI 语义写；
-  `package.json` 里遗留一个无 import 使用的 `radix-ui` 直接依赖，属历史残留，
-  不要在新代码里用).
+  `package.json` 里的 `radix-ui` 直接依赖仅剩
+  `components/assistant-ui/tooltip-icon-button.tsx` 的 `Slot` 一处在用（历史残留），
+  不要在新代码里新增使用).
   State via **zustand**. Icons via **lucide-react**. Toast via **sonner**（`Toaster`
   挂在 `App.tsx`）. 文件上传拖拽用 **react-dropzone**.
   This replaced an earlier Ant Design X UI — do not reintroduce antd.
