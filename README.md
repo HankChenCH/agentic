@@ -75,7 +75,7 @@ HTTP 服务监听 `0.0.0.0:8000`,run 端点即 `http://127.0.0.1:8000/agentic/ru
 | 运行 Celery worker | `uv run celery -A app.cmd.task_executor.main worker` |
 | 运行 Celery beat(看门狗调度) | `uv run celery -A app.cmd.task_executor.main beat` |
 | 运行单元测试 | `uv run pytest tests/` |
-| 数据库迁移(Alembic) | `uv run python -m app.cmd.admin db upgrade`(另有 `downgrade` / `revision` / `current` / `history` / `stamp`) |
+| 数据库迁移(Alembic) | `uv run python -m app.cmd.admin db upgrade`(另有 `downgrade` / `revision` / `current` / `history` / `stamp` / `check`——活库与模型的列级 diff 门禁) |
 | 启动/停止中间件 | `docker compose up -d` / `docker compose down` |
 | 清空中间件数据 | `docker compose down -v` |
 
@@ -119,7 +119,7 @@ uv run python -m app.cmd.task_executor [--pool=solo]   # 额外参数透传给 c
 | `REDIS_URL` | Redis 连接(取消信号存储与 Celery broker/backend 共用) | `redis://127.0.0.1:6379/0` |
 | `AGENTIC_DEFAULT_AGENT_ID` | 会话默认智能体(当前内置:`builtin:demo` 演示助手、`builtin:rag` 知识库问答) | `builtin:demo` |
 | `CORS_ORIGINS` | CORS 源白名单(逗号分隔整体覆盖) | `http://localhost:5173,http://127.0.0.1:5173` |
-| `AUTH_JWT_SECRET` | JWT 签名密钥(HS256 建议 ≥32 字节;生产必须显式设置) | `dev-only-secret-…`(仅开发) |
+| `AUTH_JWT_SECRET` | JWT 签名密钥(HS256,≥32 字节;prod 环境检出 dev 兜底密钥/过短即拒绝启动) | `dev-only-secret-…`(仅开发,prod 拒用) |
 | `RUN_MAX_BODY_BYTES` / `UPLOAD_MAX_BODY_BYTES` | run / 上传请求体上限(字节) | 1 MiB / 64 MiB |
 | `APP_LOG_LEVEL` / `APP_LOG_DIR` | 日志级别 / 目录 | 按环境(DEBUG/INFO) / `runtime/logs` |
 | `METRICS_ENABLED` / `METRICS_WORKER_PORT` | 指标采集开关 / worker 指标端口 | `true` / `9091` |

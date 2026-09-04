@@ -16,7 +16,7 @@ server/                          # this directory is its own git repo (the works
 │                                #   sqlalchemy.url 留空——URL 由 migrations/env.py 从应用配置链解析
 ├── migrations/                  # Alembic 迁移：env.py（import app.models.domain 收集 SQLModel.metadata 作
 │                                #   target_metadata；URL 走 AppConfig → DatabaseFactory → engine.url，不手工拼）
-│                                #   + versions/ 迁移脚本（初始基线 = 11 张表全量建表（现 10 张——agent↔KB 绑定表已于 2026-09-02 移除））
+│                                #   + versions/ 迁移脚本（初始基线 = 12 张表全量建表（现 11 张——agent↔KB 绑定表已于 2026-09-02 移除））
 ├── docker-compose.yaml          # Middleware stack: PostgreSQL + Weaviate + RustFS + Redis (local dev)
 ├── .python-version              # 3.12
 ├── .env                         # 环境变量：APP_ENV、SQLITE_DB_PATH、WEAVIATE_*、DEEPSEEK_API_KEY、OPENAI_API_KEY（占位，OpenAI 兼容网关）、MINERU_API_KEY
@@ -67,7 +67,7 @@ server/                          # this directory is its own git repo (the works
 │                              #   URL（浏览器直拉对象存储，签名即时签发不落库不进日志；presign 不可用
 │                              #   如 local 后端则降级流式回源）——分域口径见
 │                              #   services/domain/conversation/attachments.py;
-│                              #   deps.py -> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
+│                              #   api 根 deps.py（非 endpoints/）-> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
 │                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
 │                              #   （agentic/knowledge/memory 组，/auth、/health 公开）；
@@ -218,19 +218,31 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
 - Database migrations (Alembic): `uv run python -m app.cmd.admin db upgrade`
   (creates tables on a fresh DB and applies增量; the http app does **not**
   create tables at startup). Subcommands: `downgrade <rev>`, `revision -m
-  "..." [--autogenerate]`, `current`, `history`, `stamp [head]` — thin
+  "..." [--autogenerate]`, `current`, `history`, `stamp [head]`, `check` — thin
   wrappers over `alembic.command`, URL resolved by `migrations/env.py` from
   the app config chain (`SQLITE_DB_PATH`/`AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` all
   apply). Workflow: change `models/domain` → `db revision --autogenerate` →
-  review the script → `db upgrade`. A pre-Alembic DB (created by the old
+  review the script → `db upgrade` → `db check`（列级 diff 门禁：对活库以
+  autogenerate 同口径比对 `SQLModel.metadata`，缺表/缺列/类型漂移非零退出
+  —— CI 的 Migrations job 以 PG 空库 `db upgrade` + `db check` 把关「模型
+  改了但迁移没跟上」）. A pre-Alembic DB (created by the old
   startup `create_all`) is adopted once via `db stamp head`. Direct
   `uv run alembic <cmd>` from `server/` also works (same `alembic.ini`).
 - Run unit tests: `uv run pytest tests/` (pure unit level — SQLite 临时库 +
   stub 向量索引，不碰 Weaviate/MinerU/Ollama). CI 里需为 `llm.yaml` 的必填
   占位符（`DEEPSEEK_API_KEY` 等）提供哑值，见 `.github/workflows/ci.yml`。
+  其中的 `test_http_integration.py` 是首个真实 HTTP 集成测试：`create_app()`
+  + TestClient 走通注册→登录→run→重试分支→activate→replay 并对全部业务路由
+  做鉴权 sweep——临时 SQLite 走完整 Alembic 迁移（`upgrade_cmd("head")`），
+  LLM 与收尾加工经 wireup 容器 override 换成替身（`app.state.wireup_container
+  .override.set(...)`，必须在 TestClient 启动前，lifespan 即解析 AgenticService）；
+  环境变量（SQLITE_DB_PATH 等）须在 app 模块导入前就位并清空配置 lru_cache，
+  TestClient 的 portal 线程装不了信号处理器（lifespan 里的 signal.signal 用
+  no-op 替身顶住）。
 - Lint: `uv run ruff check .`（dev 依赖；规则集显式固定为 E4/E7/E9/F，见
   pyproject `[tool.ruff.lint]`，isort/pyupgrade 等风格规则未启用）。CI 同款：
-  `.github/workflows/ci.yml`（lint + pytest 两个 job）。
+  `.github/workflows/ci.yml`（lint + pytest + migrations 三个 job；migrations
+  起 PG 服务容器跑 `db upgrade` + `db check`）。
 - **Entrypoint modules import `from app...`, so run them as modules
   (`python -m app.cmd.http`), never as scripts from a different CWD.**
 
@@ -455,8 +467,10 @@ Server layer rules:
   `AGENTIC_DEFAULT_AGENT_ID` 环境变量可覆盖（inline 默认 `builtin:demo`））、
   `auth`
   (`AuthConfig`: JWT 签发/验签——`jwt_secret` via `AUTH_JWT_SECRET`（HS256
-  建议 ≥32 字节，过短 PyJWT 告警）、`jwt_algorithm`、`token_expire_minutes`
-  默认 7 天）、`llm`
+  建议 ≥32 字节；**prod 装配期 fail-fast**：检出 dev 兜底密钥或不足 32 字节即
+  抛 `ConfigError` 拒绝启动，http/worker/migrate 全入口生效，校验口径在
+  `core/config/auth.py`、接线在 AppConfig 的 model_validator）、
+  `jwt_algorithm`、`token_expire_minutes` 默认 7 天）、`llm`
   (`LLMConfig`: default + providers dict; each entry declares `type` —
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
   `chat`/`embedding`（`rerank` 为配置预留、工厂尚未支持构建）; entry 级 `timeout`（秒，默认 120）落地为模型客户端
@@ -849,9 +863,10 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   注册/登录在 `services/domain/user/`（PBKDF2 stdlib 哈希 + pyjwt；错用户名
   与错密码统一 `InvalidCredentialsError` 5002 不泄露存在性；注册即登录直接
   签发 token）。② **会话归属**：`agentic_conversation.user_id`（FK→users），
-  归属过滤下沉到仓储查询条件——`init_conversation` get-or-create 后由
-  `ConversationService.open_turn` 比对归属，他人 thread_id 续聊/取消/查删
-  一律 404 不泄露存在性。③ **记忆用户级作用域（设计反转）**：memory v2 原
+  归属过滤下沉到仓储查询条件——`ConversationService.open_turn` 先经
+  `find_conversation` 纯读比对归属（先于任何写），他人 thread_id 续聊/取消/查删
+  一律 404 不泄露存在性；开轮的全部写（get-or-create + 绑定切换 + 轮次 +
+  0 号用户消息）收口在仓储 `open_turn` 单事务，中途失败整体回滚不留半截聚合。③ **记忆用户级作用域（设计反转）**：memory v2 原
   锁定「单用户全局」（docs/memory-v2-design.md §3.3），现 entity/statement/
   episode 三表带 `user_id`；`MemoryRepository.for_user(uid)` / 
   `MemoryVectorIndex.for_user(uid)` / `MemoryEditor·GraphReader.for_user(uid)`
