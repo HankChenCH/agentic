@@ -1,10 +1,10 @@
 from functools import lru_cache
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from wireup import injectable
 
 from .llm import LLMConfig, LLMProviderEntry, ModelTaskType
-from .auth import AuthConfig
+from .auth import AuthConfig, assert_jwt_secret_ok_for
 from .db import DBConfig, DBProviderEntry, PostgresDBProviderEntry, SQLiteDBProviderEntry
 from .document_parser import DocumentParserConfig, DocumentParserProviderEntry, MineruCloudEntry
 from .vector_db import VectorDBConfig, VectorDBProviderEntry, WeaviateDBProviderEntry
@@ -95,6 +95,17 @@ class AppConfig(BaseModel):
     新增基础设施配置时：在包内新建子模块（如 ``memory.py``），在此聚合字段，
     并在上面的 import / __all__ 中导出。
     """
+
+    @model_validator(mode="after")
+    def _reject_insecure_jwt_secret_in_prod(self) -> "AppConfig":
+        """prod 环境密钥 fail-fast：dev 兜底密钥/长度不足直接拒绝启动。
+
+        AppConfig 是 http/worker/migrate 全部入口的装配必经点，在此拦截即
+        全入口生效（校验口径见 :mod:`.auth`）。
+        """
+        assert_jwt_secret_ok_for(self.environment, self.auth.jwt_secret)
+        return self
+
     name: str = Field(
         description="应用名称",
         default_factory=lambda: _app_setting("name", "agentic-app"),
