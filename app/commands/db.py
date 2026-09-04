@@ -70,10 +70,66 @@ def history_cmd(
 
 @app.command("stamp")
 def stamp_cmd(
-    revision: Annotated[str, typer.Argument(help="标记目标版本（默认 head）")] = "head",
+    revision: Annotated[str, typer.Argument(help="目标版本（默认 head）")] = "head",
 ) -> None:
     """不执行 DDL，仅把 alembic_version 标记到目标版本。
 
     用于把「create_all 时代」的既有库纳入迁移管理（一次性操作）。
     """
     command.stamp(_config(), revision)
+
+
+@app.command("check")
+def check_cmd() -> None:
+    """列级 diff 检查：已迁移的库结构必须与 SQLModel.metadata 零差异。
+
+    先 ``db upgrade`` 再 ``db check``：以 alembic autogenerate 的比对口径
+    （compare_metadata）对活库与表模型做列级 diff——缺表/缺列/多列/类型漂移
+    一律非零退出。CI 以此门禁「模型改了但迁移没跟上」；本地改模型后也可
+    用来替代肉眼 review autogenerate 结果。
+    """
+    diff = _schema_diff()
+    if diff:
+        typer.echo(f"迁移与模型不一致，共 {len(diff)} 处（autogenerate 将产生以下变更）：")
+        for change in diff:
+            typer.echo(f"  - {change}")
+        raise typer.Exit(code=1)
+    typer.echo("迁移与模型一致：零 diff。")
+
+
+def _default_engine_url() -> str:
+    """默认库 URL——与 migrations/env.py 同一条解析链（AppConfig → DatabaseFactory）。
+
+    lazy Engine 只取 url 不发起连接，不手工拼串（URL 组装收口在 builder）。
+    """
+    from app.core.config import AppConfig
+    from app.infrastructures.db.db_factory import DatabaseFactory
+
+    engine = DatabaseFactory(app_config=AppConfig()).create()
+    return engine.url.render_as_string(hide_password=False)
+
+
+def _schema_diff() -> list:
+    """活库（应已 upgrade head）与 SQLModel.metadata 的 autogenerate diff。
+
+    比对选项与 migrations/env.py 的在线 configure 保持同口径
+    （target_metadata + render_as_batch，其余走 alembic 默认），保证
+    「check 通过 ⟺ revision --autogenerate 结果为空」。表模型经
+    app.models.domain 聚合导入注册；alembic_version 表由 autogenerate 默认忽略。
+    """
+    import app.models.domain  # noqa: F401  注册全部表模型到 SQLModel.metadata
+    from alembic.autogenerate import compare_metadata
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import create_engine
+    from sqlmodel import SQLModel
+
+    engine = create_engine(_default_engine_url())
+    try:
+        with engine.connect() as connection:
+            context = MigrationContext.configure(
+                connection,
+                opts={"target_metadata": SQLModel.metadata, "render_as_batch": True},
+            )
+            return compare_metadata(context, SQLModel.metadata)
+    finally:
+        engine.dispose()

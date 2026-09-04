@@ -51,3 +51,46 @@ jobs:
 
       - name: Pytest
         run: uv run pytest tests/
+
+  migrations:
+    name: Migrations (alembic on postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: agentic
+          POSTGRES_PASSWORD: agentic
+          POSTGRES_DB: agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentic -d agentic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # llm.yaml 必填占位符哑值（同 test job）；迁移只装配配置，不调用模型
+      DEEPSEEK_API_KEY: ci-dummy
+      # db.yaml 的 postgres entry（缺省端口/凭据与上方服务容器一致），只覆盖 host 指向
+      DB_DEFAULT: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # 空库跑完整迁移链 = 部署栈 migrate 服务的同款动作（建表不做于应用启动期）
+      - name: Alembic upgrade head
+        run: uv run python -m app.cmd.admin db upgrade
+
+      # 列级 diff 门禁：迁移后的库结构必须与 SQLModel.metadata 零差异，
+      # 「模型改了但迁移没跟上」在此失败（口径同 revision --autogenerate）
+      - name: Model/migration diff check
+        run: uv run python -m app.cmd.admin db check
