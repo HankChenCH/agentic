@@ -71,9 +71,11 @@ class ConversationService:
     ) -> Tuple[AgenticConversation, AgenticConversationTurn]:
         """get-or-create 会话（默认智能体兜底）+ 创建轮次（含分支定位）+ 落库本轮用户消息。
 
-        归属规则：会话已存在且属于他人时按不存在处理（404，不泄露存在性），
-        不能变成新建——客户端 threadId 自行生成，必须防止借他人 thread_id
-        续聊或注入消息。
+        全部写收口在仓储的单事务（``open_turn``）：会话/绑定/轮次/用户消息
+        要么同时落库要么同时不可见——中途失败不留「有轮次无用户消息」的
+        半截状态。归属规则：会话已存在且属于他人时按不存在处理（404，不泄露
+        存在性），不能变成新建——客户端 threadId 自行生成，必须防止借他人
+        thread_id 续聊或注入消息。
         ``content`` 为存储形态的内容数组（端点已从 ag-ui 载荷归一，含
         text/image part；见 multimodal.py），原样落库。
         ``agent_id``：前端显式指定的智能体（编排层已校验注册）——新建会话
@@ -90,53 +92,47 @@ class ConversationService:
             self.signal_store.reset(cancel_flag_key(thread_id))
         except Exception as exc:
             self.logger.warning("取消标志清理失败：%s", exc)
-        conversation = self.conversation_repo.init_conversation(
+
+        # 归属前置判定（纯读）：他人会话统一 404，先于任何写
+        conversation = self.conversation_repo.find_conversation(thread_id)
+        if conversation is not None and conversation.user_id != user_id:
+            raise ConversationNotFoundError("conversation not found")
+
+        if conversation is None:
+            # 新会话：无历史可分支，parent=None / attempt=1（分支定位的平凡情形）
+            parent_turn_id: UUID | None = None
+            attempt_no = 1
+            rebind = False
+        else:
+            turns = self.conversation_repo.list_thread_turns(thread_id)
+            user_contents = self.conversation_repo.map_turn_user_contents(thread_id) if turns else {}
+            snapshots = [snapshot_of(t, user_contents.get(t.turn_id)) for t in turns]
+            by_id = {s.turn_id: s for s in snapshots}
+
+            # 分支定位：重试/编辑 → 基点的 parent 为分支点，兄弟间 attempt+1；
+            # 普通提问 → parent = 活跃叶子（线性续聊），attempt = 1
+            base = self._resolve_branch_base(conversation, payload, branch, by_id)
+            if base is not None:
+                # 末梢守卫：节点沿任一变体续聊后即定型，历史节点不再开分支
+                self._ensure_base_at_tip(conversation, base, by_id)
+                parent_turn_id = base.parent_turn_id
+                attempt_no = next_attempt_no(parent_turn_id, snapshots)
+            else:
+                parent_turn_id = conversation.current_turn_id
+                attempt_no = 1
+            rebind = agent_id is not None and conversation.agentic_id != agent_id
+
+        return self.conversation_repo.open_turn(
             user_id=user_id,
             thread_id=thread_id,
             agentic_id=agent_id or self.app_config.default_agentic_id,
-        )
-        if conversation.user_id != user_id:
-            raise ConversationNotFoundError("conversation not found")
-        if agent_id is not None and conversation.agentic_id != agent_id:
-            conversation = self.conversation_repo.update_agent_binding(
-                thread_id=thread_id, user_id=user_id, agentic_id=agent_id,
-            )
-        turns = self.conversation_repo.list_thread_turns(thread_id)
-        user_contents = self.conversation_repo.map_turn_user_contents(thread_id) if turns else {}
-        snapshots = [snapshot_of(t, user_contents.get(t.turn_id)) for t in turns]
-        by_id = {s.turn_id: s for s in snapshots}
-
-        # 分支定位：重试/编辑 → 基点的 parent 为分支点，兄弟间 attempt+1；
-        # 普通提问 → parent = 活跃叶子（线性续聊），attempt = 1
-        base = self._resolve_branch_base(conversation, payload, branch, by_id)
-        if base is not None:
-            # 末梢守卫：节点沿任一变体续聊后即定型，历史节点不再开分支
-            self._ensure_base_at_tip(conversation, base, by_id)
-            parent_turn_id = base.parent_turn_id
-            attempt_no = next_attempt_no(parent_turn_id, snapshots)
-        else:
-            parent_turn_id = conversation.current_turn_id
-            attempt_no = 1
-
-        turn = self.conversation_repo.create_conversation_turn(
-            conversation=conversation,
+            rebind=rebind,
             run_id=run_id,
             turn_id=uuid4(),
             parent_turn_id=parent_turn_id,
             attempt_no=attempt_no,
-        )
-        self.conversation_repo.store_conversation_message(AgenticConversationMessage(
-            thread_id=conversation.thread_id,
-            turn_id=turn.turn_id,
-            message_id=uuid4(),
-            sequence_num=0,
-            role=AgenticMessageRole.USER,
-            message_type=AgenticMessageType.MESSAGE,
             content=content,
-            token_usage={},
-            latency_ms=0,
-        ))
-        return conversation, turn
+        )
 
     def _ensure_base_at_tip(self, conversation: AgenticConversation, base, by_id: dict) -> None:
         """末梢守卫：分支只允许发生在最新问答（"主干 + 末梢一层扇形"）。

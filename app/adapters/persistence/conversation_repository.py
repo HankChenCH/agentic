@@ -1,12 +1,19 @@
 from typing import List, Tuple
 from dataclasses import dataclass
 
-from uuid import UUID
+from uuid import UUID, uuid4
 from wireup import injectable
 from sqlmodel import Session, col, delete, select, update
 from sqlalchemy import Engine, func
 
-from app.models.domain.agentic import AgenticConversation, AgenticConversationTurn, AgenticConversationMessage, AgenticTurnStatus
+from app.models.domain.agentic import (
+    AgenticConversation,
+    AgenticConversationTurn,
+    AgenticConversationMessage,
+    AgenticMessageRole,
+    AgenticMessageType,
+    AgenticTurnStatus,
+)
 
 @injectable
 @dataclass
@@ -43,42 +50,87 @@ class ConversationRepository:
             session.commit()
         return conversation
 
-    def init_conversation(self, user_id: UUID, thread_id: UUID, agentic_id: str) -> AgenticConversation:
-        # get-or-create：仅用于 run() 的隐式建会话（describe 不应再走这里）。
-        # 已存在时不校验归属——他人会话的拦截是业务规则，由上层
-        # （ConversationService.open_turn）比对 user_id 后统一 404。
-        # expire_on_commit=False：commit 后对象属性不失效，离开 session（detached）
-        # 也能被上层安全访问，避免 DetachedInstanceError。
+    def find_conversation(self, thread_id: UUID) -> AgenticConversation | None:
+        """按 thread_id 读会话（不带归属过滤）——open_turn 的分支定位前置读。
+
+        他人会话的统一 404 口径由调用方比对 user_id 完成（不泄露存在性）。
+        """
+        with Session(self.engine, expire_on_commit=False) as session:
+            conversation = session.exec(
+                select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
+            ).first()
+            session.commit()
+        return conversation
+
+    def open_turn(
+        self,
+        *,
+        user_id: UUID,
+        thread_id: UUID,
+        agentic_id: str,
+        rebind: bool,
+        run_id: str,
+        turn_id: UUID,
+        parent_turn_id: UUID | None,
+        attempt_no: int,
+        content: List[dict],
+    ) -> Tuple[AgenticConversation, AgenticConversationTurn]:
+        """开轮写路径单事务：get-or-create 会话（+显式绑定切换）+ 建轮次 + 落
+        sequence_num=0 的用户消息，一个 Session 整体提交——任一步失败全部
+        回滚，不产生「有轮次无用户消息」的半截状态（0 号用户行是
+        map_turn_user_contents 与分支快照的定位依据）。
+
+        分支定位（parent/attempt）与归属判定的业务决策在领域层完成，这里
+        只接收解析产物执行；事务内对他人会话再校验一次（与归属判定的竞态
+        窗口内整体回滚，ValueError 惯例同前）。turn_num 为线程内插入序
+        （max+1）；不动 current_turn_id——活跃叶子只在 complete_turn 推进。
+        """
         with Session(self.engine, expire_on_commit=False) as session:
             conversation = session.exec(
                 select(AgenticConversation).where(AgenticConversation.thread_id == thread_id)
             ).first()
             if conversation is None:
-                conversation = AgenticConversation(user_id=user_id, thread_id=thread_id, agentic_id=agentic_id, conversation_title="")
+                conversation = AgenticConversation(
+                    user_id=user_id, thread_id=thread_id, agentic_id=agentic_id, conversation_title="",
+                )
+                session.add(conversation)
+            elif conversation.user_id != user_id:
+                raise ValueError(f"conversation not found: {thread_id}")
+            elif rebind:
+                conversation.agentic_id = agentic_id
                 session.add(conversation)
 
+            last_turn_num = session.exec(
+                select(func.max(AgenticConversationTurn.turn_num))
+                .where(AgenticConversationTurn.thread_id == thread_id)
+            ).one()
+            turn = AgenticConversationTurn(
+                thread_id=thread_id,
+                run_id=run_id,
+                turn_id=turn_id,
+                turn_num=(last_turn_num + 1) if last_turn_num is not None else 0,
+                parent_turn_id=parent_turn_id,
+                attempt_no=attempt_no,
+            )
+            session.add(turn)
+            # turn 行先落：message 的 FK 指向 turn_id，PG 实时校验约束
+            session.flush()
+            session.add(AgenticConversationMessage(
+                thread_id=thread_id,
+                turn_id=turn.turn_id,
+                message_id=uuid4(),
+                sequence_num=0,
+                role=AgenticMessageRole.USER,
+                message_type=AgenticMessageType.MESSAGE,
+                content=content,
+                token_usage={},
+                latency_ms=0,
+            ))
             session.commit()
             session.refresh(conversation)
+            session.refresh(turn)
 
-        return conversation
-
-    def update_agent_binding(self, thread_id: UUID, user_id: UUID, agentic_id: str) -> AgenticConversation:
-        """切换会话绑定的智能体（归属内强制：他人会话按不存在处理返回 None 语义
-        由上层前置比对，这里带 user_id 条件双保险）。"""
-        with Session(self.engine, expire_on_commit=False) as session:
-            conversation = session.exec(
-                select(AgenticConversation).where(
-                    AgenticConversation.thread_id == thread_id,
-                    AgenticConversation.user_id == user_id,
-                )
-            ).first()
-            if conversation is None:
-                raise ValueError(f"conversation not found: {thread_id}")
-            conversation.agentic_id = agentic_id
-            session.add(conversation)
-            session.commit()
-            session.refresh(conversation)
-        return conversation
+        return conversation, turn
 
     def store_conversation(self, conversation: AgenticConversation) -> AgenticConversation:
         with Session(self.engine, expire_on_commit=False) as session:
@@ -107,36 +159,6 @@ class ConversationRepository:
             session.commit()
 
         return conversation
-
-    def create_conversation_turn(
-        self,
-        conversation: AgenticConversation,
-        run_id: str,
-        turn_id: UUID,
-        parent_turn_id: UUID | None,
-        attempt_no: int,
-    ) -> AgenticConversationTurn:
-        """创建轮次行：turn_num 为线程内插入序（max+1）；不动会话的活跃叶子——
-        current_turn_id 只在轮次 COMPLETED 时推进（complete_turn），重试失败时
-        旧答案保持活跃。分支参数（parent/attempt）由领域层解析后传入。"""
-        with Session(self.engine, expire_on_commit=False) as session:
-            last_turn_num = session.exec(
-                select(func.max(AgenticConversationTurn.turn_num))
-                .where(AgenticConversationTurn.thread_id == conversation.thread_id)
-            ).one()
-            conversation_turn = AgenticConversationTurn(
-                thread_id=conversation.thread_id,
-                run_id=run_id,
-                turn_id=turn_id,
-                turn_num=(last_turn_num + 1) if last_turn_num is not None else 0,
-                parent_turn_id=parent_turn_id,
-                attempt_no=attempt_no,
-            )
-            session.add(conversation_turn)
-            session.commit()
-            session.refresh(conversation_turn)
-
-        return conversation_turn
 
     def list_thread_turns(self, thread_id: UUID) -> List[AgenticConversationTurn]:
         """线程内全部轮次，创建序（旧→新）。数量有界（会话级），分支/活跃路径
@@ -216,14 +238,6 @@ class ConversationRepository:
             session.refresh(conversation_turn)
 
         return conversation_turn    
-
-    def store_conversation_message(self, message: AgenticConversationMessage) -> AgenticConversationMessage:
-        with Session(self.engine, expire_on_commit=False) as session:
-            session.add(message)
-            session.commit()
-            session.refresh(message)
-
-        return message
 
     def store_conversation_messages(self, messages: List[AgenticConversationMessage]):
         with Session(self.engine, expire_on_commit=False) as session:

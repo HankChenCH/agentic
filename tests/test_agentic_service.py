@@ -148,12 +148,12 @@ class FakeAgentFactory:
 
 
 class ExplodingRepository:
-    """init_conversation 直接抛错（准备段第一环失败，轮次行尚未建立）。"""
+    """open_turn（开轮单事务，准备段第一环）直接抛错，轮次聚合整体未落库。"""
 
     def __init__(self, inner):
         self._inner = inner
 
-    def init_conversation(self, **kwargs):
+    def open_turn(self, **kwargs):
         raise RuntimeError("db down: " + SECRET)
 
     def __getattr__(self, name):

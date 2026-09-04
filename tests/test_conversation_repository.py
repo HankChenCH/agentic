@@ -1,6 +1,8 @@
-"""ConversationRepository.delete_conversation：三表硬删除与 None 语义。"""
+"""ConversationRepository 事务边界：三表硬删除 / open_turn 单事务（含回滚）。"""
 
 from uuid import uuid4
+
+import pytest
 
 from sqlmodel import Session, func, select
 
@@ -102,8 +104,34 @@ def test_recreate_after_delete_starts_clean(engine):
     seed_thread(engine, thread_id)
     assert repo.delete_conversation(thread_id=thread_id, user_id=TEST_USER_ID) is not None
 
-    # 同 thread_id 重新 get-or-create：得到全新空会话（无残留轮次/消息）
-    recreated = repo.init_conversation(user_id=TEST_USER_ID, thread_id=thread_id, agentic_id="builtin:demo")
-    assert recreated.conversation_title == ""
-    assert count_rows(engine, AgenticConversationTurn, thread_id) == 0
+    # 同 thread_id 重新开轮（get-or-create）：得到全新空会话 + 仅本轮次/消息（无残留）
+    conversation, turn = repo.open_turn(
+        user_id=TEST_USER_ID, thread_id=thread_id, agentic_id="builtin:demo",
+        rebind=False, run_id="run-1", turn_id=uuid4(), parent_turn_id=None,
+        attempt_no=1, content=[{"type": "text", "text": "hello"}],
+    )
+    assert conversation.conversation_title == ""
+    assert turn.turn_num == 0
+    assert count_rows(engine, AgenticConversationTurn, thread_id) == 1
+    assert count_rows(engine, AgenticConversationMessage, thread_id) == 1
+
+
+def test_open_turn_atomic_rollback_leaves_no_partial_state(engine):
+    """单事务口径：轮次落库失败（turn_id 唯一约束冲突）→ 会话一并回滚。
+
+    open_turn 是开轮全部写的原子边界：中途炸开时不允许残留「有会话无轮次 /
+    有轮次无用户消息」的半截聚合。"""
+    repo = ConversationRepository(engine=engine)
+    thread_id = uuid4()
+    turn_id = uuid4()
+    make_turn(engine, thread_id, turn_id, turn_num=0)  # 预置同 turn_id 行
+
+    with pytest.raises(Exception):  # turn 建行触发 UNIQUE 冲突，commit 永不发生
+        repo.open_turn(
+            user_id=TEST_USER_ID, thread_id=thread_id, agentic_id="builtin:demo",
+            rebind=False, run_id="run-2", turn_id=turn_id, parent_turn_id=None,
+            attempt_no=1, content=[{"type": "text", "text": "hello"}],
+        )
+
+    assert count_rows(engine, AgenticConversation, thread_id) == 0
     assert count_rows(engine, AgenticConversationMessage, thread_id) == 0

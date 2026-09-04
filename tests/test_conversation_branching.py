@@ -59,7 +59,7 @@ def service(engine):
 
 def _answer(service, turn, text):
     """给轮次补一条 assistant MESSAGE 行并完成收口（模拟一次成功的 run）。"""
-    service.conversation_repo.store_conversation_message(AgenticConversationMessage(
+    service.conversation_repo.store_conversation_messages([AgenticConversationMessage(
         thread_id=turn.thread_id,
         turn_id=turn.turn_id,
         message_id=uuid4(),
@@ -69,7 +69,7 @@ def _answer(service, turn, text):
         content=[{"type": "text", "text": text}],
         token_usage={},
         latency_ms=0,
-    ))
+    )])
     service.complete_turn(turn)
 
 
