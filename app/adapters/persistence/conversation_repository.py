@@ -84,6 +84,13 @@ class ConversationRepository:
         只接收解析产物执行；事务内对他人会话再校验一次（与归属判定的竞态
         窗口内整体回滚，ValueError 惯例同前）。turn_num 为线程内插入序
         （max+1）；不动 current_turn_id——活跃叶子只在 complete_turn 推进。
+
+        并发边界（本事务不提供隔离，只保写集原子性）：分支定位的读在服务层
+        事务外完成；max(turn_num) 虽在本事务内但是普通快照读——无锁、
+        (thread_id, parent_turn_id, attempt_no) 与 turn_num 亦无唯一约束，
+        同一会话并发开轮可产生重复兄弟序号/turn_num。正确性由部署现实兜底
+        （uvicorn 单进程 + 客户端不同时对同一会话发 run），不是数据库保证；
+        需要硬保证时加部分唯一索引（同 parent 下 attempt 唯一）再谈。
         """
         with Session(self.engine, expire_on_commit=False) as session:
             conversation = session.exec(
@@ -174,7 +181,7 @@ class ConversationRepository:
 
     def map_turn_user_contents(self, thread_id: UUID) -> dict[UUID, List]:
         """turn_id → 该轮用户消息（存储形态 content）。用户行固定 sequence_num=0
-        （open_turn 先写用户行），以 0 号行定位，缺行（异常轮次）不出现在映射中。"""
+        （开轮时与轮次行同事务原子写入），以 0 号行定位，缺行（异常轮次）不出现在映射中。"""
         with Session(self.engine, expire_on_commit=False) as session:
             rows = session.exec(
                 select(AgenticConversationMessage)

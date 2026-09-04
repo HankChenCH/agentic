@@ -866,7 +866,9 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   归属过滤下沉到仓储查询条件——`ConversationService.open_turn` 先经
   `find_conversation` 纯读比对归属（先于任何写），他人 thread_id 续聊/取消/查删
   一律 404 不泄露存在性；开轮的全部写（get-or-create + 绑定切换 + 轮次 +
-  0 号用户消息）收口在仓储 `open_turn` 单事务，中途失败整体回滚不留半截聚合。③ **记忆用户级作用域（设计反转）**：memory v2 原
+  0 号用户消息）收口在仓储 `open_turn` 单事务，中途失败整体回滚不留半截聚合；但事务只保写集原子性、不提供隔离——分支定位读在事务外（无锁），
+  (parent_turn_id, attempt_no)/turn_num 无唯一约束，同会话并发开轮可重复兄弟序号
+  （由单进程 uvicorn + 客户端不并发发 run 的部署现实兜底，非数据库保证）。③ **记忆用户级作用域（设计反转）**：memory v2 原
   锁定「单用户全局」（docs/memory-v2-design.md §3.3），现 entity/statement/
   episode 三表带 `user_id`；`MemoryRepository.for_user(uid)` / 
   `MemoryVectorIndex.for_user(uid)` / `MemoryEditor·GraphReader.for_user(uid)`
