@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import Engine
 
 from app.core.config import DBConfig, SQLiteDBProviderEntry
-from app.infrastructures.db import DatabaseFactory, create_default_db
+from app.adapters.db import DatabaseFactory, create_default_db
 
 
 @dataclass

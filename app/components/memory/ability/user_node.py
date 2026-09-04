@@ -12,7 +12,7 @@ from wireup import injectable
 
 from app.components.memory.repositories import MemoryRepository
 from app.models.domain.memory import EntityType, MemoryEntity, MemoryOrigin
-from app.services.domain.user.ports import UserNodeSyncPort
+from app.domain.user.ports import UserNodeSyncPort
 
 from .consolidation import USER_ENTITY_NAME
 

@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 from wireup import injectable
 
-from .vector_index import KnowledgeVectorIndex
+from .ports import KnowledgeVectorIndexPort
 from app.core.exceptions import InfrastructureError
 from app.core.logging import LoggerFactory
 from app.exceptions import (
@@ -23,8 +23,8 @@ from app.exceptions import (
 )
 from app.models.domain.knowledge import KnowledgeDocument, KnowledgeStatus
 from app.models.schema.request.knowledge import KnowledgeDocumentUpdateRequest
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 from .object_store import KnowledgeObjectStore
 from .support import (
     ALLOWED_UPLOAD_SUFFIXES,
@@ -101,9 +101,9 @@ def _probe_stream_size(stream: BinaryIO) -> int | None:
 @injectable
 @dataclass
 class KnowledgeDocumentService:
-    kb_repo: KnowledgeBaseRepository  # 父资源归属/可见性锚定（require_owned_kb / require_visible_kb）
-    document_repo: KnowledgeDocumentRepository
-    vector_index: KnowledgeVectorIndex
+    kb_repo: KnowledgeBaseRepositoryPort  # 父资源归属/可见性锚定（require_owned_kb / require_visible_kb）
+    document_repo: KnowledgeDocumentRepositoryPort
+    vector_index: KnowledgeVectorIndexPort
     object_store: KnowledgeObjectStore
     logger_factory: LoggerFactory
 

@@ -12,8 +12,8 @@ from uuid import uuid4
 from sqlmodel import Session
 
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeDocument, KnowledgeStatus
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
-from app.services.domain.knowledge.ingestion_service import DocumentIngestionService
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ingestion_service import DocumentIngestionService
 from tests.conftest import TEST_USER_ID
 
 
@@ -114,6 +114,24 @@ def test_list_reap_candidates_only_processing_and_pending(engine):
     candidates = {doc.id for doc in repo.list_reap_candidates()}
     assert candidates == {processing_id, pending_id}
     assert ready_id not in candidates
+
+
+def test_mark_reaped_preserves_updated_at_for_takeover(engine):
+    """记账写不得刷新 updated_at（压掉 onupdate 副作用）。
+
+    重投任务的认领以「processing 且 updated_at 早于 stale_before」判定接管；
+    mark_reaped 若刷新时钟，重投消息到达时文档恒为 fresh，接管永不成立，
+    卡死文档只会被循环计数直至 failed——恢复路径整体失效（e2e 实证）。
+    """
+    repo = KnowledgeDocumentRepository(engine=engine)
+    stale_ts = _naive_utc(datetime.now(timezone.utc) - timedelta(seconds=660))
+    kb_id, doc_id = make_doc(engine, KnowledgeStatus.PROCESSING, updated_at=stale_ts)
+
+    assert repo.mark_reaped(doc_id, max_attempts=3) is True
+    doc = get_doc(engine, doc_id)
+    assert doc.reap_count == 1
+    assert doc.status == KnowledgeStatus.PROCESSING
+    assert _naive_utc(doc.updated_at) == stale_ts  # 时钟未被记账写顶掉
 
 
 def test_mark_reaped_counts_then_finalizes_at_limit(engine):

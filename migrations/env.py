@@ -15,7 +15,7 @@ from sqlmodel import SQLModel
 
 import app.models.domain  # noqa: F401  注册全部表模型到 SQLModel.metadata
 from app.core.config import AppConfig
-from app.infrastructures.db.db_factory import DatabaseFactory
+from app.adapters.db.db_factory import DatabaseFactory
 
 config = context.config
 

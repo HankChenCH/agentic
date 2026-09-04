@@ -4,15 +4,15 @@ from typing import Any
 from wireup import injectable
 
 from app.core.config import AppConfig, FilesystemConfig, FilesystemProviderEntry
-from app.infrastructures.filesystem.filesystem_provider import (
+from app.adapters.filesystem.filesystem_provider import (
     FILESYSTEM_BUILDERS,
-    Filesystem,
     FilesystemBuilder,
     FilesystemProvider,
 )
+from app.domain.ports import Filesystem
 
-import app.infrastructures.filesystem.local_provider  # noqa: F401  触发 @register 供应商注册
-import app.infrastructures.filesystem.s3_provider  # noqa: F401
+import app.adapters.filesystem.local_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.filesystem.s3_provider  # noqa: F401
 
 
 @injectable
@@ -20,7 +20,7 @@ import app.infrastructures.filesystem.s3_provider  # noqa: F401
 class FilesystemFactory:
     """文件存储工厂：按 provider entry key 创建 Filesystem 契约实例。
 
-    契约类型为 :class:`~app.infrastructures.filesystem.filesystem_provider.Filesystem`
+    契约类型为 :class:`~app.domain.ports.filesystem.Filesystem`
     （read / put / delete / exists / list，对象存储语义），消费方（如
     知识库文件能力）只依赖该抽象，不感知本地磁盘 / S3 的差异。
 

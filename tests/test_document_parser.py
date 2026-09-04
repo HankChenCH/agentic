@@ -1,10 +1,10 @@
 """MinerU 归一化：bbox 保留与坐标基准归一（0-1000 / 0-1 / 脏数据降级）。"""
 
-from app.infrastructures.document_parser.mineru_cloud_provider import (
+from app.adapters.document_parser.mineru_cloud_provider import (
     _normalize_blocks,
     _to_bbox,
 )
-from app.infrastructures.document_parser.models import ParsedBlockType
+from app.domain.ports import ParsedBlockType
 
 
 def test_to_bbox_normalizes_0_1000_scale():

@@ -13,9 +13,9 @@ from io import BytesIO
 
 import pytest
 
-from app.infrastructures.filesystem.local_provider import LocalFilesystem
-from app.services.domain.conversation.attachments import ConversationAttachmentStore
-from app.services.domain.conversation.multimodal import user_message_from_content
+from app.adapters.filesystem.local_provider import LocalFilesystem
+from app.domain.conversation.attachments import ConversationAttachmentStore
+from app.domain.conversation.multimodal import user_message_from_content
 
 from conftest import TEST_USER_ID, StubLoggerFactory
 

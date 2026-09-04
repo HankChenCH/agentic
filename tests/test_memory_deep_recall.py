@@ -12,7 +12,7 @@ from app.models.domain.memory import (
     MemoryEpisodeLink,
     MemoryStatement,
 )
-from app.services.domain.memory import MemoryVectorHit
+from app.domain.memory import MemoryVectorHit
 
 from fakes_memory import FakeMemoryVectorIndex, make_service_config
 from conftest import TEST_USER_ID

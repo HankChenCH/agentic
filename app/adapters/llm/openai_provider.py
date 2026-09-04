@@ -5,7 +5,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from app.core.config import LLMProviderEntry
-from app.infrastructures.llm.model_provider import ModelBuilder, ModelProvider, register
+from app.adapters.llm.model_provider import ModelBuilder, ModelProvider, register
 
 
 @register

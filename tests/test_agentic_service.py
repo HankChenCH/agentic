@@ -25,13 +25,13 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 from app.packages.signal.memory_signal_store import InMemorySignalStore
-from app.infrastructures.filesystem.local_provider import LocalFilesystem
-from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.attachments import ConversationAttachmentStore
-from app.services.domain.conversation.conversation_service import ConversationService
-from app.services.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
-from app.services.orchestration.agentic_service import AgenticService
-from app.services.orchestration.turn_finalizer import TurnFinalizer
+from app.adapters.filesystem.local_provider import LocalFilesystem
+from app.adapters.persistence.conversation_repository import ConversationRepository
+from app.domain.conversation.attachments import ConversationAttachmentStore
+from app.domain.conversation.conversation_service import ConversationService
+from app.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
+from app.application.agentic_service import AgenticService
+from app.application.turn_finalizer import TurnFinalizer
 
 # 模拟不该泄漏给客户端的内部细节（连接串）
 SECRET = "connect timeout postgres://agentic:secret@10.0.0.1:5432/agentic"
@@ -43,7 +43,7 @@ def decode(frames):
 
 
 def set_environment(monkeypatch, environment):
-    monkeypatch.setattr("app.services.orchestration.agentic_service.get_environment", lambda: environment)
+    monkeypatch.setattr("app.application.agentic_service.get_environment", lambda: environment)
 
 
 def turn_status(engine, thread_id):
@@ -240,7 +240,7 @@ class FakeUserNodeSync:
 
 @pytest.fixture()
 def make_service(engine, monkeypatch, tmp_path):
-    monkeypatch.setattr("app.services.orchestration.agentic_service.threading.Thread", InlineThread)
+    monkeypatch.setattr("app.application.agentic_service.threading.Thread", InlineThread)
 
     def _make(agent_factory, conversation_repo=None, memory=None, signal_store=None, title_generator=None):
         repo = conversation_repo or ConversationRepository(engine=engine)

@@ -9,7 +9,7 @@ import pytest
 from obstore.store import MemoryStore
 from sqlmodel import Session
 
-import app.services.domain.knowledge.document_service as document_service_module
+import app.domain.knowledge.document_service as document_service_module
 from app.core.exceptions import InfrastructureError
 from app.core.logging import LoggerFactory
 from app.exceptions import (
@@ -17,14 +17,14 @@ from app.exceptions import (
     KnowledgeDocumentNotFoundError,
     KnowledgeNotFoundError,
 )
-from app.infrastructures.filesystem import Filesystem
+from app.adapters.filesystem import Filesystem
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import (
+from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
+from app.adapters.persistence.knowledge_document_repository import (
     KnowledgeDocumentRepository,
 )
-from app.services.domain.knowledge.document_service import KnowledgeDocumentService
-from app.services.domain.knowledge.object_store import KnowledgeObjectStore
+from app.domain.knowledge.document_service import KnowledgeDocumentService
+from app.domain.knowledge.object_store import KnowledgeObjectStore
 from tests.conftest import TEST_USER_ID
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body"

@@ -1,29 +1,33 @@
-"""记忆域向量适配器：三类对象混居单 collection 的写入与检索（每用户一库）。
+"""记忆域向量索引适配器（``MemoryVectorIndexPort`` 的实现）。
 
-归位领域层（镜像知识域 services/domain/knowledge/vector_index.py 的先例）：
-组件侧经合法 components→domain 边注入本类，不直触 ``VectorStoreFactory``。
-确定性向量 id 用 ``uuid5("memory/{kind}/{ref_id}")``——同 id 重写即覆盖、
-取代时可反算删除；不直接拼字符串是因为 Weaviate 对象键须为合法 UUID。
-用户隔离走**每用户一 collection**（``Memory_{uid.hex}``，见 collection.py）：
-注入实例无作用域（仅维护 CLI 兜底用），用户侧行程经 ``for_user(uid)`` 取
-作用域视图。向量端任何失败都只告警不上抛：SQL 是事实源，索引可随时全量重建。
+三类对象混居单 collection 的写入与检索（每用户一库）。确定性向量 id 用
+``uuid5("memory/{kind}/{ref_id}")``——同 id 重写即覆盖、取代时可反算删除；
+不直接拼字符串是因为 Weaviate 对象键须为合法 UUID。契约（协议/KIND_*/
+``VectorEntry``/``MemoryVectorHit``/``vector_object_id``）住
+``app/domain/memory/ports``，本文件只持 Weaviate 机制，经 wireup
+``as_type`` 回填端口。用户隔离走**每用户一 collection**
+（``Memory_{uid.hex}``）：注入实例无作用域（仅维护 CLI 兜底用），用户侧
+行程经 ``for_user(uid)`` 取作用域视图。
 """
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from langchain_core.documents import Document
 from wireup import injectable
 
+from app.adapters.vector import VectorStoreFactory
+from app.adapters.vector.memory_collection import collection_schema, memory_index_name
 from app.core.logging import LoggerFactory
-from app.infrastructures.vector import VectorStoreFactory
-from app.services.domain.memory.collection import collection_schema, memory_index_name
-
-KIND_ENTITY = "entity"
-KIND_STATEMENT = "statement"
-KIND_EPISODE = "episode"
+from app.domain.memory.ports import (
+    KIND_EPISODE,
+    KIND_STATEMENT,
+    MemoryVectorHit,
+    MemoryVectorIndexPort,
+    VectorEntry,
+    vector_object_id,
+)
 
 # 嵌入写入的分批大小（单条 add_texts 过大易触发请求体/超时限制）
 _EMBED_BATCH_SIZE = 32
@@ -34,11 +38,6 @@ _DELETE_BATCH_SIZE = 100
 _OVERSAMPLE = 3
 
 
-def vector_object_id(kind: str, ref_id: int) -> str:
-    """{kind}_{ref_id} 的确定性合法 UUID：写入覆盖与删除共用此映射。"""
-    return str(uuid5(NAMESPACE_URL, f"memory/{kind}/{ref_id}"))
-
-
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -46,27 +45,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
 
-@dataclass(frozen=True)
-class VectorEntry:
-    """一次嵌入写入的最小单元。"""
-
-    kind: str
-    ref_id: int
-    content: str
-    thread_id: str | None = None
-    occurred_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class MemoryVectorHit:
-    """单条命中：hybrid fusion 分（0-1），越高越相关。"""
-
-    kind: str
-    ref_id: int
-    score: float
-
-
-@injectable
+@injectable(as_type=MemoryVectorIndexPort)
 @dataclass
 class MemoryVectorIndex:
     vector_store_factory: VectorStoreFactory

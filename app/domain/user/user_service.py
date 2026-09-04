@@ -8,9 +8,9 @@ import re
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
 from wireup import injectable
 
+from app.domain.ports import RepositoryConflictError
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.exceptions import (
@@ -20,7 +20,7 @@ from app.exceptions import (
     UsernameDuplicatedError,
 )
 from app.models.domain.user import User
-from app.repositories.user_repository import UserRepository
+from app.domain.user.ports import UserRepositoryPort
 
 from .passwords import hash_password, verify_password
 from .ports import UserNodeSyncPort
@@ -44,7 +44,7 @@ class AuthSession:
 @injectable
 @dataclass
 class UserService:
-    user_repo: UserRepository
+    user_repo: UserRepositoryPort
     memory_user_node: UserNodeSyncPort
     app_config: AppConfig
     logger_factory: LoggerFactory
@@ -61,7 +61,7 @@ class UserService:
             raise UsernameDuplicatedError(f"用户名已被注册: {username}")
         try:
             user = self.user_repo.create(username=username, password_hash=hash_password(password), nickname="")
-        except IntegrityError:
+        except RepositoryConflictError:
             # 查重与插入之间的并发注册竞态：唯一约束兜底
             raise UsernameDuplicatedError(f"用户名已被注册: {username}") from None
         self.logger.info("user registered: %s (%s)", username, user.id)

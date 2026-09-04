@@ -14,9 +14,9 @@ from app.agents import AgentFactory, AgentRunContext
 
 from .translator import AgUiTranslator, StorageTranslator
 from .turn_finalizer import TurnFinalizer
-from app.services.domain.conversation.attachments import ConversationAttachmentStore
-from app.services.domain.conversation.conversation_service import ConversationService
-from app.services.domain.conversation.multimodal import text_of, user_message_from_content
+from app.domain.conversation.attachments import ConversationAttachmentStore
+from app.domain.conversation.conversation_service import ConversationService
+from app.domain.conversation.multimodal import text_of, user_message_from_content
 
 from app.models.domain.agentic import AgenticConversationTurn, AgenticTurnStatus
 

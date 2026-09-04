@@ -18,9 +18,9 @@ from app.exceptions import (
     AttachmentTooLargeError,
     UnsupportedAttachmentTypeError,
 )
-from app.infrastructures.filesystem.local_provider import LocalFilesystem
+from app.adapters.filesystem.local_provider import LocalFilesystem
 from app.models.schema.response.biz_response import Response
-from app.services.domain.conversation.attachments import (
+from app.domain.conversation.attachments import (
     ATTACHMENT_URL_PREFIX,
     ConversationAttachmentStore,
 )

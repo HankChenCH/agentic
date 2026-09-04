@@ -15,8 +15,8 @@ from app.models.schema.request.user import (
     UpdateProfileRequest,
 )
 from app.models.schema.response.biz_response import Response
-from app.services import UserService
-from app.services.domain.user.user_service import public_user
+from app.domain.user import UserService
+from app.domain.user.user_service import public_user
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 

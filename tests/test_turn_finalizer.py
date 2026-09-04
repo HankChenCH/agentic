@@ -18,9 +18,9 @@ from app.models.domain.agentic import (
 )
 from app.packages.signal.memory_signal_store import InMemorySignalStore
 from conftest import TEST_USER_ID
-from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.conversation_service import ConversationService
-from app.services.orchestration.turn_finalizer import TurnFinalizer
+from app.adapters.persistence.conversation_repository import ConversationRepository
+from app.domain.conversation.conversation_service import ConversationService
+from app.application.turn_finalizer import TurnFinalizer
 
 
 class FakeTitleGenerator:

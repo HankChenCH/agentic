@@ -8,7 +8,8 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.services import AgentCatalogService, AgenticService, ConversationService, ToolCatalogService
+from app.application import AgentCatalogService, AgenticService, ToolCatalogService
+from app.domain.conversation import ConversationService
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.request.conversation import ActivateTurnRequest

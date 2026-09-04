@@ -11,9 +11,24 @@ from typing import Protocol
 from uuid import UUID
 
 from app.models.domain.memory import MemoryEntity
+from app.models.domain.user import User
 
 
 class UserNodeSyncPort(Protocol):
     """把账号 profile（username/nickname）同步进该用户的记忆「用户」节点。"""
 
     def sync_user_node(self, user_id: UUID, username: str, nickname: str) -> MemoryEntity: ...
+
+
+class UserRepositoryPort(Protocol):
+    """用户聚合数据访问协议（实现住 ``app/adapters/persistence/``）。"""
+
+    def get_by_id(self, user_id: UUID) -> User | None: ...
+
+    def get_by_username(self, username: str) -> User | None: ...
+
+    def create(self, username: str, password_hash: str, nickname: str) -> User: ...
+
+    def update_profile(self, user_id: UUID, nickname: str) -> User | None: ...
+
+    def update_password(self, user_id: UUID, password_hash: str) -> User | None: ...

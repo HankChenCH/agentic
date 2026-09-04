@@ -1,3 +1,3 @@
-from app.infrastructures.redis.redis_factory import RedisClientFactory
+from app.adapters.redis.redis_factory import RedisClientFactory
 
 __all__ = ["RedisClientFactory"]

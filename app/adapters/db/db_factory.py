@@ -4,10 +4,10 @@ from sqlalchemy import Engine
 from wireup import injectable
 
 from app.core.config import AppConfig, DBConfig, DBProviderEntry
-from app.infrastructures.db.db_provider import DB_BUILDERS, DBProvider, DatabaseBuilder
+from app.adapters.db.db_provider import DB_BUILDERS, DBProvider, DatabaseBuilder
 
-import app.infrastructures.db.sqlite_provider  # noqa: F401  触发 @register 供应商注册
-import app.infrastructures.db.postgresql_provider  # noqa: F401
+import app.adapters.db.sqlite_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.db.postgresql_provider  # noqa: F401
 
 
 @injectable

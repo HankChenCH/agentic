@@ -4,10 +4,10 @@ from wireup import injectable
 
 from app.components.memory import MemoryConsolidationService
 from app.core.logging import LoggerFactory
-from app.services.domain.conversation.conversation_service import ConversationService
-from app.services.domain.conversation.title_generator import ConversationTitleGenerator
-from app.services.domain.user.ports import UserNodeSyncPort
-from app.services.domain.user.user_service import UserService
+from app.domain.conversation.conversation_service import ConversationService
+from app.domain.conversation.title_generator import ConversationTitleGenerator
+from app.domain.user.ports import UserNodeSyncPort
+from app.domain.user.user_service import UserService
 
 from app.models.domain.agentic import (
     AgenticConversation,

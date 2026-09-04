@@ -8,7 +8,7 @@ from app.models.domain.knowledge import (
     KnowledgeDocument,
     KnowledgeStatus,
 )
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
 from tests.conftest import TEST_USER_ID
 
 

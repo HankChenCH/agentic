@@ -11,7 +11,7 @@ from starlette.requests import Request
 
 from app.api.deps import UserPrincipal, require_user
 from app.exceptions import InvalidCredentialsError
-from app.services.domain.user.token import encode_access_token
+from app.domain.user.token import encode_access_token
 
 SECRET = os.environ["AUTH_JWT_SECRET"]
 

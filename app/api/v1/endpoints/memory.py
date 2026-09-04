@@ -31,7 +31,7 @@ from app.models.schema.request.memory import (
     StatementCreateRequest,
 )
 from app.models.schema.response.biz_response import Response
-from app.services import MemoryAdminService, MemoryGraphService
+from app.domain.memory import MemoryAdminService, MemoryGraphService
 
 router = APIRouter(prefix="/memory", tags=["Memory"])
 

@@ -4,7 +4,7 @@
 真实注册表的元数据完整性由 register_agent 的 fail-fast 校验兜底。
 """
 
-from app.services.orchestration.agent_catalog import AgentCatalogService
+from app.application.agent_catalog import AgentCatalogService
 
 from conftest import StubLoggerFactory
 

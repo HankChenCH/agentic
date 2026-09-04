@@ -168,3 +168,71 @@ class MemoryEditor(Protocol):
 
     def reset_all_memory(self) -> dict[str, int]:
         """整体重置：清空记忆四表并 drop 记忆向量 collection。"""
+
+
+# ---------------- 记忆向量索引端口 ----------------
+# 实现住 ``app/adapters/vector/memory_index.py``（Weaviate 机制）；组件与
+# 领域服务只依赖本协议面。契约数据类型（KIND_* / VectorEntry /
+# MemoryVectorHit / vector_object_id）同住此处——id 映射与命中形状是
+# 消费方可见的契约，collection/schema 机制细节归实现侧。
+
+KIND_ENTITY = "entity"
+KIND_STATEMENT = "statement"
+KIND_EPISODE = "episode"
+
+
+@dataclass(frozen=True)
+class VectorEntry:
+    """一次嵌入写入的最小单元。"""
+
+    kind: str
+    ref_id: int
+    content: str
+    thread_id: str | None = None
+    occurred_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class MemoryVectorHit:
+    """单条命中：hybrid fusion 分（0-1），越高越相关。"""
+
+    kind: str
+    ref_id: int
+    score: float
+
+
+def vector_object_id(kind: str, ref_id: int) -> str:
+    """{kind}_{ref_id} 的确定性合法 UUID：写入覆盖与删除共用此映射。"""
+    from uuid import NAMESPACE_URL, uuid5
+
+    return str(uuid5(NAMESPACE_URL, f"memory/{kind}/{ref_id}"))
+
+
+class MemoryVectorIndexPort(Protocol):
+    """记忆域向量索引协议：三类对象混居单 collection 的写入与检索（每用户一库）。
+
+    注入实例无作用域（仅维护 CLI 兜底用），用户侧行程经 ``for_user(uid)``
+    取作用域视图。向量端任何失败都只告警不上抛：SQL 是事实源，索引可随时
+    全量重建。
+    """
+
+    def for_user(self, user_id: UUID) -> "MemoryVectorIndexPort":
+        """返回绑定用户的轻量作用域视图：读写全部落在该用户的 collection。"""
+
+    def upsert_many(self, entries: list[VectorEntry]) -> None:
+        """批量写入/覆盖；同 (kind, ref_id) 再次写入即更新语义。"""
+
+    def delete(self, items: list[tuple[str, int]]) -> None: ...
+
+    def search(
+        self,
+        query: str,
+        *,
+        kinds: tuple[str, ...] = (KIND_STATEMENT, KIND_EPISODE),
+        top_k: int = 8,
+        alpha: float = 0.7,
+    ) -> list[MemoryVectorHit]: ...
+
+    def text_cosine(self, query: str, contents: list[str]) -> list[float]: ...
+
+    def rebuild(self, entries: list[VectorEntry]) -> None: ...

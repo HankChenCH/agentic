@@ -20,7 +20,7 @@ from wireup import Injected
 from app.api.deps import UserPrincipal, require_user
 from app.exceptions import AttachmentNotFoundError
 from app.models.schema.response.biz_response import Response
-from app.services.domain.conversation.attachments import (
+from app.domain.conversation.attachments import (
     ATTACHMENT_URL_PREFIX,
     ConversationAttachmentStore,
 )

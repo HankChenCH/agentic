@@ -37,7 +37,7 @@ from app.components.base import (
 )
 from app.components.knowledge.ability.navigation import KnowledgeNavigationService
 from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService, RetrievalHit
-from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K
+from app.domain.knowledge.ports import DEFAULT_TOP_K
 
 # 单来源 bbox 条数上限：控制工具结果体积（溯源展示取前若干块已够定位）
 _MAX_SOURCE_BBOXES = 12

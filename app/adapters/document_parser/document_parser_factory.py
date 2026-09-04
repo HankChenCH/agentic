@@ -3,14 +3,14 @@ from dataclasses import dataclass
 from wireup import injectable
 
 from app.core.config import AppConfig, DocumentParserConfig, DocumentParserProviderEntry
-from app.infrastructures.document_parser.document_parser_provider import (
+from app.adapters.document_parser.document_parser_provider import (
     DOCUMENT_PARSER_BUILDERS,
     DocumentParser,
     DocumentParserBuilder,
     DocumentParserProvider,
 )
 
-import app.infrastructures.document_parser.mineru_cloud_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.document_parser.mineru_cloud_provider  # noqa: F401  触发 @register 供应商注册
 
 
 @injectable
@@ -18,7 +18,7 @@ import app.infrastructures.document_parser.mineru_cloud_provider  # noqa: F401  
 class DocumentParserFactory:
     """文档解析工厂：按 provider entry key 创建 DocumentParser 契约实例。
 
-    契约类型为 :class:`~app.infrastructures.document_parser.document_parser_provider.DocumentParser`
+    契约类型为 :class:`~app.adapters.document_parser.document_parser_provider.DocumentParser`
     （``parse(bytes, filename) -> ParsedDocument``），消费方（知识库入库
     流水线）只依赖该抽象，不感知云端 / 自部署的差异。
 

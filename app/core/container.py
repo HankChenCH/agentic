@@ -4,16 +4,16 @@ wireup 的 FastAPI 集成要求 async 容器、Celery 集成要求 sync 容器�
 两种应用不能复用同一个容器实例——共享的是 injectables 注册表：
 所有入口统一从本模块取容器，保证各进程内的装配一致。
 
-注意：本模块导入 services/components 等业务包（它们反向依赖
-core.config / core.logging），因此不要在会被业务包导入的模块里
-import 本模块，以免循环导入。
+注意：本模块导入 application/domain/adapters/components 等业务包
+（它们反向依赖 core.config / core.logging），因此不要在会被业务包导入的
+模块里 import 本模块，以免循环导入。
 """
 
 from typing import TYPE_CHECKING
 
 import wireup
 
-from app import agents, components, infrastructures, packages, repositories, services
+from app import adapters, agents, application, components, domain, packages
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 
@@ -26,11 +26,11 @@ def _injectables() -> list:
     return [
         AppConfig,
         LoggerFactory,  # core 不在扫描包列表内，显式注册
-        services,
+        application,
+        domain,
+        adapters,
         components,
         packages,
-        repositories,
-        infrastructures,
         agents,
     ]
 

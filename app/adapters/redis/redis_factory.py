@@ -4,9 +4,9 @@ import redis
 from wireup import injectable
 
 from app.core.config import AppConfig, RedisConfig, RedisProviderEntry
-from app.infrastructures.redis.redis_provider import REDIS_BUILDERS, RedisClientBuilder, RedisProvider
+from app.adapters.redis.redis_provider import REDIS_BUILDERS, RedisClientBuilder, RedisProvider
 
-import app.infrastructures.redis.standalone_provider  # noqa: F401  触发 @register 连接形式注册
+import app.adapters.redis.standalone_provider  # noqa: F401  触发 @register 连接形式注册
 
 
 @injectable

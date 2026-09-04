@@ -10,7 +10,7 @@ import pytest
 from redis import Redis
 
 from app.core.config import RedisConfig, StandaloneRedisProviderEntry
-from app.infrastructures.redis import RedisClientFactory
+from app.adapters.redis import RedisClientFactory
 
 
 @dataclass

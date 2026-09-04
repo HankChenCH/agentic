@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, Iterator
 
 from app.core.config import LocalFilesystemEntry
-from app.infrastructures.filesystem.filesystem_provider import (
+from app.adapters.filesystem.filesystem_provider import (
     Filesystem,
     FilesystemBuilder,
     FilesystemProvider,

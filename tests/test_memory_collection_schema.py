@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from app.services.domain.memory.collection import memory_index_name, collection_schema
+from app.adapters.vector.memory_collection import memory_index_name, collection_schema
 
 
 def test_index_name_is_weaviate_compliant():

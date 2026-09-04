@@ -11,9 +11,12 @@ from typing import List, Tuple
 from uuid import UUID
 
 from sqlalchemy import Engine, delete, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 from wireup import injectable
 
+from app.domain.ports import RepositoryConflictError
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 from app.models.domain.knowledge import (
     DocumentSegment,
     KnowledgeBase,
@@ -22,7 +25,7 @@ from app.models.domain.knowledge import (
 )
 
 
-@injectable
+@injectable(as_type=KnowledgeDocumentRepositoryPort)
 @dataclass
 class KnowledgeDocumentRepository:
     engine: Engine
@@ -126,23 +129,42 @@ class KnowledgeDocumentRepository:
 
         返回 True 表示应继续重投，False 表示已终结为 failed（走人工 retry）。
         成功收尾的归零在 :meth:`complete_document`。
+
+        记账写必须钉住 ``updated_at``（显式回写原值，压掉 onupdate 副作用）：
+        重投任务的认领以「processing 且 updated_at 早于 stale_before」判定接管，
+        若本次记账刷新了时钟，重投消息到达时文档恒为 fresh → 接管永不成立，
+        卡死文档只能被反复计数直至 failed——恢复路径整体失效。
         """
         with Session(self.engine, expire_on_commit=False) as session:
             doc = session.get(KnowledgeDocument, doc_id)
             if doc is None:
                 session.commit()
                 return False
+            original_updated_at = doc.updated_at
             count = doc.reap_count + 1
+            # 用 Core update 显式携带 updated_at（显式值压掉 onupdate）：ORM 属性
+            # 赋回原值会因净变化为零被变更检测剔除，onupdate 照样把时钟顶掉
             if count > max_attempts:
-                doc.status = KnowledgeStatus.FAILED
-                doc.error_message = (
-                    f"task reaped {max_attempts} times without completing; manual retry required"
-                )[:_ERROR_MESSAGE_MAX]
-            else:
-                doc.reap_count = count
-            session.add(doc)
+                session.exec(
+                    update(KnowledgeDocument)
+                    .where(col(KnowledgeDocument.id) == doc_id)
+                    .values(
+                        status=KnowledgeStatus.FAILED,
+                        error_message=(
+                            f"task reaped {max_attempts} times without completing; manual retry required"
+                        )[:_ERROR_MESSAGE_MAX],
+                        updated_at=original_updated_at,
+                    )
+                )
+                session.commit()
+                return False
+            session.exec(
+                update(KnowledgeDocument)
+                .where(col(KnowledgeDocument.id) == doc_id)
+                .values(reap_count=count, updated_at=original_updated_at)
+            )
             session.commit()
-            return count <= max_attempts
+            return True
 
     def delete_document(self, kb_id: UUID, doc_id: UUID) -> bool:
         with Session(self.engine, expire_on_commit=False) as session:
@@ -334,14 +356,19 @@ class KnowledgeDocumentRepository:
         """追加分段：seg_num 与分段行同事务维护（与 doc_num 同一口径）。
 
         (doc_id, position) 唯一约束冲突（并发追加）时提交失败整体回滚，
-        IntegrityError 由服务层映射为业务冲突。
+        在此收口为契约级冲突信号 RepositoryConflictError（驱动异常不出适配器），
+        由服务层映射为业务冲突。
         """
         with Session(self.engine, expire_on_commit=False) as session:
             doc = session.get(KnowledgeDocument, doc_id)
             if doc is not None:
                 doc.seg_num += 1
             session.add(segment)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise RepositoryConflictError("segment position already exists") from None
             session.refresh(segment)
         return segment
 

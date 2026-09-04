@@ -11,8 +11,8 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import LLMConfig, LLMProviderEntry, ModelTaskType
-from app.infrastructures.llm import ModelFactory
-from app.infrastructures.llm.deepseek_provider import ThinkingAwareChatDeepSeek
+from app.adapters.llm import ModelFactory
+from app.adapters.llm.deepseek_provider import ThinkingAwareChatDeepSeek
 
 
 @dataclass

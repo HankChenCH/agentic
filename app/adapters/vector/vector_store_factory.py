@@ -5,10 +5,10 @@ from wireup import injectable
 from langchain_core.vectorstores import VectorStore
 
 from app.core.config import AppConfig, VectorDBConfig, VectorDBProviderEntry
-from app.infrastructures.llm import ModelFactory
-from app.infrastructures.vector.vector_db_provider import VECTOR_DB_BUILDERS, VectorDBBuilder, VectorDBProvider
+from app.adapters.llm import ModelFactory
+from app.adapters.vector.vector_db_provider import VECTOR_DB_BUILDERS, VectorDBBuilder, VectorDBProvider
 
-import app.infrastructures.vector.weaviate_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.vector.weaviate_provider  # noqa: F401  触发 @register 供应商注册
 
 
 @injectable

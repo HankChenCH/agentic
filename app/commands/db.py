@@ -103,7 +103,7 @@ def _default_engine_url() -> str:
     lazy Engine 只取 url 不发起连接，不手工拼串（URL 组装收口在 builder）。
     """
     from app.core.config import AppConfig
-    from app.infrastructures.db.db_factory import DatabaseFactory
+    from app.adapters.db.db_factory import DatabaseFactory
 
     engine = DatabaseFactory(app_config=AppConfig()).create()
     return engine.url.render_as_string(hide_password=False)

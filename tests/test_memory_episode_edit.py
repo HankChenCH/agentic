@@ -14,7 +14,7 @@ from app.exceptions.memory import (
     MemoryObjectNotFoundError,
 )
 from app.models.domain.memory import MemoryEpisode, MemoryEpisodeLink, MemoryEntity
-from app.services.domain.memory import MemoryAdminService
+from app.domain.memory import MemoryAdminService
 
 from fakes_memory import FakeMemoryVectorIndex
 from conftest import TEST_USER_ID

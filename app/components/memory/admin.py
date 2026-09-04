@@ -42,19 +42,19 @@ from app.models.domain.memory import (
     MemoryStatement,
     StatementState,
 )
-from app.services.domain.memory import (
+from app.domain.memory import (
     KIND_ENTITY,
     KIND_EPISODE,
     KIND_STATEMENT,
-    MemoryVectorIndex,
+    MemoryVectorIndexPort,
     VectorEntry,
 )
-from app.services.domain.memory.graph_snapshot import (
+from app.domain.memory.graph_snapshot import (
     _entity_node,
     _episode_node,
     _statement_edge,
 )
-from app.services.domain.memory.ports import (
+from app.domain.memory.ports import (
     EntitySplitSpec,
     FactWrite,
     MemoryEditor,
@@ -74,7 +74,7 @@ class MemoryRepositoryEditor:
     """
 
     memory_repo: MemoryRepository
-    vector_index: MemoryVectorIndex
+    vector_index: MemoryVectorIndexPort
     # 作用域标记：不进 __init__（init=False），wireup 不感知；单例恒 None（维护
     # CLI 兜底），作用域视图由 for_user 构造后回填。
     user_id: UUID | None = field(default=None, init=False, compare=False)

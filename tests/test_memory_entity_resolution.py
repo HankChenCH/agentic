@@ -7,7 +7,7 @@ from app.components.memory import MemoryConsolidationService
 from app.components.memory.ability.consolidation import USER_ENTITY_NAME
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import EntityType, MemoryEntity
-from app.services.domain.memory import MemoryVectorHit
+from app.domain.memory import MemoryVectorHit
 
 from fakes_memory import FakeMemoryVectorIndex, make_service_config
 from conftest import TEST_USER_ID

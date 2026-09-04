@@ -5,9 +5,12 @@ from typing import List, Tuple
 from uuid import UUID
 
 from sqlalchemy import Engine, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 from wireup import injectable
 
+from app.domain.ports import RepositoryConflictError
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 
 
@@ -24,15 +27,19 @@ def _visible_clause(user_id: UUID | None):
     )
 
 
-@injectable
+@injectable(as_type=KnowledgeBaseRepositoryPort)
 @dataclass
 class KnowledgeBaseRepository:
     engine: Engine
 
     def create_kb(self, kb: KnowledgeBase) -> KnowledgeBase:
+        # 名称唯一冲突的并发窗口在此收口为契约级冲突信号（驱动异常不出适配器）
         with Session(self.engine, expire_on_commit=False) as session:
             session.add(kb)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                raise RepositoryConflictError("knowledge base name already exists") from None
             session.refresh(kb)
         return kb
 

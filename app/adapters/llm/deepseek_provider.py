@@ -4,7 +4,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 
 from app.core.config import LLMProviderEntry
-from app.infrastructures.llm.model_provider import ModelBuilder, ModelProvider, register
+from app.adapters.llm.model_provider import ModelBuilder, ModelProvider, register
 
 
 class ThinkingAwareChatDeepSeek(ChatDeepSeek):

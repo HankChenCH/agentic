@@ -21,11 +21,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from weaviate.exceptions import WeaviateBaseError
 from wireup import Injected
 
-from app.cmd.task_executor.main import celery_app
+from app.adapters.tasking import celery_app
 from app.core.config import AppConfig
 from app.core.exceptions import BusinessError, InfrastructureError
 from app.core.logging import LoggerFactory
-from app.services import DocumentIngestionService
+from app.domain.knowledge.ingestion_service import DocumentIngestionService
 
 # 瞬时（可重试）异常面：基础设施抖动。MinerU 解析器已统一抛 InfrastructureError
 # （含 httpx 上传/轮询错误的包装）；其余覆盖 DB、嵌入模型（httpx）与向量库连接。

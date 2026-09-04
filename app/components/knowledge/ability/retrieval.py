@@ -25,12 +25,12 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.services.domain.knowledge.vector_index import DEFAULT_TOP_K, KnowledgeVectorIndex, VectorHit
+from app.domain.knowledge.ports import DEFAULT_TOP_K, KnowledgeVectorIndexPort, VectorHit
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import DocumentSegment, KnowledgeBase, KnowledgeStatus
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 
 # 混合检索默认权重：1.0 纯向量语义，<1 开启 Weaviate hybrid（BM25+向量，gse 中文分词）
 DEFAULT_HYBRID_ALPHA = 0.5
@@ -106,9 +106,9 @@ def _rrf_fuse(candidates: List[_Candidate]) -> List[_Candidate]:
 @injectable
 @dataclass
 class KnowledgeRetrievalService:
-    kb_repo: KnowledgeBaseRepository
-    document_repo: KnowledgeDocumentRepository
-    vector_index: KnowledgeVectorIndex
+    kb_repo: KnowledgeBaseRepositoryPort
+    document_repo: KnowledgeDocumentRepositoryPort
+    vector_index: KnowledgeVectorIndexPort
     app_config: AppConfig
     logger_factory: LoggerFactory
 

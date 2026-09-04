@@ -17,8 +17,8 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 from app.packages.signal.memory_signal_store import InMemorySignalStore
-from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.conversation_service import ConversationService
+from app.adapters.persistence.conversation_repository import ConversationRepository
+from app.domain.conversation.conversation_service import ConversationService
 
 
 from conftest import TEST_USER_ID, StubLoggerFactory

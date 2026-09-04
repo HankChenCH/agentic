@@ -11,7 +11,7 @@ from app.components.knowledge.ability.retrieval import (
     _Candidate,
     _rrf_fuse,
 )
-from app.services.domain.knowledge.vector_index import VectorHit
+from app.domain.knowledge.ports import VectorHit
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import (
     DocumentSegment,
@@ -19,8 +19,8 @@ from app.models.domain.knowledge import (
     KnowledgeDocument,
     KnowledgeStatus,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
 from tests.conftest import OTHER_USER_ID, TEST_USER_ID
 
 EMBEDDING = "ollama-embedding"

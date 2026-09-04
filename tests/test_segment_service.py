@@ -24,9 +24,9 @@ from app.models.schema.request.knowledge import (
     KnowledgeSegmentCreateRequest,
     KnowledgeSegmentUpdateRequest,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
-from app.services.domain.knowledge.segment_service import KnowledgeSegmentService
+from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.segment_service import KnowledgeSegmentService
 from tests.conftest import OTHER_USER_ID, TEST_USER_ID
 
 

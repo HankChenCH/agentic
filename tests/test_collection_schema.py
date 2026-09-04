@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from app.services.domain.knowledge.collection import collection_schema, index_name
+from app.adapters.vector.knowledge_collection import collection_schema, index_name
 
 
 def test_index_name_format():

@@ -1,29 +1,31 @@
+"""文档解析供应商机制：builder 注册表 + 供应商枚举。
+
+``DocumentParser`` 契约与 ``Parsed*`` 模型住 ``app/domain/ports``——端口
+反转：domain（分块器/入库流水线）只依赖契约，本包（MinerU 云端实现）导入
+契约来实现。本模块保留实现侧机件：``DocumentParserBuilder`` 抽象与
+``@register`` 注册表，由 ``document_parser_factory`` 消费。
+"""
+
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import ClassVar
 
 from app.core.config import DocumentParserProviderEntry
-from app.infrastructures.document_parser.models import ParsedDocument
+from app.domain.ports import DocumentParser
+
+__all__ = [
+    "DOCUMENT_PARSER_BUILDERS",
+    "DocumentParser",
+    "DocumentParserBuilder",
+    "DocumentParserProvider",
+    "register",
+]
 
 
 class DocumentParserProvider(str, Enum):
     """文档解析供应商标识，与 ``DocumentParserProviderEntry.type`` 对应。"""
 
     MINERU_CLOUD = "mineru_cloud"
-
-
-class DocumentParser(ABC):
-    """统一文档解析契约：原始文件字节 → 归一化结构（blocks + assets + md）。
-
-    接口为同步阻塞——调用方是 Celery 后台任务（见 ``app/tasks/knowledge.py``），
-    解析耗时（云端排队/轮询）天然属于任务时长。实现负责把供应商原始输出
-    归一化为 :class:`~app.infrastructures.document_parser.models.ParsedDocument`，
-    格式差异（content_list 版本、bbox 坐标系）不出 provider 边界。
-    """
-
-    @abstractmethod
-    def parse(self, data: bytes, filename: str) -> ParsedDocument:
-        """解析文档字节，filename 用于供应商侧的格式识别与结果文件定位。"""
 
 
 class DocumentParserBuilder(ABC):

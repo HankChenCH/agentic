@@ -13,7 +13,7 @@ from uuid import uuid4
 from app.components.memory import MemoryConsolidationService, MemoryRecallService
 from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
 from app.models.domain.memory import MemoryEntity, MemoryStatement
-from app.services.domain.memory import MemoryVectorHit
+from app.domain.memory import MemoryVectorHit
 
 from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelFactory, make_service_config
 from conftest import TEST_USER_ID

@@ -17,7 +17,7 @@ assets 此处为解析资产名，入库前由服务层改写为对象存储完�
 
 from dataclasses import dataclass
 
-from app.infrastructures.document_parser import ParsedBlock, ParsedBlockType, ParsedDocument
+from app.domain.ports import ParsedBlock, ParsedBlockType, ParsedDocument
 
 # 软上限：加入新块后超过即封口当前段
 _MAX_SEGMENT_CHARS = 800

@@ -20,11 +20,11 @@ from app.exceptions import (
     KnowledgeDocumentNotFoundError,
     KnowledgeDocumentStatusError,
 )
-from .vector_index import KnowledgeVectorIndex
-from app.infrastructures.document_parser import DocumentParser
+from .ports import KnowledgeVectorIndexPort
+from app.domain.ports import DocumentParser
 from app.models.domain.knowledge import DocumentSegment, KnowledgeDocument, KnowledgeStatus
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 from .document_chunker import SegmentDraft, chunk_document
 from .object_store import KnowledgeObjectStore
 from .support import (
@@ -40,11 +40,11 @@ from .support import (
 @injectable
 @dataclass
 class DocumentIngestionService:
-    kb_repo: KnowledgeBaseRepository  # 父资源存在性锚定（require_kb）
-    document_repo: KnowledgeDocumentRepository
+    kb_repo: KnowledgeBaseRepositoryPort  # 父资源存在性锚定（require_kb）
+    document_repo: KnowledgeDocumentRepositoryPort
     object_store: KnowledgeObjectStore
     document_parser: DocumentParser
-    vector_index: KnowledgeVectorIndex
+    vector_index: KnowledgeVectorIndexPort
     logger_factory: LoggerFactory
 
     def __post_init__(self):

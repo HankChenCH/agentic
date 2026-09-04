@@ -2,9 +2,8 @@ from dataclasses import dataclass
 
 from wireup import injectable
 from langchain.messages import HumanMessage, SystemMessage
-from langchain_core.language_models import BaseChatModel
 
-from app.infrastructures.llm import ModelFactory
+from app.domain.conversation.ports import ChatModel, ChatModelGateway
 from app.models.domain.agentic import AgenticConversationMessage, AgenticMessageType
 
 _TITLE_SYSTEM_PROMPT = """你是一个会话标题生成器。根据用户提供的对话内容，生成一个简洁准确的中文标题。
@@ -16,11 +15,12 @@ _TITLE_SYSTEM_PROMPT = """你是一个会话标题生成器。根据用户提供
 """
 
 
-def generate_title(model: BaseChatModel, query: str, turn_messages: list[AgenticConversationMessage]) -> str:
+def generate_title(model: ChatModel, query: str, turn_messages: list[AgenticConversationMessage]) -> str:
     """用裸模型把本轮对话浓缩为一句话会话标题；输出收敛为单行纯文本。
 
-    走 ModelFactory 裸模型而非智能体层——一次性内部任务无需人设/工具循环/
-    注册席位（与 components/memory 的抽取同款做法）。
+    走裸模型而非智能体层——一次性内部任务无需人设/工具循环/注册席位
+    （与 components/memory 的抽取同款做法）；模型经 ChatModelGateway 端口
+    获取（实现住 adapters/llm），领域不感知供应商细节。
     """
     assistant_text = "\n".join(
         part.get("text", "")
@@ -49,13 +49,13 @@ def _normalize(title: str) -> str:
 @injectable
 @dataclass
 class ConversationTitleGenerator:
-    """会话标题生成器门面：模型每次调用时经 ModelFactory 创建。
+    """会话标题生成器门面：模型每次调用时经 ChatModelGateway 创建。
 
-    不传 entry key 即路由到 llm.default（与原内置标题智能体无 preferred_provider
-    时一致）；将来要单独配便宜模型时加一个显式 key 即可（参照 memory.extraction_provider）。
+    网关按 llm.default 路由（实现住 adapters/llm/gateway.py）；将来要单独配
+    便宜模型时在网关侧加显式路由即可（参照 memory.extraction_provider）。
     """
 
-    model_factory: ModelFactory
+    chat_model_gateway: ChatModelGateway
 
     def generate(self, query: str, turn_messages: list[AgenticConversationMessage]) -> str:
-        return generate_title(self.model_factory.create(), query, turn_messages)
+        return generate_title(self.chat_model_gateway.create(), query, turn_messages)

@@ -19,7 +19,7 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
-from app.infrastructures.llm import ModelFactory
+from app.adapters.llm import ModelFactory
 from app.components.memory.internal import renderer, resolution
 from app.components.memory.internal.extraction import (
     adjudicate_entity_merge,
@@ -27,7 +27,7 @@ from app.components.memory.internal.extraction import (
 )
 from app.components.memory.repositories import MemoryRepository
 from app.components.memory.internal.scoring import ScoreWeights, ScorableItem, score_item
-from app.services.domain.memory import KIND_EPISODE, MemoryVectorIndex
+from app.domain.memory import KIND_EPISODE, MemoryVectorIndexPort
 
 # 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（惯例同 api/exception_handlers）
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ class MemoryRecallService:
     """
 
     memory_repo: MemoryRepository
-    vector_index: MemoryVectorIndex
+    vector_index: MemoryVectorIndexPort
     app_config: AppConfig
     # 灰度带锚点裁决用的裸模型工厂（惯例同 consolidation；单测传 None，
     # 灰度带随之退化为不启用——快注路径零 LLM 的语义不变，模型按需惰性创建）

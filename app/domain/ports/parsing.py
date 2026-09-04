@@ -1,10 +1,13 @@
-"""文档解析的归一化结果模型：隔离 MinerU 原始 content_list 的格式变化。
+"""文档解析契约与归一化结果模型：隔离供应商原始输出的格式变化。
 
-供应商 provider 负责把原始输出（如 content_list.json 的平铺块数组）翻译
-成这里的 ParsedBlock/ParsedDocument；分块器与入库流水线只依赖本模型，
-MinerU 升级或更换解析供应商时上层不动。
+契约（``DocumentParser``）与数据形状（``ParsedBlock``/``ParsedDocument``）
+同住 domain——分块器与入库流水线只依赖本模块；供应商实现（MinerU 云端等）
+住 ``app/adapters/document_parser/``，负责把原始输出（如 content_list.json
+的平铺块数组）翻译成这里的模型，格式差异（content_list 版本、bbox 坐标系）
+不出 provider 边界。MinerU 升级或更换解析供应商时上层不动。
 """
 
+from abc import ABC, abstractmethod
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -51,3 +54,15 @@ class ParsedDocument(BaseModel):
     blocks: list[ParsedBlock] = Field(description="按阅读顺序平铺的内容块")
     assets: dict[str, bytes] = Field(default={}, description="图片资产（名 → 字节），含表格截图/插图")
     md_content: str | None = Field(default=None, description="全文 Markdown（供应商提供时用于预览）")
+
+
+class DocumentParser(ABC):
+    """统一文档解析契约：原始文件字节 → 归一化结构（blocks + assets + md）。
+
+    接口为同步阻塞——调用方是 Celery 后台任务（见 ``app/tasks/knowledge.py``），
+    解析耗时（云端排队/轮询）天然属于任务时长。
+    """
+
+    @abstractmethod
+    def parse(self, data: bytes, filename: str) -> ParsedDocument:
+        """解析文档字节，filename 用于供应商侧的格式识别与结果文件定位。"""

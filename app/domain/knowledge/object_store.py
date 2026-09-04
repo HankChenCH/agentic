@@ -13,7 +13,7 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.logging import LoggerFactory
-from app.infrastructures.filesystem import Filesystem
+from app.domain.ports import Filesystem
 
 
 @injectable

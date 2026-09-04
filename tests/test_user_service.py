@@ -20,10 +20,10 @@ from app.exceptions import (
     UserNotFoundError,
 )
 from app.models.domain.user import DEFAULT_USER_ID
-from app.repositories.user_repository import UserRepository
-from app.services.domain.user.passwords import hash_password, verify_password
-from app.services.domain.user.token import decode_access_token, encode_access_token
-from app.services.domain.user.user_service import UserService, public_user
+from app.adapters.persistence.user_repository import UserRepository
+from app.domain.user.passwords import hash_password, verify_password
+from app.domain.user.token import decode_access_token, encode_access_token
+from app.domain.user.user_service import UserService, public_user
 
 from conftest import StubLoggerFactory
 

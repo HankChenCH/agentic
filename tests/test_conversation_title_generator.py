@@ -7,7 +7,7 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
 )
-from app.services.domain.conversation.title_generator import (
+from app.domain.conversation.title_generator import (
     ConversationTitleGenerator,
     generate_title,
 )
@@ -30,7 +30,7 @@ class _Reply:
         self.content = content
 
 
-class FakeModelFactory:
+class FakeModelGateway:
     def __init__(self, model):
         self.model = model
         self.created = 0
@@ -96,8 +96,8 @@ def test_normalize_blank_output_is_empty():
 
 
 def test_generator_facade_routes_through_factory_default():
-    factory = FakeModelFactory(FakeModel(" 工厂标题 "))
-    generator = ConversationTitleGenerator(model_factory=factory)
+    factory = FakeModelGateway(FakeModel(" 工厂标题 "))
+    generator = ConversationTitleGenerator(chat_model_gateway=factory)
 
     title = generator.generate("你好", one_message())
 

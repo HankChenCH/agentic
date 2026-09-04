@@ -6,11 +6,11 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
 from app.core.config import AppConfig, LLMConfig, LLMProviderEntry, ModelTaskType
-from app.infrastructures.llm.model_provider import MODEL_BUILDERS, ModelBuilder, ModelProvider
+from app.adapters.llm.model_provider import MODEL_BUILDERS, ModelBuilder, ModelProvider
 
-import app.infrastructures.llm.deepseek_provider  # noqa: F401  触发 @register 供应商注册
-import app.infrastructures.llm.openai_provider  # noqa: F401
-import app.infrastructures.llm.ollama_provider  # noqa: F401
+import app.adapters.llm.deepseek_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.llm.openai_provider  # noqa: F401
+import app.adapters.llm.ollama_provider  # noqa: F401
 
 
 @injectable

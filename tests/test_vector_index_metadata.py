@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from langchain_core.documents import Document
 
-from app.services.domain.knowledge.vector_index import KnowledgeVectorIndex
+from app.adapters.vector.knowledge_index import KnowledgeVectorIndex
 from app.models.domain.knowledge import DocumentSegment
 
 

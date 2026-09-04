@@ -27,13 +27,13 @@ import httpx
 
 from app.core.config import MineruCloudEntry
 from app.core.exceptions import InfrastructureError
-from app.infrastructures.document_parser.document_parser_provider import (
+from app.adapters.document_parser.document_parser_provider import (
     DocumentParser,
     DocumentParserBuilder,
     DocumentParserProvider,
     register,
 )
-from app.infrastructures.document_parser.models import ParsedBlock, ParsedBlockType, ParsedDocument
+from app.domain.ports import ParsedBlock, ParsedBlockType, ParsedDocument
 
 # vlm 后端输出的版面噪音块：不进入归一化结果
 _DISCARDED_TYPES = {"header", "footer", "page_number", "aside_text", "page_footnote"}

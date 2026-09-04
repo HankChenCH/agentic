@@ -25,7 +25,7 @@ from fastapi import Request
 
 from app.core.config import AuthConfig, load_section
 from app.exceptions import InvalidCredentialsError
-from app.services.domain.user.token import decode_access_token
+from app.domain.user.token import decode_access_token
 
 _BEARER_PREFIX = "Bearer "
 

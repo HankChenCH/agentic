@@ -24,7 +24,7 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
-from app.infrastructures.llm import ModelFactory
+from app.adapters.llm import ModelFactory
 from app.components.memory.repositories import MemoryRepository
 from app.components.memory.internal.extraction import (
     ExtractionResult,
@@ -41,11 +41,11 @@ from app.components.memory.internal.extraction import (
 )
 from app.components.memory.internal import renderer, resolution
 from app.components.memory.internal.vocab import fact_summary
-from app.services.domain.memory import (
+from app.domain.memory import (
     KIND_ENTITY,
     KIND_EPISODE,
     KIND_STATEMENT,
-    MemoryVectorIndex,
+    MemoryVectorIndexPort,
     VectorEntry,
 )
 
@@ -79,7 +79,7 @@ class MemoryConsolidationService:
     """收尾块：remember 巩固管线——抽取→消歧→裁决→落库+向量同步。"""
 
     memory_repo: MemoryRepository
-    vector_index: MemoryVectorIndex
+    vector_index: MemoryVectorIndexPort
     model_factory: ModelFactory
     app_config: AppConfig
 
@@ -210,7 +210,7 @@ class MemoryConsolidationService:
 
     def _resolve_entities(
         self, candidates: tuple[ExtractedEntity, ...],
-        repo: MemoryRepository, index: MemoryVectorIndex,
+        repo: MemoryRepository, index: MemoryVectorIndexPort,
         *, user_node: MemoryEntity | None = None,
         identity_names: frozenset[str] = frozenset(),
         skip_keys: frozenset[str] = frozenset(),
@@ -285,7 +285,7 @@ class MemoryConsolidationService:
             resolved[candidate.key] = hit
         return resolved
 
-    def _load_roster(self, repo: MemoryRepository, index: MemoryVectorIndex, transcript: str) -> list:
+    def _load_roster(self, repo: MemoryRepository, index: MemoryVectorIndexPort, transcript: str) -> list:
         """既有实体名册（Tier1）：向量按本轮 transcript 提名，供抽取 prompt 归指。
 
         提名失败/关闭返回空（prompt 省名册节，抽取退回无状态行为）；用户

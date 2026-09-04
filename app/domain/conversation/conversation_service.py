@@ -11,15 +11,15 @@ from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.exceptions import ConversationNotFoundError, TurnNotAtTipError
 from app.packages.signal.signal_store import SignalStore
-from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.branching import (
+from app.domain.conversation.ports import ConversationRepositoryPort
+from app.domain.conversation.branching import (
     ancestor_chain,
     detect_retry_of_latest,
     next_attempt_no,
     snapshot_of,
 )
-from app.services.domain.conversation.multimodal import image_parts_of, text_of, user_message_from_content
-from app.services.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
+from app.domain.conversation.multimodal import image_parts_of, text_of, user_message_from_content
+from app.domain.conversation.signals import CANCEL_FLAG_TTL_SECONDS, cancel_flag_key
 
 from app.models.domain.agentic import (
     AgenticConversation,
@@ -48,7 +48,7 @@ class ConversationService:
     知识域惯例，端点不再做 None 判断，HTTP 与后台拿到一致错误语义。
     """
 
-    conversation_repo: ConversationRepository
+    conversation_repo: ConversationRepositoryPort
     app_config: AppConfig
     signal_store: SignalStore
     logger_factory: LoggerFactory

@@ -23,9 +23,9 @@ from app.models.domain.memory import (
     MemoryStatement,
     StatementState,
 )
-from app.services.domain.memory import MemoryAdminService
-from app.services.domain.memory.ports import EntitySplitSpec
-from app.services.domain.memory.vector_index import MemoryVectorHit
+from app.domain.memory import MemoryAdminService
+from app.domain.memory.ports import EntitySplitSpec
+from app.domain.memory.ports import MemoryVectorHit
 
 from conftest import TEST_USER_ID
 from fakes_memory import (

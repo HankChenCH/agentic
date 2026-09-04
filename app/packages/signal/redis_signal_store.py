@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from wireup import injectable
 
-from app.infrastructures.redis.redis_factory import RedisClientFactory
+from app.adapters.redis.redis_factory import RedisClientFactory
 from app.packages.signal.signal_store import SignalStore
 
 _KEY_NAMESPACE = "agentic:signal"

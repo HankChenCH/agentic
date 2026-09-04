@@ -19,7 +19,7 @@ from typing import Callable
 
 from app.components.memory.repositories import MemoryRepository
 from app.models.domain.memory import EntityType, MemoryEntity
-from app.services.domain.memory import KIND_ENTITY, MemoryVectorIndex
+from app.domain.memory import KIND_ENTITY, MemoryVectorIndexPort
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def vector_entity_match(
     ref: str,
     expected_type: str | None,
     memory_repo: MemoryRepository,
-    vector_index: MemoryVectorIndex,
+    vector_index: MemoryVectorIndexPort,
     threshold: float,
     grey_zone_lower: float = 0.0,
     merge_adjudicator: MergeAdjudicator | None = None,
@@ -159,7 +159,7 @@ def _guard_type(
 def find_entity_by_ref(
     ref: str,
     memory_repo: MemoryRepository,
-    vector_index: MemoryVectorIndex,
+    vector_index: MemoryVectorIndexPort,
     threshold: float,
     grey_zone_lower: float = 0.0,
     merge_adjudicator: MergeAdjudicator | None = None,

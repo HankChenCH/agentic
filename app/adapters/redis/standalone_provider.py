@@ -3,7 +3,7 @@ from typing import ClassVar
 import redis
 
 from app.core.config import StandaloneRedisProviderEntry
-from app.infrastructures.redis.redis_provider import RedisClientBuilder, RedisProvider, register
+from app.adapters.redis.redis_provider import RedisClientBuilder, RedisProvider, register
 
 
 @register

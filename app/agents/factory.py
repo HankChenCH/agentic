@@ -6,7 +6,7 @@ from app.agents.base import AGENT_REGISTRY, BaseAgent
 from app.agents.toolbox import AgentToolbox
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
-from app.infrastructures.llm import ModelFactory
+from app.adapters.llm import ModelFactory
 
 import app.agents.builtin  # noqa: F401  触发内置智能体的 @register_agent 注册
 

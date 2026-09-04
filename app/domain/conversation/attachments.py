@@ -25,7 +25,7 @@ from wireup import injectable
 
 from app.core.logging import LoggerFactory
 from app.exceptions import AttachmentNotFoundError, AttachmentTooLargeError, UnsupportedAttachmentTypeError
-from app.infrastructures.filesystem import Filesystem
+from app.domain.ports import Filesystem
 
 # key 首段（对象存储里的领域命名空间）
 _KEY_PREFIX = "conversation-attachments"

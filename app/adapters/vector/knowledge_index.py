@@ -1,9 +1,10 @@
-"""知识库向量索引适配器：索引命名/显式建库、分批写入删除、检索与整库清理。
+"""知识库向量索引适配器（``KnowledgeVectorIndexPort`` 的实现）。
 
-服务层（摄取/删除）与检索组件不直接触碰 VectorStoreFactory——索引命名
-（每库一 collection）、schema 显式化与分批策略是知识库域的私有约定，
-统一收敛于此。多库扇出与融合只在 ``search_many`` 一处实现，未来迁移
-共享 collection / multi-tenancy 时只动本文件。
+索引命名（每库一 collection）、schema 显式化与分批策略是知识库域的私有
+约定，统一收敛于此；多库扇出与融合只在 ``search_many`` 一处实现，未来
+迁移共享 collection / multi-tenancy 时只动本文件。契约
+（协议/``VectorHit``/``DEFAULT_TOP_K``）住 ``app/domain/knowledge/ports``，
+本文件只持 Weaviate 机制，经 wireup ``as_type`` 回填端口。
 """
 
 from dataclasses import dataclass
@@ -13,9 +14,10 @@ from uuid import UUID
 from langchain_core.documents import Document
 from wireup import injectable
 
-from .collection import collection_schema, index_name
+from app.adapters.vector import VectorStoreFactory
+from app.adapters.vector.knowledge_collection import collection_schema, index_name
 from app.core.logging import LoggerFactory
-from app.infrastructures.vector import VectorStoreFactory
+from app.domain.knowledge.ports import DEFAULT_TOP_K, KnowledgeVectorIndexPort, VectorHit
 from app.models.domain.knowledge import DocumentSegment
 
 # 嵌入写入向量库的分批大小：单条 add_texts 过大易触发请求体/超时限制
@@ -24,32 +26,11 @@ _EMBED_BATCH_SIZE = 32
 # 向量删除的单批大小（gRPC 消息体保护）
 _VECTOR_DELETE_BATCH_SIZE = 100
 
-# 检索工具入参 top_k 的默认值（仅最终返回条数口径；内部检索深度见
-# KnowledgeRetrievalService 的候选池常量）
-DEFAULT_TOP_K = 4
-
 # 检索命中里已提升为独立字段的 metadata 键（其余键整体进入 VectorHit.meta）
 _PROMOTED_METADATA_KEYS = frozenset({"kb_id", "doc_id", "position"})
 
 
-@dataclass
-class VectorHit:
-    """单条向量检索命中。
-
-    ``score`` 为 Weaviate hybrid fusion 分数（0-1，越高越相关；alpha=1
-    纯向量时即语义相似度归一分）。跨库可比的前提是同一 embedding 模型，
-    由检索服务（KnowledgeRetrievalService）的模型守卫保证。
-    """
-
-    content: str
-    score: float
-    kb_id: str
-    doc_id: str
-    position: int
-    meta: dict
-
-
-@injectable
+@injectable(as_type=KnowledgeVectorIndexPort)
 @dataclass
 class KnowledgeVectorIndex:
     vector_store_factory: VectorStoreFactory

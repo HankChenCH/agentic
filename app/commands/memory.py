@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 from app.components.memory.internal.renderer import INTERNAL_REF_TOKEN_RE
 from app.components.memory.internal.resolution import entity_content as _entity_content
 from app.core.container import build_sync_container
-from app.infrastructures.db import DatabaseFactory
+from app.adapters.db import DatabaseFactory
 from app.models.domain.memory import (
     EntityType,
     MemoryEntity,
@@ -32,11 +32,11 @@ from app.models.domain.memory import (
     StatementState,
 )
 from app.models.domain.user import DEFAULT_USER_ID
-from app.services.domain.memory import (
+from app.domain.memory import (
     KIND_ENTITY,
     KIND_EPISODE,
     KIND_STATEMENT,
-    MemoryVectorIndex,
+    MemoryVectorIndexPort,
     VectorEntry,
 )
 
@@ -248,7 +248,7 @@ def rebuild_index(engine, vector_index) -> dict[str, int]:
 def _services():
     """命令体内惰性建容器：顶层 --config-dir/--env-file 已先桥接环境变量。"""
     container = build_sync_container()
-    return container.get(DatabaseFactory).create(), container.get(MemoryVectorIndex)
+    return container.get(DatabaseFactory).create(), container.get(MemoryVectorIndexPort)
 
 
 app = typer.Typer(no_args_is_help=True, help="记忆域维护")

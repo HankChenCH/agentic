@@ -17,8 +17,8 @@ from wireup import injectable
 
 from app.core.logging import LoggerFactory
 from app.models.domain.knowledge import DocumentSegment, KnowledgeBase, KnowledgeDocument, KnowledgeStatus
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 
 # 文档清单上限：导航用途不需要全量枚举超大库
 _LIST_MAX_DOCS = 50
@@ -41,8 +41,8 @@ class SegmentWindow:
 @injectable
 @dataclass
 class KnowledgeNavigationService:
-    kb_repo: KnowledgeBaseRepository
-    document_repo: KnowledgeDocumentRepository
+    kb_repo: KnowledgeBaseRepositoryPort
+    document_repo: KnowledgeDocumentRepositoryPort
     logger_factory: LoggerFactory
 
     def __post_init__(self):

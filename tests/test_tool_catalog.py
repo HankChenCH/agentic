@@ -1,6 +1,6 @@
 """工具能力目录服务：静态注册表 → 前端展示元数据契约。"""
 
-from app.services.orchestration.tool_catalog import ToolCatalogService
+from app.application.tool_catalog import ToolCatalogService
 
 
 def test_describe_returns_full_catalog_with_titles():

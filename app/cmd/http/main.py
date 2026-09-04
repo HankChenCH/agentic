@@ -24,7 +24,7 @@ from app.api.deps import require_user
 from app.core.config import AppConfig, HttpConfig, MetricsConfig, load_section
 from app.core.container import build_async_container
 from app.core.logging import setup_logging
-from app.services.orchestration.agentic_service import AgenticService
+from app.application.agentic_service import AgenticService
 from app.api.exception_handlers import register_exception_handlers
 from app.api.health import router as health_router
 from app.api.metrics import MetricsMiddleware, router as metrics_router
@@ -34,7 +34,7 @@ from app.api.middleware import (
     RequestIDMiddleware,
 )
 from app.api.v1.endpoints import agentic, attachments, auth, knowledge, memory
-from app.infrastructures.vector import VectorStoreFactory
+from app.adapters.vector import VectorStoreFactory
 
 # .env 由 core/config/loader.py 在首次读取配置时加载（AGENTIC_ENV_FILE 可指定路径）
 

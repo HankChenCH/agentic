@@ -17,14 +17,14 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 from app.exceptions import ConversationNotFoundError, TurnNotAtTipError
-from app.repositories.conversation_repository import ConversationRepository
-from app.services.domain.conversation.branching import (
+from app.adapters.persistence.conversation_repository import ConversationRepository
+from app.domain.conversation.branching import (
     ancestor_chain,
     detect_retry_of_latest,
     next_attempt_no,
     snapshot_of,
 )
-from app.services.domain.conversation.conversation_service import ConversationService
+from app.domain.conversation.conversation_service import ConversationService
 
 from conftest import TEST_USER_ID, OTHER_USER_ID, StubLoggerFactory
 

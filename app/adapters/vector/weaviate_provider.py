@@ -6,7 +6,7 @@ from langchain_core.vectorstores import VectorStore
 from langchain_weaviate import WeaviateVectorStore
 
 from app.core.config import WeaviateDBProviderEntry
-from app.infrastructures.vector.vector_db_provider import VectorDBBuilder, VectorDBProvider, register
+from app.adapters.vector.vector_db_provider import VectorDBBuilder, VectorDBProvider, register
 
 
 @register

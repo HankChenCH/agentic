@@ -16,8 +16,8 @@ from app.models.domain.memory import (
     MemoryStatement,
     StatementState,
 )
-from app.services.domain.memory import MemoryAdminService
-from app.services.domain.memory.ports import FactWrite
+from app.domain.memory import MemoryAdminService
+from app.domain.memory.ports import FactWrite
 
 from fakes_memory import FakeMemoryVectorIndex
 from conftest import TEST_USER_ID

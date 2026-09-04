@@ -12,8 +12,8 @@ from app.models.domain.knowledge import (
     KnowledgeDocument,
     KnowledgeStatus,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
 from tests.conftest import OTHER_USER_ID, TEST_USER_ID
 
 

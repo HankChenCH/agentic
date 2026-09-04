@@ -44,10 +44,10 @@ from app.api import deps  # noqa: E402
 from app.commands.db import upgrade_cmd  # noqa: E402
 from app.core.config import get_environment  # noqa: E402
 from app.core.config.loader import read_config  # noqa: E402
-from app.services.domain.conversation.conversation_service import (  # noqa: E402
+from app.domain.conversation.conversation_service import (  # noqa: E402
     ConversationService,
 )
-from app.services.orchestration.turn_finalizer import TurnFinalizer  # noqa: E402
+from app.application.turn_finalizer import TurnFinalizer  # noqa: E402
 from app.cmd.http.main import create_app  # noqa: E402
 
 for _clear in (read_config.cache_clear, get_environment.cache_clear, deps._auth_config.cache_clear):

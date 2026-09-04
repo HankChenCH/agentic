@@ -22,7 +22,7 @@ from wireup import injectable
 
 from app.exceptions.memory import MemoryInvalidTimeParamError
 from app.models.domain.memory import MemoryEntity, MemoryEpisode, MemoryStatement
-from app.services.domain.memory.ports import MemoryGraphReader
+from app.domain.memory.ports import MemoryGraphReader
 
 _DEFAULT_LIMIT = 300
 _MAX_LIMIT = 2000

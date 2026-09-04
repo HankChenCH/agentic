@@ -35,7 +35,7 @@ from app.models.schema.request.memory import (
     StatementCorrectRequest,
     StatementCreateRequest,
 )
-from app.services.domain.memory.ports import EntitySplitSpec, FactWrite, MemoryEditor
+from app.domain.memory.ports import EntitySplitSpec, FactWrite, MemoryEditor
 # 同包复用图快照的对外 JSON 组装件（下划线私有仅包内引用），保证编辑
 # 返回的实体/陈述形状与快照逐字段一致，前端可按同一类型渲染
 from .graph_snapshot import _entity_node, _episode_node, _statement_edge

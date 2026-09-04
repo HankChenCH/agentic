@@ -18,7 +18,7 @@ from app.models.domain.memory import (
     MemoryStatement,
     StatementState,
 )
-from app.services.domain.memory import MemoryGraphService
+from app.domain.memory import MemoryGraphService
 from conftest import TEST_USER_ID
 
 

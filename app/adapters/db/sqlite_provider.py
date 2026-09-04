@@ -5,7 +5,7 @@ from sqlalchemy import Engine
 from sqlmodel import create_engine
 
 from app.core.config import SQLiteDBProviderEntry
-from app.infrastructures.db.db_provider import DBProvider, DatabaseBuilder, register
+from app.adapters.db.db_provider import DBProvider, DatabaseBuilder, register
 
 
 @register

@@ -20,10 +20,10 @@ pending/processing 期间分段集合正被流水线整体重写（replace_segme
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from sqlalchemy.exc import IntegrityError
 from wireup import injectable
 
-from .vector_index import KnowledgeVectorIndex
+from .ports import KnowledgeVectorIndexPort
+from app.domain.ports import RepositoryConflictError
 from app.core.logging import LoggerFactory
 from app.exceptions import (
     KnowledgeDocumentStatusError,
@@ -39,8 +39,8 @@ from app.models.schema.request.knowledge import (
     KnowledgeSegmentCreateRequest,
     KnowledgeSegmentUpdateRequest,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 from .support import page_envelope, require_document, require_owned_kb, require_visible_kb
 
 # 分段写操作允许的文档状态：稳定态才可管理（处理中分段集合正被流水线重写）
@@ -54,9 +54,9 @@ SEGMENT_WRITE_ALLOWED = {
 @injectable
 @dataclass
 class KnowledgeSegmentService:
-    kb_repo: KnowledgeBaseRepository  # 父资源归属/可见性锚定（require_owned_kb / require_visible_kb）
-    document_repo: KnowledgeDocumentRepository
-    vector_index: KnowledgeVectorIndex
+    kb_repo: KnowledgeBaseRepositoryPort  # 父资源归属/可见性锚定（require_owned_kb / require_visible_kb）
+    document_repo: KnowledgeDocumentRepositoryPort
+    vector_index: KnowledgeVectorIndexPort
     logger_factory: LoggerFactory
 
     def __post_init__(self):
@@ -108,7 +108,7 @@ class KnowledgeSegmentService:
         )
         try:
             segment = self.document_repo.append_segment(doc_id, segment)
-        except IntegrityError as exc:
+        except RepositoryConflictError as exc:
             # (doc_id, position) 唯一约束冲突：并发追加落败方整体回滚，提示重试
             raise KnowledgeSegmentStateError(
                 "segment position conflict caused by concurrent append, please retry"
@@ -191,7 +191,7 @@ class KnowledgeSegmentService:
 
     @staticmethod
     def _require_segment(
-        document_repo: KnowledgeDocumentRepository, doc_id: UUID, segment_id: UUID
+        document_repo: KnowledgeDocumentRepositoryPort, doc_id: UUID, segment_id: UUID
     ) -> DocumentSegment:
         segment = document_repo.get_segment(doc_id, segment_id)
         if segment is None:

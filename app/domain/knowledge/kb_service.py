@@ -11,10 +11,10 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
 from wireup import injectable
 
-from .vector_index import KnowledgeVectorIndex
+from .ports import KnowledgeVectorIndexPort
+from app.domain.ports import RepositoryConflictError
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 from app.exceptions import KnowledgeNameDuplicatedError, KnowledgeStatusError
@@ -23,7 +23,7 @@ from app.models.schema.request.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseUpdateRequest,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
 from .object_store import KnowledgeObjectStore
 from .support import (
     check_status_transition,
@@ -36,8 +36,8 @@ from .support import (
 @injectable
 @dataclass
 class KnowledgeBaseService:
-    kb_repo: KnowledgeBaseRepository
-    vector_index: KnowledgeVectorIndex
+    kb_repo: KnowledgeBaseRepositoryPort
+    vector_index: KnowledgeVectorIndexPort
     object_store: KnowledgeObjectStore
     app_config: AppConfig
     logger_factory: LoggerFactory
@@ -60,7 +60,7 @@ class KnowledgeBaseService:
         )
         try:
             return self.kb_repo.create_kb(kb)
-        except IntegrityError:
+        except RepositoryConflictError:
             # 重名预检与写入之间存在并发窗口，每用户唯一索引是最终兜底
             raise KnowledgeNameDuplicatedError(
                 f"knowledge base name already exists: {request.name}"

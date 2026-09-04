@@ -3,7 +3,7 @@
 import wireup.integration.celery
 from wireup import Injected
 
-from app.cmd.task_executor.main import celery_app
+from app.adapters.tasking import celery_app
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
 

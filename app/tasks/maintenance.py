@@ -15,10 +15,10 @@ from datetime import datetime, timedelta, timezone
 import wireup.integration.celery
 from wireup import Injected
 
-from app.cmd.task_executor.main import celery_app
+from app.adapters.tasking import celery_app
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
-from app.services import DocumentIngestionService
+from app.domain.knowledge.ingestion_service import DocumentIngestionService
 from app.tasks.knowledge import process_document
 
 

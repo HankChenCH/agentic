@@ -10,8 +10,8 @@ knowledge_context / knowledge_document_list 定位读取两工具 + 前端契约
 
 拓扑约束（见 server/AGENTS.md「服务层两层制」）：本组件依赖 core /
 infrastructures / repositories / models，以及领域层的向量适配器
-``app.services.domain.knowledge.vector_index``（components→domain 单向合法）；
-严禁 import ``app.services.orchestration`` / ``app.agents`` / ``app.api``。
+``app.domain.knowledge.vector_index``（components→domain 单向合法）；
+严禁 import ``app.application`` / ``app.agents`` / ``app.api``。
 管理侧（绑定 CRUD、摄取编排）在 ``app/services/domain/knowledge``。
 """
 

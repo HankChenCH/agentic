@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from app.core.config.memory import MemoryConfig
-from app.services.domain.memory import MemoryVectorHit
+from app.domain.memory import MemoryVectorHit
 
 
 class CannedLLM:

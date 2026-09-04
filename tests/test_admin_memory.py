@@ -19,7 +19,7 @@ from app.models.domain.memory import (
     MemoryStatement,
     StatementState,
 )
-from app.services.domain.memory import KIND_ENTITY, KIND_EPISODE, KIND_STATEMENT
+from app.domain.memory import KIND_ENTITY, KIND_EPISODE, KIND_STATEMENT
 
 from fakes_memory import FakeMemoryVectorIndex
 from conftest import TEST_USER_ID

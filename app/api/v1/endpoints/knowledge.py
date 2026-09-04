@@ -28,7 +28,7 @@ from app.models.schema.request.knowledge import (
 )
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.response.biz_response import Response
-from app.services import (
+from app.domain.knowledge import (
     DocumentIngestionService,
     KnowledgeBaseService,
     KnowledgeDocumentService,

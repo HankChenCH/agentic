@@ -13,7 +13,7 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
 )
-from app.repositories.conversation_repository import ConversationRepository
+from app.adapters.persistence.conversation_repository import ConversationRepository
 from conftest import TEST_USER_ID
 
 

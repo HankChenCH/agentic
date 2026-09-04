@@ -4,11 +4,14 @@ from uuid import UUID
 from wireup import injectable
 from sqlmodel import Session, select
 from sqlalchemy import Engine
+from sqlalchemy.exc import IntegrityError
 
+from app.domain.ports import RepositoryConflictError
+from app.domain.user.ports import UserRepositoryPort
 from app.models.domain.user import User
 
 
-@injectable
+@injectable(as_type=UserRepositoryPort)
 @dataclass
 class UserRepository:
     engine: Engine
@@ -28,11 +31,15 @@ class UserRepository:
         return user
 
     def create(self, username: str, password_hash: str, nickname: str) -> User:
-        # 用户名唯一冲突的竞态（查重与插入之间）由调用方捕获 IntegrityError 兜底
+        # 用户名唯一冲突的竞态（查重与插入之间）在此收口为契约级冲突信号，
+        # 领域捕获 RepositoryConflictError 翻译为业务异常——驱动异常不出适配器
         with Session(self.engine, expire_on_commit=False) as session:
             user = User(username=username, password_hash=password_hash, nickname=nickname)
             session.add(user)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                raise RepositoryConflictError("username already exists") from None
             session.refresh(user)
         return user
 

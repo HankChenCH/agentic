@@ -4,7 +4,7 @@
 CI 以哑值密钥跑同款导入路径（见 .github/workflows/ci.yml）。
 """
 
-from app.cmd.task_executor.main import app_config, celery_app
+from app.adapters.tasking import app_config, celery_app
 from app.core.exceptions import BusinessError, InfrastructureError
 from app.tasks.knowledge import TRANSIENT_EXCEPTIONS, process_document
 from app.tasks.maintenance import reap_stuck_documents
@@ -14,6 +14,11 @@ REAP_TASK_NAME = "agentic.knowledge.reap_stuck_documents"
 
 def test_worker_reliability_conf_wiring():
     conf = celery_app.conf
+    # broker/backend 必须由 task.yaml→redis.yaml 解析为 Redis（缺解析会回落
+    # Celery 默认 amqp://，发送方与 worker 双双连空）——本测试的由来：抽离
+    # adapters/tasking 时曾丢失 broker_url/result_backend 装配，单测未拦住
+    assert conf.broker_url.startswith("redis://"), conf.broker_url
+    assert conf.result_backend.startswith("redis://"), conf.result_backend
     assert conf.task_acks_late is True
     assert conf.task_reject_on_worker_lost is False
     assert conf.worker_prefetch_multiplier == 1

@@ -23,12 +23,12 @@ from app.models.schema.request.knowledge import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseUpdateRequest,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
-from app.services.domain.knowledge.document_service import KnowledgeDocumentService
-from app.services.domain.knowledge.kb_service import KnowledgeBaseService
-from app.services.domain.knowledge.object_store import KnowledgeObjectStore
-from app.services.domain.knowledge.vector_index import KnowledgeVectorIndex
+from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
+from app.adapters.persistence.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.document_service import KnowledgeDocumentService
+from app.domain.knowledge.kb_service import KnowledgeBaseService
+from app.domain.knowledge.object_store import KnowledgeObjectStore
+from app.adapters.vector.knowledge_index import KnowledgeVectorIndex
 from tests.conftest import OTHER_USER_ID, TEST_USER_ID
 from tests.test_document_service import MemoryFilesystem, PDF_BYTES
 

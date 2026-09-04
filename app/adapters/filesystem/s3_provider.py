@@ -6,7 +6,7 @@ from obstore.exceptions import NotFoundError
 from obstore.store import S3Store
 
 from app.core.config import S3FilesystemEntry
-from app.infrastructures.filesystem.filesystem_provider import (
+from app.adapters.filesystem.filesystem_provider import (
     Filesystem,
     FilesystemBuilder,
     FilesystemProvider,

@@ -3,7 +3,7 @@ from typing import ClassVar
 from sqlalchemy import URL, Engine, create_engine
 
 from app.core.config import PostgresDBProviderEntry
-from app.infrastructures.db.db_provider import DBProvider, DatabaseBuilder, register
+from app.adapters.db.db_provider import DBProvider, DatabaseBuilder, register
 
 
 @register

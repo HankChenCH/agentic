@@ -6,6 +6,7 @@ from wireup import injectable
 from sqlmodel import Session, col, delete, select, update
 from sqlalchemy import Engine, func
 
+from app.domain.conversation.ports import ConversationRepositoryPort
 from app.models.domain.agentic import (
     AgenticConversation,
     AgenticConversationTurn,
@@ -15,7 +16,7 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 
-@injectable
+@injectable(as_type=ConversationRepositoryPort)
 @dataclass
 class ConversationRepository:
     engine: Engine

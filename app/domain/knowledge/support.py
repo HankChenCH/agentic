@@ -16,8 +16,8 @@ from app.models.domain.knowledge import (
     KnowledgeDocument,
     KnowledgeStatus,
 )
-from app.repositories.knowledge_base_repository import KnowledgeBaseRepository
-from app.repositories.knowledge_document_repository import KnowledgeDocumentRepository
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 
 # 上传文件大小上限：可 seek 的流零拷贝探长预检，转存途中按实读字节兜底
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -69,7 +69,7 @@ def page_envelope(items: list, total: int, page: int, page_size: int) -> dict:
     return {"items": items, "total": total, "page": page, "pageSize": page_size}
 
 
-def require_kb(kb_repo: KnowledgeBaseRepository, kb_id: UUID) -> KnowledgeBase:
+def require_kb(kb_repo: KnowledgeBaseRepositoryPort, kb_id: UUID) -> KnowledgeBase:
     """父资源存在性锚定（无身份上下文）：文档是知识库的子资源，404 语义才能
     区分 4001/4004。供绑定管理与 Celery 后台流水线使用——后者没有用户身份，
     按端点透传的可信 id 直接操作。"""
@@ -80,7 +80,7 @@ def require_kb(kb_repo: KnowledgeBaseRepository, kb_id: UUID) -> KnowledgeBase:
 
 
 def require_visible_kb(
-    kb_repo: KnowledgeBaseRepository, kb_id: UUID, user_id: UUID
+    kb_repo: KnowledgeBaseRepositoryPort, kb_id: UUID, user_id: UUID
 ) -> KnowledgeBase:
     """读路径可见性锚定：属主或公开库可见，他人私有库按 404 不泄露存在性
     （与会话归属同一口径）。"""
@@ -91,7 +91,7 @@ def require_visible_kb(
 
 
 def require_owned_kb(
-    kb_repo: KnowledgeBaseRepository, kb_id: UUID, user_id: UUID
+    kb_repo: KnowledgeBaseRepositoryPort, kb_id: UUID, user_id: UUID
 ) -> KnowledgeBase:
     """写路径归属锚定：仅属主可写——公开只让渡可见性，不让渡管理权；
     他人库（含公开库）一律 404 不泄露存在性。"""
@@ -102,7 +102,7 @@ def require_owned_kb(
 
 
 def require_document(
-    document_repo: KnowledgeDocumentRepository, kb_id: UUID, doc_id: UUID
+    document_repo: KnowledgeDocumentRepositoryPort, kb_id: UUID, doc_id: UUID
 ) -> KnowledgeDocument:
     doc = document_repo.get_document(kb_id, doc_id)
     if doc is None:
