@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatDateTime } from "@/lib/format";
 import type { BackendKnowledgeBase } from "@/services/types";
-import { KnowledgeStatusBadge } from "@/components/knowledge/status-badge";
+import { KnowledgeStatusBadge, KnowledgeVisibilityBadge } from "@/components/knowledge/status-badge";
 
 /**
  * 知识库卡片网格（列表页主体）。
@@ -52,7 +52,13 @@ export const KnowledgeCardList: FC<KnowledgeCardListProps> = ({
           onClick={() => onOpen(kb)}
         >
           <CardHeader>
-            <CardTitle className="truncate">{kb.name}</CardTitle>
+            <CardTitle className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate">{kb.name}</span>
+              <KnowledgeVisibilityBadge
+                isPublic={kb.is_public}
+                className="shrink-0"
+              />
+            </CardTitle>
             <CardAction>
               <DropdownMenu>
                 <DropdownMenuTrigger

@@ -1,5 +1,5 @@
 import type { FC } from "react";
-import { Loader2Icon } from "lucide-react";
+import { GlobeIcon, Loader2Icon, LockIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -51,6 +51,26 @@ const STATUS_META: Record<
     className: "bg-destructive/15 text-destructive",
   },
 };
+
+/**
+ * 知识库可见性徽章（is_public）：公开用天蓝 Globe，私有用中性暖灰 Lock，
+ * 图标与建库/编辑表单的可见性切换保持一致。
+ */
+
+export const KnowledgeVisibilityBadge: FC<{
+  isPublic: boolean;
+  className?: string;
+}> = ({ isPublic, className }) => (
+  <Badge
+    className={cn(
+      isPublic ? "bg-sky-500/15 text-sky-700" : "bg-muted text-muted-foreground",
+      className,
+    )}
+  >
+    {isPublic ? <GlobeIcon /> : <LockIcon />}
+    {isPublic ? "公开" : "私有"}
+  </Badge>
+);
 
 interface KnowledgeStatusBadgeProps {
   status: KnowledgeStatus;

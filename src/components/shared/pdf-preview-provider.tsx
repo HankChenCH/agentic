@@ -1,16 +1,26 @@
 import {
   createContext,
+  lazy,
   useCallback,
   useContext,
   useMemo,
   useState,
   type FC,
   type ReactNode,
+  Suspense,
 } from "react";
 
-import { DocumentPreviewDialog } from "@/components/shared/document-preview-dialog";
 import type { PdfHighlight } from "@/components/shared/pdf-viewer";
 import type { KnowledgeSource } from "@/services/types";
+
+// pdf.js 整库经「document-preview-dialog → pdf-viewer」的模块图进入；
+// lazy + target 门控让这条边从主图摘掉——首开预览才拉取模块（React.lazy
+// 在「首次渲染」才发 import，必须配合按需挂载，无条件渲染等于没拆）。
+const DocumentPreviewDialog = lazy(() =>
+  import("@/components/shared/document-preview-dialog").then((m) => ({
+    default: m.DocumentPreviewDialog,
+  })),
+);
 
 /**
  * 全局 PDF 预览通道：任意页面（聊天溯源卡片 / 知识库文档表格）都能唤起
@@ -87,20 +97,26 @@ export const PdfPreviewProvider: FC<{ children: ReactNode }> = ({
   return (
     <PdfPreviewContext.Provider value={value}>
       {children}
-      {/* target 整体替换：同文档换来源时仅跳页/换高亮，不重拉文件 */}
-      <DocumentPreviewDialog
-        open={target != null}
-        onOpenChange={(next) => {
-          if (!next) close();
-        }}
-        kbId={target?.kbId}
-        docId={target?.docId}
-        docName={target?.docName}
-        fileSize={target?.fileSize ?? null}
-        mode={target?.mode}
-        initialPage={target?.page}
-        highlights={target?.highlights}
-      />
+      {/* target 整体替换：同文档换来源时仅跳页/换高亮，不重拉文件。
+          target 门控按需挂载（见顶部 lazy 说明）；代价是关闭随 target 清空
+          即刻卸载，Dialog 无出场过渡（首次打开后模块已驻留，重开不再等加载） */}
+      {target && (
+        <Suspense fallback={null}>
+          <DocumentPreviewDialog
+            open
+            onOpenChange={(next) => {
+              if (!next) close();
+            }}
+            kbId={target.kbId}
+            docId={target.docId}
+            docName={target.docName}
+            fileSize={target.fileSize ?? null}
+            mode={target.mode}
+            initialPage={target.page}
+            highlights={target.highlights}
+          />
+        </Suspense>
+      )}
     </PdfPreviewContext.Provider>
   );
 };

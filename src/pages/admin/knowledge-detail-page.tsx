@@ -24,7 +24,10 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DocumentFormDialog } from "@/components/knowledge/document-form-dialog";
 import { DocumentTable } from "@/components/knowledge/document-table";
 import { KnowledgeFormDialog } from "@/components/knowledge/knowledge-form-dialog";
-import { KnowledgeStatusBadge } from "@/components/knowledge/status-badge";
+import {
+  KnowledgeStatusBadge,
+  KnowledgeVisibilityBadge,
+} from "@/components/knowledge/status-badge";
 import { UploadDocumentDialog } from "@/components/knowledge/upload-document-dialog";
 import { usePdfPreview } from "@/components/shared/pdf-preview-provider";
 import { useKnowledgeBase } from "@/hooks/use-knowledge-base";
@@ -107,6 +110,9 @@ export const KnowledgeDetailPage: FC = () => {
                     {kb.knowledgeBase.name}
                   </h1>
                   <KnowledgeStatusBadge status={kb.knowledgeBase.status} />
+                  <KnowledgeVisibilityBadge
+                    isPublic={kb.knowledgeBase.is_public}
+                  />
                 </div>
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                   {kb.knowledgeBase.description || "暂无描述"}

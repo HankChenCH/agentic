@@ -22,6 +22,7 @@ import {
 import { REST_BASE, SSE_URL } from "@/lib/config";
 import { attachmentService } from "@/services/attachment-service";
 import { conversationService } from "@/services/conversation-service";
+import { applyRunInputInjections, type RunAgentInputLike } from "@/services/run-input";
 import { getToken, useAuthStore } from "@/stores/auth-store";
 import { getSelectedAgentId, isKnownThread } from "@/stores/agent-store";
 
@@ -185,41 +186,24 @@ export const AgenticRuntimeProvider = ({
   );
 
   // 请求体加工（prepareRunAgentInput 覆写，@ag-ui/client 里是 protected，按鸭子
-  // 类型赋值）——两个互不门控的注入：
-  // 1) 分支信号提升：重新生成/编辑在 thread.tsx 经 RunConfig.custom 携带
-  //    branchBaseMessageId（基点消息 id，与库中 message_id 同源），runtime 组装时
-  //    落在 forwardedProps.runConfig；这里提升为 forwardedProps.branch 供后端
-  //    open_turn 定位兄弟轮次，runConfig 是内部载体提升后删除。重生成/编辑都
-  //    发生在已有会话上，不受 agentId 的 isNewConversation 门控。
-  // 2) 智能体选择：forwardedProps.agentId（后端 run 链路消费该字段绑定新会话的
-  //    智能体）。只在「新会话」时携带：判定依据是 threadId 不在 agent-store 的
-  //    已知会话集合（会话列表回填）——runtime 组装的 run 输入拿不到已加载的
-  //    历史消息，按消息内容/条数判定不可靠（旧会话续聊会被误判为新会话而改写
-  //    绑定）。新会话 threadId 是前端新生成的 UUID，必然不在列表中；首条消息
-  //    发出、会话落库并刷新列表后才进入集合，此后继续聊/重生成一律不携带。
+  // 类型赋值）——两项注入的完整语义见 @/services/run-input 模块注释：
+  // 1) 分支信号提升：forwardedProps.runConfig.branchBaseMessageId →
+  //    forwardedProps.branch（runConfig 载体删除），不受新会话门控；
+  // 2) 智能体选择：仅「新会话」（threadId 不在 agent-store 已知会话集合——
+  //    不能用消息内容/条数判定，旧会话续聊会被误判而改写绑定）注入
+  //    forwardedProps.agentId。
   // 请求时现读 store（与 token 同口径，避免闭包陈旧）。
   useMemo(() => {
     const target = agent as unknown as {
-      prepareRunAgentInput: (params?: unknown) => {
-        forwardedProps?: Record<string, unknown>;
-        threadId?: string;
-        resume?: unknown;
-      } & Record<string, unknown>;
+      prepareRunAgentInput: (params?: unknown) => RunAgentInputLike;
     };
     const original = target.prepareRunAgentInput.bind(agent);
     target.prepareRunAgentInput = (params?: unknown) => {
       const input = original(params);
-      const forwarded: Record<string, unknown> = { ...(input.forwardedProps ?? {}) };
-      const custom = forwarded.runConfig as Record<string, unknown> | undefined;
-      const baseMessageId = custom?.branchBaseMessageId;
-      if (typeof baseMessageId === "string" && baseMessageId) {
-        forwarded.branch = { baseMessageId };
-      }
-      delete forwarded.runConfig;
-      const agentId = getSelectedAgentId();
-      const isNewConversation = !input.resume && !isKnownThread(input.threadId);
-      if (agentId && isNewConversation) forwarded.agentId = agentId;
-      return { ...input, forwardedProps: forwarded };
+      return applyRunInputInjections(input, {
+        selectedAgentId: getSelectedAgentId(),
+        knownThread: isKnownThread(input.threadId),
+      });
     };
   }, [agent]);
 

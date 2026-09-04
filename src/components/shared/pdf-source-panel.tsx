@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Loader2Icon,
+  XIcon,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,10 +12,15 @@ import {
   usePdfPreview,
   type PdfSourcePanelState,
 } from "@/components/shared/pdf-preview-provider";
-import { PdfViewer } from "@/components/shared/pdf-viewer";
 import { formatSourcePages } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { KnowledgeSource } from "@/services/types";
+
+// pdf.js 整库在 pdf-viewer 的模块图里：lazy 摘出主图，抽屉首次打开才加载
+// （组件 active 为空时本就 return null，天然满足「首次渲染才拉模块」的前提）
+const PdfViewer = lazy(() =>
+  import("@/components/shared/pdf-viewer").then((m) => ({ default: m.PdfViewer })),
+);
 
 /**
  * 聊天检索溯源抽屉（右侧滑出、无遮罩、非模态）。
@@ -141,15 +151,24 @@ export const PdfSourcePanel = () => {
           检索片段 · 仅展示命中页
         </p>
       </header>
-      {/* 查看器随抽屉内容挂载/卸载：关闭即释放 canvas，重开重新取数 */}
-      <PdfViewer
-        className="min-h-0 flex-1"
-        kbId={view.kbId}
-        docId={view.docId}
-        mode="snippet"
-        initialPage={view.page}
-        highlights={view.highlights}
-      />
+      {/* 查看器随抽屉内容挂载/卸载：关闭即释放 canvas，重开重新取数。
+          Suspense 只包查看器——首次加载期间头部先出，内容区转圈占位 */}
+      <Suspense
+        fallback={
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <Loader2Icon className="animate-spin text-muted-foreground" />
+          </div>
+        }
+      >
+        <PdfViewer
+          className="min-h-0 flex-1"
+          kbId={view.kbId}
+          docId={view.docId}
+          mode="snippet"
+          initialPage={view.page}
+          highlights={view.highlights}
+        />
+      </Suspense>
     </aside>
   );
 };
