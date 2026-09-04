@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   check:
-    name: Lint, typecheck & build
+    name: Lint, typecheck, test & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +31,9 @@ jobs:
 
       - name: Typecheck
         run: yarn typecheck
+
+      - name: Unit tests (vitest)
+        run: yarn test
 
       - name: Build
         run: yarn build
