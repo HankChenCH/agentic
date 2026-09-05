@@ -76,7 +76,14 @@ async def lifespan(app: FastAPI):
             except (TypeError, ValueError):
                 logger.warning("恢复信号处理器失败 signum=%s", sig, exc_info=True)
 
-    # 优雅关闭：释放 Engine 连接池与向量库客户端（与 Celery 侧的
+    # 优雅关闭：先排空收尾线程池（标题/用量/记忆是流闭后的后台任务，
+    # SIGTERM 时在途 run 已被取消收口，但其已完成轮次的收尾仍需落地），
+    # 再释放依赖——收尾任务还要写库/向量库，必须在 Engine dispose 前。
+    try:
+        agentic_service.drain_finalizers()
+    except Exception:
+        logger.warning("finalizer drain failed on shutdown", exc_info=True)
+    # 释放 Engine 连接池与向量库客户端（与 Celery 侧的
     # container.close() 对齐）。best-effort：清理失败只记日志，不阻断退出。
     # Engine 此前未被用过时，这里会惰性构建一次再 dispose（无连接可释放）。
     logger = logging.getLogger(__name__)
