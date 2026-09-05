@@ -1,0 +1,166 @@
+# =============================================================================
+# agentic 全栈一键拉起编排 —— 部署视图入口（部署规范见 deployment-spec.md，
+# 使用指南见 README.md）
+#
+#   一键拉起:  cp .env.example .env && vi .env   # 至少填 DEEPSEEK_API_KEY 与 AUTH_JWT_SECRET
+#              docker compose up -d --build
+#   访问入口:  http://127.0.0.1:8081             # 前端（nginx 同源反代 /api → 后端）
+#   后端直连:  http://127.0.0.1:8000             # 调试用（/health /metrics /docs 等）
+#   停止:      docker compose down               # 保留数据卷
+#   清数据:    docker compose down -v            # 连同数据卷一起删
+#
+# 拓扑（单机 compose，全部服务同默认网络，走服务名互访）:
+#
+#   浏览器 ── :8080 ──► client(nginx) ──/api/ 去前缀──► server(uvicorn :8000)
+#                                                     │      ├─ migrate(一次性 Alembic)
+#   postgres  weaviate(:8080/:50051)  rustfs(:9000)  redis ──► worker(celery)
+#        └────────── 中间件四件 include 自 ../server/docker-compose.yaml ──┴─► beat(看门狗)
+#   Ollama(embedding) 在宿主机，server/worker 经 host.docker.internal 访问
+#
+# 与 server/docker-compose.yaml（纯中间件 dev 栈）的关系:
+#   - 本文件 include 之，中间件定义单一事实源，不在两处漂移；
+#   - 两者同时运行会撞 container_name / 宿主端口，拉起本栈前先
+#     `cd ../server && docker compose down`。
+#
+# 环境变量: compose 自动读取同目录 .env（模板见 .env.example）。
+#   DEEPSEEK_API_KEY / AUTH_JWT_SECRET 必填（缺失 compose 解析期即报错，
+#   早于容器启动 fail-fast）。
+#
+# 说明:
+# - 数据库走 postgres（DB_DEFAULT=postgres），迁移由 migrate 一次性服务执行，
+#   应用进程不做任何 DDL；本地开发不设 DB_DEFAULT 仍是 SQLite，行为不变。
+# - 前端同源反代模式：构建参数 VITE_API_BASE=/api（构建期烘焙），浏览器全部
+#   请求同源落在 client 的 /api/ 下，nginx 去前缀转 server —— 天然免 CORS，
+#   后端白名单无需登记页面 origin。改跨域直连模式见 deployment-spec.md §CORS。
+# - rustfs 预签名 302 的对外基地址 RUSTFS_PUBLIC_ENDPOINT 缺省指向宿主发布口
+#   （http://127.0.0.1:9000）；远程部署改成浏览器可达的地址，代理须原样透传
+#   host+path（详见 server/AGENTS.md「多模态图片输入」部署形态一节）。
+# - server 镜像自带 HEALTHCHECK（GET /health 存活口径），client 以
+#   service_healthy 等它就绪后再启动。uvicorn 单进程是有意的（在途 SSE/取消
+#   语义在进程内），禁止 --scale server；worker 无状态可扩，beat 必须单实例。
+# - 日志: console sink 经 docker logs 查看；logging.yaml 的文件 sink 落在
+#   各容器内部（多容器共写一卷会争抢切割，刻意不挂共享卷）。
+# =============================================================================
+
+name: agentic-stack
+
+include:
+  # 中间件四件（postgres / weaviate / rustfs + rustfs-init / redis），
+  # 定义、健康检查、数据卷与 dev 栈完全同源；其端口发布仅绑 127.0.0.1。
+  - ../server/docker-compose.yaml
+
+# server 家族共享环境：容器网络内服务名互访 + 宿主机侧资源经 host.docker.internal
+x-server-environment: &server-environment
+  APP_ENV: ${APP_ENV:-prod} # 错误响应脱敏/日志级别按 prod 口径；排障可临时改 dev
+  # ---- 必填：llm.yaml 无默认值 ----
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 deploy/.env 中设置 DEEPSEEK_API_KEY}
+  # ---- 必填：JWT 签名密钥（应用在 prod 环境二次校验：dev 兜底密钥/长度
+  #      不足 32 字节即拒绝启动；生成：python3 -c "import secrets; print(secrets.token_urlsafe(48))"）----
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?请在 deploy/.env 中设置 AUTH_JWT_SECRET（≥32 字节强随机串）}
+  # ---- 可选 ----
+  MINERU_API_KEY: ${MINERU_API_KEY:-} # 知识库 PDF 解析用，留空则首次解析 fail-fast
+  METRICS_ENABLED: ${METRICS_ENABLED:-true}
+  # ---- 数据库：容器编排默认 postgres（migrate 服务负责建表）----
+  DB_DEFAULT: postgres
+  POSTGRES_HOST: postgres # 网络内服务名；端口 5432（容器内），凭据与中间件栈同一组变量
+  POSTGRES_USER: ${POSTGRES_USER:-agentic}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+  POSTGRES_DB: ${POSTGRES_DB:-agentic}
+  # ---- 中间件连接：容器网络内服务名 + 容器内端口（非宿主发布口）----
+  REDIS_URL: redis://redis:6379/0
+  WEAVIATE_HOST: weaviate
+  WEAVIATE_HTTP_PORT: "8080"
+  WEAVIATE_GRPC_PORT: "50051" # 网络内直连容器，无宿主侧 50052 错位问题
+  RUSTFS_ENDPOINT: http://rustfs:9000
+  RUSTFS_PUBLIC_ENDPOINT: ${RUSTFS_PUBLIC_ENDPOINT:-http://127.0.0.1:9000} # 浏览器可达的预签名基地址
+  RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-agentic}
+  RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-agentic-secret}
+  RUSTFS_BUCKET: ${RUSTFS_BUCKET:-agentic}
+  # ---- 向量模型：宿主机 Ollama（需先 ollama pull bge-m3；不可达时基础对话
+  #      不受影响，记忆沉淀/知识库检索降级失败并记日志）----
+  OLLAMA_API_URL: ${OLLAMA_API_URL:-http://host.docker.internal:11434}
+
+x-server-common: &server-common
+  image: agentic-server:latest
+  restart: unless-stopped
+  extra_hosts:
+    # Linux 宿主机需要（Docker Desktop 自带该域名）；Ollama 走此通道
+    - host.docker.internal:host-gateway
+  environment: *server-environment
+  volumes:
+    # /app/data：SQLITE_DB_PATH 与 local 文件系统形态的落盘点；postgres 形态下
+    # 业务数据在 postgres-data 卷，此卷仅兜底（admin CLI 误用 sqlite 时不丢盘）
+    - server-data:/app/data
+
+services:
+  # ---------- 一次性：数据库迁移（Alembic upgrade head；应用进程不做 DDL） ----------
+  # 本服务同时承担 agentic-server:latest 镜像的构建入口（其余 server 家族按
+  # 该 tag 复用，全栈只构建一次）。
+  migrate:
+    build: ../server
+    <<: *server-common
+    restart: "no"
+    command: python -m app.cmd.admin db upgrade
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------- 后端 HTTP（uvicorn 单进程；SSE/取消语义在进程内，禁 scale） ----------
+  server:
+    <<: *server-common
+    ports:
+      - "${SERVER_PORT:-8000}:8000" # 直连调试口；同源反代模式下浏览器流量不经此口
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    # 健康检查用镜像内置 HEALTHCHECK（GET /health 存活口径）
+
+  # ---------- Celery worker（知识库摄取等后台任务；无状态，可 --scale worker=N） ----------
+  worker:
+    <<: *server-common
+    command: celery -A app.cmd.task_executor.main worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # ---------- 看门狗调度（beat：卡死对账 reap；必须单实例） ----------
+  beat:
+    <<: *server-common
+    command: celery -A app.cmd.task_executor.main beat --schedule /app/runtime/celerybeat-schedule
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # ---------- 前端（nginx 托管 Vite 产物 + 同源反代 /api → server） ----------
+  client:
+    build:
+      context: ../client/agentic-client
+      args:
+        # 构建期烘焙进静态产物；同源反代模式免 CORS（跨域直连模式见规范文档）
+        VITE_API_BASE: /api
+    image: agentic-client:latest
+    restart: unless-stopped
+    environment:
+      # 运行时可改（改的是 nginx 反代目标，非构建期事实），无需重建镜像
+      BACKEND_URL: http://server:8000
+    ports:
+      # 8080 已被 weaviate 占用（见上），前端缺省用 8081
+      - "${WEB_PORT:-8081}:80"
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  server-data:
