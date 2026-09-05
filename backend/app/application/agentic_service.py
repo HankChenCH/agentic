@@ -12,11 +12,13 @@ from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
 
-from .translator import AgUiTranslator, StorageTranslator
+from .translator import AgUiTranslator, StorageTranslator, UsageContext
 from .turn_finalizer import TurnFinalizer
 from app.domain.conversation.attachments import ConversationAttachmentStore
 from app.domain.conversation.conversation_service import ConversationService
 from app.domain.conversation.multimodal import text_of, user_message_from_content
+from app.domain.usage import UsageService
+from app.domain.usage.extract import llm_model_name
 
 from app.models.domain.agentic import AgenticConversationTurn, AgenticTurnStatus
 
@@ -45,6 +47,8 @@ class AgenticService:
     attachments: ConversationAttachmentStore
 
     turn_finalizer: TurnFinalizer
+
+    usage: UsageService
 
     logger_factory: LoggerFactory
 
@@ -139,10 +143,20 @@ class AgenticService:
                 user_id=user_id, thread_id=thread_id, run_id=run_id, content=message_content,
                 agent_id=agent_id, payload=payload, branch=branch,
             )
-            storage_translator = StorageTranslator(thread_id=thread_id, turn_id=turn.turn_id)
 
             # 智能体实例由智能体层工厂创建（按会话绑定的 agentic_id，未注册回退默认）
             agent = self.agent_factory.create(conversation.agentic_id)
+
+            # 落库翻译器（agent 创建后才能注入用量归属上下文：模型名取自模型实例）
+            storage_translator = StorageTranslator(
+                thread_id=thread_id,
+                turn_id=turn.turn_id,
+                usage=UsageContext(
+                    user_id=user_id,
+                    model=llm_model_name(agent.model),
+                    agentic_id=conversation.agentic_id,
+                ),
+            )
 
             # 多模态口径以模型能力声明为准：未声明 vision 的模型图片降级丢弃
             # （当前轮注明、历史回放静默）；本域附件引用由服务端读对象存储
@@ -186,8 +200,12 @@ class AgenticService:
             yield ag_ui_translator.error(self._run_error_message(e))
             return
 
-        # messages item 是整条 assistant 消息的 ChatModelStream（非片段），
-        # 每条消息生成一次 id 注入两个 translator，保证流式事件与落库行共用同一 message_id。
+        # 流式与落库的消息 id 粒度刻意不同：
+        # - ag_ui_translator 的流式事件用其 __init__ 自生成的 run 级 id——一次 run
+        #   在前端只呈现一条 assistant 消息（react-ag-ui ≥0.0.58 把 TEXT_MESSAGE_*
+        #   里 messageId 的变化当作消息边界，逐条换 id 会把多步 ReAct run 裂成多条）；
+        # - storage_translator 按每次 LLM 调用（ChatModelStream）一行落库，此处逐条
+        #   生成 uuid 注入。
         # 深度回忆三件套的会话身份走 langgraph config 注入（BaseAgent._config 的
         # configurable.thread_id），不在此绑定——本生成器由 Starlette 逐次在不同
         # context 副本里恢复，ContextVar 的 set/reset 跨不过去（工具读不到值，
@@ -201,7 +219,7 @@ class AgenticService:
                 # 取标志的感知推迟到消息全部生成完。帧级 + 0.5s 节流（每帧一查
                 # 是每秒几十次无谓 RTT）
                 canceled = False
-                for frame in ag_ui_translator.translate(name, item, message_id):
+                for frame in ag_ui_translator.translate(name, item):
                     now_mono = monotonic()
                     if now_mono - last_cancel_check >= CANCEL_CHECK_INTERVAL_SECONDS:
                         last_cancel_check = now_mono
@@ -214,8 +232,10 @@ class AgenticService:
                     # 事件，客户端以本地 abort 态为准，不发 RUN_ERROR（口径同
                     # 断链路径）。半截消息不落库、收尾加工不执行，轮次收口
                     # CANCELED；translate 生成器被遗弃后由 GC 关闭（无副作用）。
+                    # 已完成的模型调用用量照常落库（取消也消耗了 token）。
                     self.logger.info("客户端取消，轮次已置 CANCELED thread_id=%s", thread_id)
                     self._cancel_turn_safely(turn)
+                    self._flush_usage(storage_translator)
                     return
                 storage_translator.translate(name, item, message_id)
 
@@ -229,6 +249,7 @@ class AgenticService:
             # 只同步收尾状态后原样上抛，半截 assistant 消息不落库、收尾加工不执行
             # （与异常路径同口径：客户端未收到的事件序列不产生"已完成"数据）。
             self._cancel_turn_safely(turn)
+            self._flush_usage(storage_translator)
             raise
         except Exception as e:
             # 同准备段：先收口轮次状态，再发错误帧；对外消息按异常分级 +
@@ -237,8 +258,10 @@ class AgenticService:
             self._fail_turn_safely(turn)
             yield ag_ui_translator.error(self._run_error_message(e))
 
-        # 流结束后批量落库 assistant 消息
+        # 流结束后批量落库 assistant 消息 + 用量流水（异常路径同样计入：
+        # 已发生的模型调用是真实消耗）
         self.conversations.store_assistant_messages(storage_translator.messages)
+        self._flush_usage(storage_translator)
 
         # 收尾加工含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾。
         # 标题/记忆是纯文本消费方：只喂 text part（图片走占位语义）
@@ -277,6 +300,13 @@ class AgenticService:
             self.logger.warning("%s: [%s] %s", stage, exc.code, exc.message)
         else:
             self.logger.error("%s: %s", stage, exc, exc_info=exc)
+
+    def _flush_usage(self, storage_translator: StorageTranslator | None) -> None:
+        """用量流水落库（best-effort，容错在 UsageService）：三条收尾路径
+        （正常/异常、显式取消、断连）各调用一次。"""
+        if storage_translator is None:
+            return
+        self.usage.record_usage_safe(storage_translator.usage_records)
 
     def _fail_turn_safely(self, turn: AgenticConversationTurn) -> None:
         """失败收口写库的兜底：写不进去（如存储已不可用）只记日志不再上抛，

@@ -29,7 +29,7 @@ from app.components.demo import DemoComponent
 from app.components.knowledge import KnowledgeComponent
 from app.components.knowledge.ability.retrieval import RetrievalHit
 from app.components.memory import MemoryComponent
-from app.models.domain.agentic import AgenticMessageType
+from app.models.domain.agentic import AgenticMessageRole, AgenticMessageType
 from app.application.translator.storage_translator import StorageTranslator
 
 _TEST_USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -76,7 +76,8 @@ class ScriptedChatModel(BaseChatModel):
         message = self._next()
         if message.tool_calls:
             call = message.tool_calls[0]
-            chunk = AIMessageChunk(content="", tool_call_chunks=[{
+            # content 随 chunk 保留：真实模型可先流出引导语再发起工具调用
+            chunk = AIMessageChunk(content=message.content, tool_call_chunks=[{
                 "name": call["name"], "args": json.dumps(call["args"]),
                 "id": call["id"], "index": 0, "type": "tool_call_chunk",
             }])
@@ -235,7 +236,7 @@ def test_stream_emits_tool_events_and_agui_frames():
     for name, item in run.interleave("messages", "tools"):
         if name == "tools":
             tool_items.append(item)
-        frames.extend(translator.translate(name, item, uuid4()))
+        frames.extend(translator.translate(name, item))
     frames.append(translator.finish())
 
     kinds = [json.loads(f.removeprefix("data: ").strip())["type"] for f in frames]
@@ -255,6 +256,39 @@ def test_stream_emits_tool_events_and_agui_frames():
     payload = json.loads(tool_items[1]["content"])
     assert payload["sources"][0]["content"] == "RAG 指检索增强生成。"
     assert payload["notes"] == ["知识库「X」未启用，已跳过"]
+
+
+def test_agui_single_message_id_across_tool_rounds():
+    """消息 id 契约：ReAct 多步 run（工具前引导语 + 工具后回答 = 两次 LLM 调用）
+    的 TEXT_MESSAGE_* 事件必须共享同一 messageId——前端 react-ag-ui ≥0.0.58
+    把 messageId 变化当作消息边界，逐条换 id 会把一次 run 裂成多条消息。"""
+    from app.application.translator.translator import AgUiTranslator
+
+    retrieval = StubRetrieval(result=([_hit()], ["知识库「X」未启用，已跳过"]))
+    agent = RagAgent(model=ScriptedChatModel(answers=[
+        AIMessage(content="我来查一下资料。", tool_calls=[{
+            "name": "knowledge_search",
+            "args": {"query": "什么是RAG", "kb_ids": [str(_KB_ID)]},
+            "id": "call-1",
+        }]),
+        AIMessage(content="RAG 是检索增强生成 [1]。"),
+    ]), toolbox=_toolbox(retrieval=retrieval))
+
+    translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
+    frames = [translator.start()]
+    for name, item in agent.stream(_ctx("什么是RAG")).interleave("messages", "tools"):
+        frames.extend(translator.translate(name, item))
+    frames.append(translator.finish())
+
+    events = [json.loads(f.removeprefix("data: ").strip()) for f in frames]
+    text_ids = {e["messageId"] for e in events if e["type"].startswith("TEXT_MESSAGE")}
+    assert len(text_ids) == 1
+    # 工具归属（parent/messageId）与文本同一条消息
+    assert {e["parentMessageId"] for e in events if e["type"] == "TOOL_CALL_START"} == text_ids
+    assert {e["messageId"] for e in events if e["type"] == "TOOL_CALL_RESULT"} == text_ids
+    # 两次调用的文本都流出（前段引导语不被吞）
+    text_delta = "".join(e["delta"] for e in events if e["type"] == "TEXT_MESSAGE_CONTENT")
+    assert text_delta == "我来查一下资料。RAG 是检索增强生成 [1]。"
 
 
 def test_storage_persists_node_tool_call_from_tool_started():
@@ -282,3 +316,87 @@ def test_storage_dedupes_model_issued_tool_calls():
     st.translate("tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "some_tool"}, uuid4())
     # 模型发起的调用已由 messages 路径落库，tool-started 去重不重复落行
     assert [r.message_type for r in st.messages] == [AgenticMessageType.TOOL_CALL]
+
+
+# ---------------------------------------------------------------- A2UI 通道
+def test_stream_emits_a2ui_custom_event_for_weather_card():
+    """A2UI 基石链路：get_weather 以 content_and_artifact 返回（content=结构化
+    天气 JSON 给 LLM，artifact={"a2ui": 消息数组} 走 UI 通道），经 langgraph
+    ToolMessage.artifact → ToolsTransformer 的 ui 字段 → AgUiTranslator 在
+    TOOL_CALL_RESULT 之后追加 CUSTOM 事件（name="a2ui"，value=消息数组）。"""
+    from app.application.translator.translator import AgUiTranslator
+    from app.components.demo.ability.weather import DemoWeatherService
+
+    agent = DemoAgent(model=ScriptedChatModel(answers=[
+        AIMessage(content="", tool_calls=[{
+            "name": "get_weather",
+            "args": {"city": "中山", "date": "2026-09-05"},
+            "id": "call-1",
+        }]),
+        AIMessage(content="中山明天晴朗，气温33度。"),
+    ]), toolbox=AgentToolbox(
+        memory=MemoryComponent(recall=StubRecall()),
+        knowledge=KnowledgeComponent(retrieval=StubRetrieval(), navigation=SimpleNamespace()),
+        demo=DemoComponent(weather=DemoWeatherService()),
+    ))
+
+    translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
+    frames = [translator.start()]
+    tool_items = []
+    for name, item in agent.stream(_ctx("中山明天天气怎么样")).interleave("messages", "tools"):
+        if name == "tools":
+            tool_items.append(item)
+        frames.extend(translator.translate(name, item))
+    frames.append(translator.finish())
+
+    events = [json.loads(f.removeprefix("data: ").strip()) for f in frames]
+    kinds = [e["type"] for e in events]
+    # CUSTOM 紧跟本工具的 TOOL_CALL_RESULT 之后（ToolCallEnd 之前）
+    result_idx = kinds.index("TOOL_CALL_RESULT")
+    assert kinds[result_idx + 1] == "CUSTOM"
+    custom = events[result_idx + 1]
+    assert custom["name"] == "a2ui"
+    messages = custom["value"]
+    assert messages[0]["createSurface"]["catalogId"].endswith("catalogs/basic/catalog.json")
+    components = messages[1]["updateComponents"]["components"]
+    assert components[0]["id"] == "root"
+    assert any(c.get("text") == "中山" for c in components)
+
+    # LLM 只见结构化天气数据（artifact 不进 ToolMessage.content）
+    tool_messages = [m for m in agent.model.prompts[1] if m.type == "tool"]
+    assert json.loads(tool_messages[0].content) == {
+        "city": "中山", "date": "2026-09-05",
+        "condition": "晴朗", "temperature": 33, "humidity": 60,
+    }
+    # tools 通道契约：tool-result 携带 ui 载荷
+    assert tool_items[1]["ui"] == {"a2ui": messages}
+
+
+def test_storage_persists_a2ui_custom_row_after_tool_result():
+    """tool-result 携带 ui 载荷时，落库侧在 TOOL_RESULT 后追加 CUSTOM 行
+    （content=[{type:"custom", name:"a2ui", value:消息数组}]，父链同 TOOL_RESULT）。"""
+    from app.packages.a2ui import render_surface, text
+
+    a2ui = render_surface("weather-x", [text("root", "卡片")])
+    st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
+    st.translate("tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "get_weather"}, uuid4())
+    st.translate("tools", {
+        "event": "tool-result", "tool_call_id": "c1", "content": '{"city": "中山"}',
+        "ui": {"a2ui": a2ui},
+    }, uuid4())
+
+    rows = st.messages
+    assert [r.message_type for r in rows] == [
+        AgenticMessageType.TOOL_CALL, AgenticMessageType.TOOL_RESULT, AgenticMessageType.CUSTOM,
+    ]
+    assert rows[2].role == AgenticMessageRole.ASSISTANT
+    assert rows[2].parent_message_id == rows[1].parent_message_id
+    assert rows[2].content == [{"type": "custom", "name": "a2ui", "value": a2ui}]
+    # sequence 严格递增：CUSTOM 行排在 TOOL_RESULT 之后
+    assert rows[2].sequence_num == rows[1].sequence_num + 1
+
+
+def test_storage_ignores_tool_result_without_ui_payload():
+    st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
+    st.translate("tools", {"event": "tool-result", "tool_call_id": "c1", "content": "结果"}, uuid4())
+    assert [r.message_type for r in st.messages] == [AgenticMessageType.TOOL_RESULT]

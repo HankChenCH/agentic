@@ -16,7 +16,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session, select
 
-from conftest import TEST_USER_ID
+from conftest import TEST_USER_ID, StubUsageService
 from app.exceptions import ConversationNotFoundError
 from app.models.domain.agentic import (
     AgenticConversationMessage,
@@ -113,6 +113,8 @@ class FakeAgent:
     def __init__(self, run, supports_vision=False):
         self._run = run
         self.supports_vision = supports_vision
+        # 编排层用量上下文读取的模型实例替身（BaseAgent.model 口径）
+        self.model = SimpleNamespace(model_name="fake-chat-model")
 
     def stream(self, context):
         type(self).captured_context = context
@@ -127,7 +129,7 @@ class FakeTitleGenerator:
         self.error = error
         self.calls = 0
 
-    def generate(self, query, turn_messages):
+    def generate(self, query, turn_messages, *, user_id=None, thread_id=None):
         self.calls += 1
         if self.error is not None:
             raise self.error
@@ -265,11 +267,13 @@ def make_service(engine, monkeypatch, tmp_path):
             memory_user_node=FakeUserNodeSync(),
             logger_factory=RecordingLoggerFactory(),
         )
+        usage = StubUsageService()
         return AgenticService(
             agent_factory=agent_factory,
             conversations=conversations,
             attachments=attachments,
             turn_finalizer=finalizer,
+            usage=usage,
             logger_factory=RecordingLoggerFactory(),
         )
 
@@ -370,6 +374,72 @@ def test_happy_path_lifecycle(engine, make_service, monkeypatch):
     assert turn_status(engine, thread_id) == AgenticTurnStatus.COMPLETED
     # 用户消息 + assistant MESSAGE 各一行（InlineThread 已同步跑完收尾加工）
     assert len(stored_messages(engine, thread_id)) == 2
+
+
+def test_usage_records_flushed_on_normal_completion(engine, make_service, monkeypatch):
+    """正常完成：chat 场景用量流水落库（归属/模型/会话/轮次正确，键已归一）。"""
+    set_environment(monkeypatch, "dev")
+    stream = FakeChatModelStream("你好，世界")
+    stream.output_message = SimpleNamespace(
+        usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    )
+    run = FakeRun(items=[("messages", stream), ("messages", FakeChatModelStream("再聊一句"))])
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run)))
+    thread_id = uuid4()
+
+    events = [e["type"] for e in decode(list(service.run(TEST_USER_ID, thread_id, "run-usage", _text("hi"))))]
+
+    assert events[-1] == "RUN_FINISHED"
+    rows = service.usage.records
+    assert len(rows) == 1  # 第二条流无 usage_metadata：不产生零值行
+    row = rows[0]
+    assert row.user_id == TEST_USER_ID
+    assert row.scene == "chat"
+    assert row.model == "fake-chat-model"
+    assert row.thread_id == thread_id
+    assert row.agentic_id == "builtin:demo"
+    assert row.turn_id is not None
+    assert (row.input_tokens, row.output_tokens, row.total_tokens) == (10, 5, 15)
+
+
+def test_usage_records_flushed_on_cancel(engine, make_service, monkeypatch):
+    """显式取消：半截消息不落库，但已完成模型调用的用量照常落库（取消也消耗 token）。"""
+    set_environment(monkeypatch, "dev")
+
+    class UsageCancelRun:
+        """首 item 携带用量，在第二个 item 被拉取前置位取消标志。"""
+
+        def __init__(self, store, thread_id):
+            self._store = store
+            self._thread_id = thread_id
+
+        def interleave(self, *names):
+            stream = FakeChatModelStream("第一段")
+            stream.output_message = SimpleNamespace(
+                usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+            )
+            yield ("messages", stream)
+            sleep(0.6)
+            self._store.fire(cancel_flag_key(self._thread_id), ttl_seconds=CANCEL_FLAG_TTL_SECONDS)
+            yield ("messages", FakeChatModelStream("不该出现"))
+
+    store = InMemorySignalStore()
+    run = UsageCancelRun(store, None)
+    service = make_service(FakeAgentFactory(agent=FakeAgent(run)), signal_store=store)
+    thread_id = uuid4()
+    run._thread_id = thread_id
+
+    frames = list(service.run(TEST_USER_ID, thread_id, "run-usage-cancel", _text("hi")))
+
+    types = [e["type"] for e in decode(frames)]
+    assert "RUN_ERROR" not in types and "RUN_FINISHED" not in types
+    assert turn_status(engine, thread_id) == AgenticTurnStatus.CANCELED
+    assert len(stored_messages(engine, thread_id)) == 1  # 仅用户消息
+    # 取消路径的用量 flush：已完成的那次调用计入统计
+    rows = service.usage.records
+    assert len(rows) == 1
+    assert rows[0].scene == "chat"
+    assert (rows[0].input_tokens, rows[0].output_tokens, rows[0].total_tokens) == (7, 3, 10)
 
 
 def test_orchestration_passes_raw_query_to_agent(engine, make_service, monkeypatch):

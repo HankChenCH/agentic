@@ -137,8 +137,26 @@ def test_real_components_no_tool_collision_and_assemble():
 
 
 def test_demo_weather_tool_returns_canned_report():
-    # demo 组件冒烟：spec.build 直接产出工具（不依赖 DI），调用返回固定文案
+    # demo 组件冒烟：spec.build 直接产出工具（不依赖 DI），invoke 返回结构化
+    # 天气 JSON（LLM 可见的 content；A2UI 卡片 artifact 经 func 直调验证）
     spec_tool = COMPONENT_REGISTRY["demo"].tools[0]
     tool = spec_tool.build(DemoWeatherService())
     assert tool.name == "get_weather"
-    assert tool.invoke({"city": "中山", "date": "2026-01-01"}) == "中山 2026-01-01 天气晴朗，气温33度，湿度60%"
+    import json as _json
+
+    payload = _json.loads(tool.invoke({"city": "中山", "date": "2026-01-01"}))
+    assert payload == {
+        "city": "中山", "date": "2026-01-01",
+        "condition": "晴朗", "temperature": 33, "humidity": 60,
+    }
+    # content_and_artifact 形态：直调 func 拿 (content, artifact)，
+    # artifact 是 {"a2ui": [消息数组]}，信封与组件树形状正确
+    content, artifact = tool.func(city="中山", date="2026-01-01")
+    assert _json.loads(content) == payload
+    assert set(artifact.keys()) == {"a2ui"}
+    messages = artifact["a2ui"]
+    assert [m["version"] for m in messages] == ["v0.9", "v0.9"]
+    assert set(messages[0]["createSurface"].keys()) == {"surfaceId", "catalogId"}
+    components = messages[1]["updateComponents"]["components"]
+    assert components[0] == {"id": "root", "component": "Card", "child": "body"}
+    assert any(c["id"] == "city" and c["text"] == "中山" for c in components)
