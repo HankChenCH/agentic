@@ -148,7 +148,7 @@ class ServerImageAttachmentAdapter implements AttachmentAdapter {
  *   - 历史查看：不种分支树，按服务端激活叶子线性展示，无 1/2 切换入口；
  *   - 会话中：重新生成/编辑产生的兄弟变体由 runtime 仓库原生维护，
  *     BranchPicker（thread.tsx，末梢轮次门控）实时可对比/切换。
- * 曾经尝试在历史加载后用 aui.thread().import 种入末梢扇形，但 react-ag-ui
+ * 曾经尝试在历史加载后用 aui.thread.import 种入末梢扇形，但 react-ag-ui
  * 的 store 同步只认线性数组，会在加载后把扇形抹平（实测），故移除该链路。
  */
 

@@ -16,7 +16,7 @@ const NO_ROUTE_SEEN = Symbol("no-route-seen");
  * 不能用作路由数据源）。
  *
  *  - URL → runtime：路由参数**真实变化**时切会话（深链打开 / 刷新恢复 /
- *    浏览器前进后退 / 手改地址）。切换走 aui.threads().switchToThread，
+ *    浏览器前进后退 / 手改地址）。切换走 aui.threads.switchToThread，
  *    最终调 adapter.onSwitchToThread，与侧栏点击同一条路径（历史加载复用）。
  *  - runtime → URL：镜像变化（侧栏切换 / 新建 / 删除当前会话 / 新会话首条
  *    消息落库）时同步地址栏。切换会话 push（可后退穿越），回到新会话
@@ -48,13 +48,13 @@ export const ThreadRouteSync: FC = () => {
     if (routeThreadId) {
       // 镜像已与路由一致（如 runtime→URL 刚推过来的），无需重复切换
       if (routeThreadId !== currentThreadId) {
-        void aui.threads().switchToThread(routeThreadId);
+        void aui.threads.switchToThread(routeThreadId);
       }
       return;
     }
     // 落在 "/" 且镜像仍是既有会话：手改地址回根路径 = 回到新会话
     if (currentThreadId) {
-      void aui.threads().switchToNewThread();
+      void aui.threads.switchToNewThread();
     }
   }, [routeThreadId, currentThreadId, aui]);
 

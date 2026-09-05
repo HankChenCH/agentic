@@ -206,7 +206,7 @@ export function collectTurnIdByMessageId(
 
 /**
  * 末梢扇形树构建：活跃路径走 head，叶子的兄弟变体（同一问答的其他尝试）
- * 作为分支节点挂在同槽位上，供 aui.thread().import 种入运行时的消息仓库 ——
+ * 作为分支节点挂在同槽位上，供 aui.thread.import 种入运行时的消息仓库 ——
  * 刷新后 BranchPicker 依旧可对比/切换（切换经 activate-turn 同步服务端）。
  *
  * 节点模型：每个轮次展开为 user 节点 + assistant 节点；扇形内用户文本相同

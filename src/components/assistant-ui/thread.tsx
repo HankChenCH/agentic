@@ -431,7 +431,7 @@ const AssistantActionBar: FC = () => {
           tooltip="重新生成"
           onClick={() =>
             aui
-              .message()
+              .message
               .reload({ runConfig: { custom: { [BRANCH_BASE_KEY]: messageId } } })
           }
         >
@@ -522,7 +522,7 @@ const EditComposer: FC = () => {
   useEffect(() => {
     if (!branchBaseId) return;
     aui
-      .message()
+      .message
       .composer()
       .setRunConfig({ custom: { [BRANCH_BASE_KEY]: branchBaseId } });
   }, [aui, branchBaseId]);
@@ -564,12 +564,12 @@ const BranchPickButton: FC<{ direction: "previous" | "next" }> = ({
   );
 
   const switchBranch = () => {
-    aui.message().switchToBranch({ position: direction });
+    aui.message.switchToBranch({ position: direction });
     // 仓库切换是同步的，但 aui 状态快照要等 React 提交后才更新 —— 立即读
     // 末梢会拿到切换前的旧消息，activate-turn 会映射失败。推迟到下一个
     // 宏任务（通知已 flush）再读。
     window.setTimeout(() => {
-      const tail = aui.thread().getState().messages.at(-1);
+      const tail = aui.thread.getState().messages.at(-1);
       const turnId = tail ? turnByMessageId.get(tail.id) : undefined;
       if (turnId && currentThreadId) {
         void conversationService
