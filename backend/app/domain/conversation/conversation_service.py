@@ -30,8 +30,13 @@ from app.models.domain.agentic import (
     AgenticTurnStatus,
 )
 
-# 计入轮次聚合的标准用量键（其余如 cached_tokens 不计）
-USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+# 计入轮次聚合的标准用量键（其余如 cached_tokens 不计）。
+# input/output_tokens 是存量消息行的原生键族（归一化改造前的历史数据），保留
+# 以兼容；新写入行在 StorageTranslator._read_usage 已统一为 prompt/completion 族
+USAGE_KEYS = (
+    "prompt_tokens", "completion_tokens", "total_tokens",
+    "input_tokens", "output_tokens",
+)
 
 # 取消标志读失败警告的节流窗口（存储持续不可用时避免每 0.5s 刷一条日志）
 _WARN_THROTTLE_SECONDS = 30.0
@@ -205,6 +210,8 @@ class ConversationService:
         tool_calls 消息后必须紧跟对应 tool 消息，故未配对的调用/结果行跳过
         （工具出错时不落 TOOL_RESULT 行，孤儿调用直接回放会 400）。
         THOUGHT（reasoning）不回放：厂商 API 不接受历史 reasoning_content 注入。
+        CUSTOM（A2UI 卡片载荷）不回放：纯前端表现层，天气数据已随
+        TOOL_RESULT 行回放，UI 消息数组回灌只会污染上下文。
 
         用户消息经 ``user_message_from_content`` 还原多模态内容：
         ``supports_vision`` 为假或附件读取失败时图片降级丢弃（历史回放静默
@@ -256,6 +263,9 @@ class ConversationService:
                     continue
                 history.append(call)
                 history.append(ToolMessage(content=part.get("content", ""), tool_call_id=tool_call_id))
+            elif part_type == "custom":
+                # A2UI 卡片载荷（message_type=CUSTOM）：UI 表现层，不回灌模型上下文
+                continue
 
         return history
 

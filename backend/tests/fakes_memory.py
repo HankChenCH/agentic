@@ -35,12 +35,16 @@ class CannedLLM:
 
 
 class _CannedStructured:
-    """with_structured_output 返回的 Runnable 最小替身。"""
+    """with_structured_output 返回的 Runnable 最小替身。
+
+    ``invoke`` 接受 ``config``（与真实 Runnable 一致）——用量追踪包装器
+    （UsageTrackingChatModel）经 config 注入 on_llm_end 回调。
+    """
 
     def __init__(self, run):
         self._run = run
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None, **kwargs):
         return self._run(messages)
 
 

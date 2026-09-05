@@ -30,8 +30,13 @@ from uuid import UUID, uuid4
 
 # 环境变量必须在任何 app.* 导入（含 import 期 create_app() 的配置读取）之前就位，
 # 故本模块的 app 导入全部排在 os.environ 设置之后（E402 由 noqa 豁免）。
+# SQLITE_DB_PATH 必须强制赋值而非 setdefault：全量套件里按字母序更早的测试模块
+# 可能已触发 load_dotenv（.env 的 SQLITE_DB_PATH=data/agentic.db 会灌进进程环境）
+# ——setdefault 会保留开发库路径，整个模块就写到开发库去了（实测回归）。
+# 密钥/哑 API key 用 setdefault 即可：.env 不含 AUTH_JWT_SECRET，且先导入的
+# test_auth_deps 已固化同一密钥并据此签发 token——只需各上下文内自洽。
 _TMP_DIR = tempfile.mkdtemp(prefix="agentic-http-it-")
-os.environ.setdefault("SQLITE_DB_PATH", os.path.join(_TMP_DIR, "agentic.db"))
+os.environ["SQLITE_DB_PATH"] = os.path.join(_TMP_DIR, "agentic.db")
 os.environ.setdefault("DEEPSEEK_API_KEY", "ci-dummy")
 os.environ.setdefault("AUTH_JWT_SECRET", "http-it-secret-0123456789abcdef-change-me")
 
@@ -102,6 +107,8 @@ class ScriptedAgent:
     def __init__(self):
         self.answer = ""
         self.contexts = []
+        # 编排层用量上下文读取的模型实例替身（BaseAgent.model 口径）
+        self.model = SimpleNamespace(model_name="scripted-chat-model")
 
     def stream(self, context):
         self.contexts.append(context)
@@ -360,6 +367,41 @@ def test_all_business_routes_require_auth(client):
             assert resp.json()["error_code"] == 5002, f"{method} {route.path} 错误码口径漂移"
             checked.append(f"{method} {route.path}")
 
-    # 覆盖面下限：业务路由（agentic/attachments/knowledge/memory/auth）合计远超此数，
+    # 覆盖面下限：业务路由（agentic/attachments/knowledge/memory/stats/auth）合计远超此数，
     # 收集逻辑意外变空时在此失败
     assert len(checked) >= 40
+
+
+def test_stats_usage_endpoints_smoke(client):
+    """用量统计端点冒烟：空库返回零值汇总/空序列/空流水（鉴权后个人视角）。"""
+    headers, _ = register_and_login(client, "stats_user")
+
+    resp = client.get("/stats/usage/summary", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["error_code"] == 0
+    assert body["response"]["totals"] == {
+        "key": "total", "calls": 0, "promptTokens": 0, "completionTokens": 0, "totalTokens": 0,
+    }
+    assert body["response"]["byScene"] == []
+    assert body["response"]["byModel"] == []
+
+    resp = client.get("/stats/usage/daily", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["response"]["items"] == []
+
+    resp = client.get("/stats/usage/records", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["response"]
+    assert body["items"] == []
+    assert body["total"] == 0
+    assert body["page"] == 1
+
+    # 非法时间范围（start >= end）：6001/400
+    resp = client.get(
+        "/stats/usage/summary",
+        headers=headers,
+        params={"start": "2026-09-02T00:00:00Z", "end": "2026-09-01T00:00:00Z"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error_code"] == 6001

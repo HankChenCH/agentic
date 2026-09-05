@@ -239,6 +239,55 @@ def test_retry_completion_replaces_answer_in_llm_replay(service, engine):
     assert user_texts == ["Q1"]
 
 
+def test_replay_pairs_tool_chain_and_skips_a2ui_custom_rows(service, engine):
+    """回放还原工具调用链（TOOL_CALL→AIMessage(tool_calls) + TOOL_RESULT→ToolMessage
+    成对），CUSTOM（A2UI 卡片载荷）不回灌——UI 是表现层，不进模型上下文。"""
+    from langchain_core.messages import ToolMessage
+
+    thread_id = uuid4()
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("天气如何"))
+    service.conversation_repo.store_conversation_messages([
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=1, role=AgenticMessageRole.ASSISTANT,
+            message_type=AgenticMessageType.TOOL_CALL,
+            content=[{"type": "tool_call", "tool_call_id": "c1", "name": "get_weather", "args": {"city": "中山"}}],
+            token_usage={}, latency_ms=0,
+        ),
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=2, role=AgenticMessageRole.TOOL,
+            message_type=AgenticMessageType.TOOL_RESULT,
+            content=[{"type": "tool_result", "tool_call_id": "c1", "content": '{"city": "中山"}'}],
+            token_usage={}, latency_ms=0,
+        ),
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=3, role=AgenticMessageRole.ASSISTANT,
+            message_type=AgenticMessageType.CUSTOM,
+            content=[{"type": "custom", "name": "a2ui", "value": [{"version": "v0.9", "createSurface": {}}]}],
+            token_usage={}, latency_ms=0,
+        ),
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=4, role=AgenticMessageRole.ASSISTANT,
+            message_type=AgenticMessageType.MESSAGE,
+            content=[{"type": "text", "text": "中山今天晴朗。"}],
+            token_usage={}, latency_ms=0,
+        ),
+    ])
+    service.complete_turn(turn)
+    _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
+
+    history = service.replay_history(thread_id=thread_id, base_turn_id=t2.turn_id)
+    tool_messages = [m for m in history if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1 and tool_messages[0].tool_call_id == "c1"
+    assert [m for m in history if getattr(m, "tool_calls", None)]  # AIMessage(tool_calls) 成对回放
+    assert "中山今天晴朗。" in [m.content for m in history if m.type == "ai" and isinstance(m.content, str)]
+    # a2ui 消息数组不回灌上下文
+    assert not any("createSurface" in str(m.content) for m in history)
+
+
 def test_explicit_branch_signal_locates_base_by_message_id(service, engine):
     """显式信号：baseMessageId 定位兄弟基点；仅末梢可分支（中段已定型拒绝）。"""
     thread_id = uuid4()
