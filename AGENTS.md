@@ -39,8 +39,12 @@ agentic/                       # git monorepo root（单一仓库，无子模块
 
 > The whole tree is **one git repo**: a single `.git` at the `agentic/` root.
 > `backend/` and `frontend/` are plain subdirectories (no submodules, no nested
-> repos) — run git commands from the root. Each part's history was merged in
-> via subtree merge, so `git log --follow` works across the whole tree.
+> repos) — run git commands from the root. Each part's full history was
+> subtree-merged in (original hashes preserved). Subtree-merge caveat:
+> `git log -- <subdir>/` stops at the import merge — browse a side's
+> pre-import history from that merge's second parent
+> (`git log --oneline <import-merge>^2 -- <path>`); `git blame` crosses the
+> boundary fine.
 
 ## Agent shell environment — fix PATH before running anything
 
