@@ -1,6 +1,6 @@
 """账号信息 ↔ 记忆「用户」节点联动：UserNodeSyncService 行为契约。
 
-纯单测：真实 SqliteGraphMemoryRepository + 临时 SQLite（conftest 的 engine
+纯单测：真实 MemoryGraphRepository + 临时 SQLite（conftest 的 engine
 fixture），覆盖注册面（首次创建/幂等刷新）与 attributes 回落口径。
 """
 
@@ -9,11 +9,11 @@ from uuid import uuid4
 from conftest import TEST_USER_ID
 from app.components.memory.ability.consolidation import USER_ENTITY_NAME
 from app.components.memory.ability.user_node import ATTR_NICKNAME, ATTR_USERNAME, UserNodeSyncService
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 
 
 def make_svc(engine) -> UserNodeSyncService:
-    return UserNodeSyncService(memory_repo=SqliteGraphMemoryRepository(engine=engine))
+    return UserNodeSyncService(memory_repo=MemoryGraphRepository(engine=engine))
 
 
 def test_creates_user_node_with_account_attributes(engine):
@@ -32,13 +32,13 @@ def test_sync_is_scoped_per_user(engine):
 
     assert node.attributes[ATTR_USERNAME] == "bob"
     # 作用域隔离：alice 的节点对 bob 不可见
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(other)
+    repo = MemoryGraphRepository(engine=engine).for_user(other)
     assert repo.find_entity_by_name(USER_ENTITY_NAME).attributes[ATTR_USERNAME] == "bob"
 
 
 def test_existing_node_attributes_updated_only_on_change(engine):
     svc = make_svc(engine)
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
 
     first = svc.sync_user_node(TEST_USER_ID, "alice", "")
     assert first.attributes[ATTR_NICKNAME] == "alice"        # 空昵称回落 username
@@ -56,7 +56,7 @@ def test_existing_node_attributes_updated_only_on_change(engine):
 
 def test_existing_attributes_beyond_account_are_preserved(engine):
     svc = make_svc(engine)
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     node = svc.sync_user_node(TEST_USER_ID, "alice", "小爱")
     node.attributes = {**node.attributes, "merge_blocklist": ["张三"]}
     repo.upsert_entity(node)

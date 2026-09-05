@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.components.memory import MemoryConsolidationService, MemoryRecallService
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.models.domain.memory import MemoryEntity, MemoryStatement
 from app.domain.memory import MemoryVectorHit
 
@@ -21,7 +21,7 @@ from conftest import TEST_USER_ID, StubUsageService
 
 def _service(engine, llm, vector=None) -> MemoryConsolidationService:
     return MemoryConsolidationService(
-        memory_repo=SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID),
+        memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=vector or FakeMemoryVectorIndex(),
         model_factory=FakeModelFactory(llm),
         app_config=make_service_config(),
@@ -60,7 +60,7 @@ def test_self_introduction_never_creates_entity(engine):
 
 def test_known_self_name_routes_followup_facts_to_user_node(engine):
     """后续轮次直呼其名（张三的项目…）：主体归到用户节点，不再裂新实体。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     repo.upsert_entity(MemoryEntity(name="用户", entity_type="PERSON",
                                     is_user=True, aliases=["张三"]))
     extraction = json.dumps({
@@ -83,7 +83,7 @@ def test_known_self_name_routes_followup_facts_to_user_node(engine):
 
 def test_roster_ref_id_reuses_existing_company(engine):
     """「我的公司是广东禹通」且名册含全称实体：ref_id 直取，别名回填，零新实体。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     company = repo.upsert_entity(MemoryEntity(
         name="广东禹通互联网科技有限公司", entity_type="ORG"))
     vector = FakeMemoryVectorIndex(
@@ -109,7 +109,7 @@ def test_roster_ref_id_reuses_existing_company(engine):
 
 def _grey_zone_fixtures(engine, *, cosine):
     """种子全称公司 + 向量替身（余弦落灰度带的候选）。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     company = repo.upsert_entity(MemoryEntity(
         name="广东禹通互联网科技有限公司", entity_type="ORG"))
     vector = FakeMemoryVectorIndex(
@@ -183,7 +183,7 @@ def test_grey_zone_below_lower_bound_skips_llm(engine):
 
 def test_grey_zone_type_conflict_overrides_adjudication(engine):
     """语义裁决通过但类型冲突：护栏仍拒绝（裁决不越类型护栏）。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     person = repo.upsert_entity(MemoryEntity(name="王小明", entity_type="PERSON"))
     vector = FakeMemoryVectorIndex(
         preset_hits=[MemoryVectorHit(kind="entity", ref_id=person.id, score=0.9)],
@@ -211,7 +211,7 @@ def test_grey_zone_type_conflict_overrides_adjudication(engine):
 # ==================== 读路径同规：expand 锚点 ====================
 
 def test_expand_anchor_resolves_via_grey_zone_adjudication(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     company = repo.upsert_entity(MemoryEntity(
         name="广东禹通互联网科技有限公司", entity_type="ORG"))
     stmt = repo.insert_statement(MemoryStatement(

@@ -11,7 +11,7 @@ invalidated_at 是系统取代时刻（transaction time），time_remark 兜住
 
 «作用域»：user_id 落在 entity/statement/episode 三表（episode_link 经
 episode 继承归属）。v1 设计为单用户全局，引入用户模块后改为用户级隔离，
-所有读写路径必须携带 user_id 过滤（见 components/memory/repositories）。
+所有读写路径必须携带 user_id 过滤（见 adapters/persistence/memory_graph_repository.py）。
 """
 
 from datetime import datetime
@@ -78,7 +78,7 @@ class MemoryStatement(TimeFieldMixin, SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: UUID = Field(index=True, description="归属用户（users.id）；冗余自 subject 实体以省召回路径 join")
     subject_id: int = Field(foreign_key="memory_entity.id", index=True)
-    predicate: str = Field(description="受控词表谓词（基数规则见 components/memory/internal/vocab.py）")
+    predicate: str = Field(description="受控词表谓词（基数规则见 domain/memory/vocab.py）")
     object_entity_id: Union[int, None] = Field(default=None, foreign_key="memory_entity.id")
     object_text: Union[str, None] = Field(default=None, description="客体为字面量时取值")
     summary: str = Field(description="自然语言整句，嵌入与展示源")

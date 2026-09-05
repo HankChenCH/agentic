@@ -21,8 +21,9 @@ from langchain.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field, model_validator
 
-from app.components.memory.internal.renderer import is_internal_ref, strip_internal_refs
-from app.components.memory.internal.vocab import cardinality
+from app.components.memory.internal.renderer import strip_internal_refs
+from app.domain.memory.vocab import is_internal_ref
+from app.domain.memory.vocab import cardinality
 from app.models.domain.agentic import AgenticConversationMessage, AgenticMessageType
 from app.models.domain.memory import MemoryEntity
 

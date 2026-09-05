@@ -1,8 +1,7 @@
 """召回块：两级记忆召回——build_fast_context 快注 + 深度三件套。
 
-组件自内聚惯例：存取经注入的抽象 MemoryRepository（当前绑定 SQLite 图谱
-实现）；向量适配器自 services/domain/memory 注入（components→domain 合法
-边）。快注纯 SQL 直读+评分截断，零 LLM/embedding，由 BaseAgent._input 每轮
+组件自内聚惯例：存取经注入的 ``MemoryGraphRepositoryPort`` 领域端口（实现住
+adapters/persistence）；向量适配器经 domain 端口注入（components→domain 合法边）。快注纯 SQL 直读+评分截断，零 LLM/embedding，由 BaseAgent._input 每轮
 组装进 system prompt（常驻摘要，非工具）；timeline/expand/state_at 深度
 工具由 manifest.py 薄封装成 agent 可调用的闭包。会话内已投喂的记忆经
 SessionInjectRegistry 登记，深度工具只返回增量。expand 的锚点解析复用
@@ -25,7 +24,7 @@ from app.components.memory.internal.extraction import (
     adjudicate_entity_merge,
     resolve_time_hint,
 )
-from app.components.memory.repositories import MemoryRepository
+from app.domain.memory.ports import MemoryGraphRepositoryPort
 from app.components.memory.internal.scoring import ScoreWeights, ScorableItem, score_item
 from app.domain.memory import KIND_EPISODE, MemoryVectorIndexPort
 
@@ -77,7 +76,7 @@ class MemoryRecallService:
     零 LLM：快注纯 SQL 直读，三件套只做向量检索/时间切片 + 渲染。
     """
 
-    memory_repo: MemoryRepository
+    memory_repo: MemoryGraphRepositoryPort
     vector_index: MemoryVectorIndexPort
     app_config: AppConfig
     # 灰度带锚点裁决用的裸模型工厂（惯例同 consolidation；单测传 None，
@@ -242,7 +241,7 @@ class MemoryRecallService:
             importance=score_cfg.importance_weight,
         )
 
-    def _anchor_adjudicator(self, repo: MemoryRepository):
+    def _anchor_adjudicator(self, repo: MemoryGraphRepositoryPort):
         """expand 锚点的灰度带语义裁决回调；灰度带关闭或无模型工厂时返回 None。"""
         if self.model_factory is None or self.app_config.memory.resolution.grey_zone_lower <= 0:
             return None

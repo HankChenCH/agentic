@@ -17,7 +17,8 @@
 import logging
 from typing import Callable
 
-from app.components.memory.repositories import MemoryRepository
+from app.domain.memory.ports import MemoryGraphRepositoryPort
+from app.domain.memory.vocab import entity_content
 from app.models.domain.memory import EntityType, MemoryEntity
 from app.domain.memory import KIND_ENTITY, MemoryVectorIndexPort
 
@@ -28,12 +29,6 @@ _VECTOR_CANDIDATES = 3
 
 # 灰度带语义裁决回调：（指称, 期望类型, 灰度带候选行）→ 命中实体 id | None
 MergeAdjudicator = Callable[[str, str | None, list[MemoryEntity]], int | None]
-
-
-def entity_content(row: MemoryEntity) -> str:
-    """实体档案文本：向量写入与余弦判定共用同一内容（name+aliases）。"""
-    alias_bit = f"（{'、'.join(row.aliases)}）" if row.aliases else ""
-    return f"{row.name}{alias_bit}"
 
 
 def merge_blocklist(row: MemoryEntity) -> set[str]:
@@ -48,7 +43,7 @@ def block_paired(a: MemoryEntity, b: MemoryEntity) -> bool:
     return bool(merge_blocklist(a) & names_b) or bool(merge_blocklist(b) & names_a)
 
 
-def exact_entity_match(ref: str, memory_repo: MemoryRepository) -> MemoryEntity | None:
+def exact_entity_match(ref: str, memory_repo: MemoryGraphRepositoryPort) -> MemoryEntity | None:
     """精确匹配：规范名 → 别名（入参先去空白）。"""
     text = ref.strip()
     if not text:
@@ -59,7 +54,7 @@ def exact_entity_match(ref: str, memory_repo: MemoryRepository) -> MemoryEntity 
 def vector_entity_match(
     ref: str,
     expected_type: str | None,
-    memory_repo: MemoryRepository,
+    memory_repo: MemoryGraphRepositoryPort,
     vector_index: MemoryVectorIndexPort,
     threshold: float,
     grey_zone_lower: float = 0.0,
@@ -158,7 +153,7 @@ def _guard_type(
 
 def find_entity_by_ref(
     ref: str,
-    memory_repo: MemoryRepository,
+    memory_repo: MemoryGraphRepositoryPort,
     vector_index: MemoryVectorIndexPort,
     threshold: float,
     grey_zone_lower: float = 0.0,

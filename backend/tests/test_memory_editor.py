@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.components.memory.admin import MemoryRepositoryEditor
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.exceptions.memory import (
     MemoryInvalidParamError,
     MemoryNameConflictError,
@@ -27,9 +27,9 @@ NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 LATER = datetime(2026, 8, 29, 9, 0, tzinfo=timezone.utc)
 
 
-def _repo(engine) -> SqliteGraphMemoryRepository:
+def _repo(engine) -> MemoryGraphRepository:
     # 作用域视图：插入行自动钉归属（与用户侧行程一致的全局算子禁入语义）
-    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    return MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:

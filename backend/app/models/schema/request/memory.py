@@ -13,7 +13,7 @@ class StatementCreateRequest(BaseModel):
     subjectEntityId: int | None = Field(default=None, description="主体实体 id")
     subjectName: str | None = Field(default=None, min_length=1, max_length=100, description="主体名称（不存在则按此名新建实体）")
     subjectEntityType: str = Field(default="OTHER", description="仅新建主体时生效的实体类型")
-    predicate: str = Field(min_length=1, max_length=50, description="谓词（受控词表，基数规则见 components/memory/internal/vocab.py）")
+    predicate: str = Field(min_length=1, max_length=50, description="谓词（受控词表，基数规则见 domain/memory/vocab.py）")
     objectEntityId: int | None = Field(default=None, description="客体实体 id（与 objectText 二选一）")
     objectText: str | None = Field(default=None, min_length=1, max_length=200, description="字面量客体（与 objectEntityId 二选一）")
     summary: str | None = Field(default=None, min_length=1, max_length=300, description="整句表述；缺省按规范句式组装")

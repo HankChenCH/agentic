@@ -10,7 +10,7 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.components.memory.repositories import MemoryRepository
+from app.domain.memory.ports import MemoryGraphRepositoryPort
 from app.models.domain.memory import EntityType, MemoryEntity, MemoryOrigin
 from app.domain.user.ports import UserNodeSyncPort
 
@@ -31,7 +31,7 @@ def _profile_attrs(username: str, nickname: str) -> dict:
 class UserNodeSyncService:
     """把账号 profile 同步进当前用户的记忆「用户」节点（幂等，无变化不写）。"""
 
-    memory_repo: MemoryRepository
+    memory_repo: MemoryGraphRepositoryPort
 
     def sync_user_node(self, user_id: UUID, username: str, nickname: str) -> MemoryEntity:
         """在 user_id 作用域内查找/创建「用户」节点并回填账号 attributes。"""

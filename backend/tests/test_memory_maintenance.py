@@ -7,7 +7,7 @@ import pytest
 from sqlmodel import Session
 
 from app.components.memory.admin import MemoryRepositoryEditor
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.exceptions.memory import MemoryInvalidParamError
 from app.models.domain.memory import (
     MemoryEntity,
@@ -26,8 +26,8 @@ NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
 YESTERDAY = NOW - timedelta(days=1)
 
 
-def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+def _repo(engine) -> MemoryGraphRepository:
+    return MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:

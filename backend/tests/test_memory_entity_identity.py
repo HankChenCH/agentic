@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.components.memory.admin import MemoryRepositoryEditor
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.components.memory import MemoryConsolidationService
 from app.exceptions.memory import (
     MemoryInvalidParamError,
@@ -38,8 +38,8 @@ from fakes_memory import (
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
 
 
-def _repo(engine) -> SqliteGraphMemoryRepository:
-    return SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+def _repo(engine) -> MemoryGraphRepository:
+    return MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
 
 
 def _editor(engine) -> MemoryRepositoryEditor:

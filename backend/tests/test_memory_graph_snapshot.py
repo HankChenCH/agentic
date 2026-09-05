@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 
 from app.components.memory.admin import MemoryRepositoryGraphReader
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.exceptions.memory import MemoryInvalidTimeParamError
 from app.models.domain.memory import (
     MemoryEntity,
@@ -23,7 +23,7 @@ from conftest import TEST_USER_ID
 
 
 def _world(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     user = repo.upsert_entity(MemoryEntity(name="用户", entity_type="PERSON", is_user=True))
     boss = repo.upsert_entity(MemoryEntity(name="李总", entity_type="PERSON"))
 
@@ -58,7 +58,7 @@ def _world(engine):
 
 
 def _service(engine) -> MemoryGraphService:
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     return MemoryGraphService(reader=MemoryRepositoryGraphReader(memory_repo=repo))
 
 
@@ -114,7 +114,7 @@ def test_invalid_at_raises_business_error(engine):
 
 
 def test_limit_caps_collections(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     user = repo.upsert_entity(MemoryEntity(name="用户", entity_type="PERSON", is_user=True))
     for index in range(4):
         repo.insert_statement(MemoryStatement(

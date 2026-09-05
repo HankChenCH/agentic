@@ -15,7 +15,8 @@
     （SQL 是事实源，``rebuild-index`` CLI 可兜底对账）；
   - MANUAL 来源在此产生：人工事实享受裁决层全链路保护（LLM 恒 SKIP）。
 - ``MemoryRepositoryGraphReader`` 是只读薄委托：把「领域层拿得到只读面」
-  与「数据访问收敛在组件仓储」两个约束同时满足——不复制任何查询逻辑。
+  与「数据访问收敛在 adapters/persistence 仓储」两个约束同时满足——不复制
+  任何查询逻辑。
 """
 
 from dataclasses import dataclass, field
@@ -24,9 +25,7 @@ from uuid import UUID
 
 from wireup import injectable
 
-from app.components.memory.internal import resolution
-from app.components.memory.internal.vocab import fact_summary
-from app.components.memory.repositories import MemoryRepository
+from app.domain.memory.vocab import entity_content, fact_summary
 from app.exceptions.memory import (
     MemoryConstraintConflictError,
     MemoryInvalidParamError,
@@ -59,6 +58,7 @@ from app.domain.memory.ports import (
     FactWrite,
     MemoryEditor,
     MemoryGraphReader,
+    MemoryGraphRepositoryPort,
     StatementMutation,
 )
 
@@ -73,7 +73,7 @@ class MemoryRepositoryEditor:
     他人记忆（他人行在作用域仓储一律视为不存在 → 3xxx 业务异常）。
     """
 
-    memory_repo: MemoryRepository
+    memory_repo: MemoryGraphRepositoryPort
     vector_index: MemoryVectorIndexPort
     # 作用域标记：不进 __init__（init=False），wireup 不感知；单例恒 None（维护
     # CLI 兜底），作用域视图由 for_user 构造后回填。
@@ -487,8 +487,8 @@ class MemoryRepositoryEditor:
 
     @staticmethod
     def _entity_entry(row: MemoryEntity) -> VectorEntry:
-        # 实体向量写入的档案文本单源在 resolution.entity_content（与消歧判定同内容）
-        return VectorEntry(KIND_ENTITY, row.id, resolution.entity_content(row), None, None)
+        # 实体向量写入的档案文本单源在 domain.memory.vocab.entity_content（与消歧判定同内容）
+        return VectorEntry(KIND_ENTITY, row.id, entity_content(row), None, None)
 
 
 def _naive_utc(value: datetime) -> datetime:
@@ -499,7 +499,7 @@ def _naive_utc(value: datetime) -> datetime:
 @injectable(as_type=MemoryGraphReader)
 @dataclass
 class MemoryRepositoryGraphReader:
-    memory_repo: MemoryRepository
+    memory_repo: MemoryGraphRepositoryPort
     user_id: UUID | None = field(default=None, init=False, compare=False)
 
     def for_user(self, user_id: UUID) -> "MemoryRepositoryGraphReader":

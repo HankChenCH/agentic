@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from app.components.memory.internal.extraction import ExtractedEntity
 from app.components.memory import MemoryConsolidationService
 from app.components.memory.ability.consolidation import USER_ENTITY_NAME
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.models.domain.memory import EntityType, MemoryEntity
 from app.domain.memory import MemoryVectorHit
 
@@ -17,7 +17,7 @@ NOW = datetime(2026, 8, 27, tzinfo=timezone.utc)
 
 def _service(engine, vector=None):
     return MemoryConsolidationService(
-        memory_repo=SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID),
+        memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=vector or FakeMemoryVectorIndex(),
         model_factory=None,
         app_config=make_service_config(),
@@ -53,7 +53,7 @@ def test_alias_path_resolves_existing(engine):
 
 def test_cosine_above_threshold_merges_even_with_max_fusion_score(engine):
     """合并判定只认客户端余弦；search 融合分给到满分也不影响。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     similar_row = repo.upsert_entity(MemoryEntity(name="王小明", entity_type="PERSON"))
     vector = FakeMemoryVectorIndex(
         preset_hits=[MemoryVectorHit(kind="entity", ref_id=similar_row.id, score=1.0)],
@@ -74,7 +74,7 @@ def test_incident_fusion_score_1_but_cosine_044_never_merges(engine):
 
     真实 bge-m3 余弦仅 0.44 —— 新判定下必须新建实体、不得污染公司档案。
     """
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     company = repo.upsert_entity(MemoryEntity(
         name="广东禹通互联网科技有限公司", entity_type="ORG", aliases=["禹通"]))
     vector = FakeMemoryVectorIndex(
@@ -93,7 +93,7 @@ def test_incident_fusion_score_1_but_cosine_044_never_merges(engine):
 
 def test_type_conflict_rejects_merge_below_no_similarity(engine):
     """余弦达标但实体类型冲突（且双方均非 OTHER）→ 拒绝合并。"""
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     person = repo.upsert_entity(MemoryEntity(name="王小明", entity_type="PERSON"))
     vector = FakeMemoryVectorIndex(
         preset_hits=[MemoryVectorHit(kind="entity", ref_id=person.id, score=0.9)],

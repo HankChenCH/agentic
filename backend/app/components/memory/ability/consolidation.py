@@ -9,9 +9,8 @@ resolution 三层漏斗 Tier2：精确/别名 → 强余弦直并 → 灰度带 
 best-effort）。由 TurnFinalizer 第三步在后台 daemon 线程调用；任何一环
 失败都不抛出（调用方另有兜底），只返回已落库条目。
 
-组件自内聚惯例：存取经注入的抽象 MemoryRepository（当前绑定 SQLite 图谱
-实现）；向量适配器自 services/domain/memory 注入（components→domain 合法
-边）；抽取走 ModelFactory 裸模型而非 AgentFactory——memory 组件不得依赖
+组件自内聚惯例：存取经注入的 ``MemoryGraphRepositoryPort`` 领域端口（实现住
+adapters/persistence）；向量适配器经 domain 端口注入（components→domain 合法边）；抽取走 ModelFactory 裸模型而非 AgentFactory——memory 组件不得依赖
 agents（智能体工具装配会反向依赖本组件），否则形成包级环。
 """
 
@@ -26,7 +25,6 @@ from wireup import injectable
 from app.core.config import AppConfig
 from app.adapters.llm import ModelFactory
 from app.adapters.llm.usage_tracking import UsageTrackingChatModel
-from app.components.memory.repositories import MemoryRepository
 from app.components.memory.internal.extraction import (
     ExtractionResult,
     ExtractedEntity,
@@ -40,12 +38,13 @@ from app.components.memory.internal.extraction import (
     resolve_time_hint,
     statement_digest,
 )
-from app.components.memory.internal import renderer, resolution
-from app.components.memory.internal.vocab import fact_summary
+from app.components.memory.internal import resolution
+from app.domain.memory.vocab import entity_content, fact_summary, is_internal_ref
 from app.domain.memory import (
     KIND_ENTITY,
     KIND_EPISODE,
     KIND_STATEMENT,
+    MemoryGraphRepositoryPort,
     MemoryVectorIndexPort,
     VectorEntry,
 )
@@ -81,7 +80,7 @@ logger = logging.getLogger(__name__)
 class MemoryConsolidationService:
     """收尾块：remember 巩固管线——抽取→消歧→裁决→落库+向量同步。"""
 
-    memory_repo: MemoryRepository
+    memory_repo: MemoryGraphRepositoryPort
     vector_index: MemoryVectorIndexPort
     model_factory: ModelFactory
     app_config: AppConfig
@@ -164,7 +163,7 @@ class MemoryConsolidationService:
             # 身份归并回填了用户别名：档案文本变了，向量随写
             touched_entities[user_node.id] = user_node
         vector_entries.extend(
-            VectorEntry(KIND_ENTITY, row.id, resolution.entity_content(row), None, None)
+            VectorEntry(KIND_ENTITY, row.id, entity_content(row), None, None)
             for row in touched_entities.values()
         )
 
@@ -224,7 +223,7 @@ class MemoryConsolidationService:
 
     def _resolve_entities(
         self, candidates: tuple[ExtractedEntity, ...],
-        repo: MemoryRepository, index: MemoryVectorIndexPort,
+        repo: MemoryGraphRepositoryPort, index: MemoryVectorIndexPort,
         *, user_node: MemoryEntity | None = None,
         identity_names: frozenset[str] = frozenset(),
         skip_keys: frozenset[str] = frozenset(),
@@ -246,7 +245,7 @@ class MemoryConsolidationService:
         grey_lower = self.app_config.memory.resolution.grey_zone_lower
         adjudicator = self._merge_adjudicator(repo, model) if (model is not None and grey_lower > 0) else None
         for candidate in candidates:
-            if renderer.is_internal_ref(candidate.name):
+            if is_internal_ref(candidate.name):
                 logger.warning("跳过内部溯源引用形态的候选实体：%r", candidate.name)
                 continue
             if candidate.key in skip_keys:
@@ -282,7 +281,7 @@ class MemoryConsolidationService:
                     candidate.name, candidate.entity_type, repo, index, threshold,
                     grey_zone_lower=grey_lower, merge_adjudicator=adjudicator,
                 )
-            clean_aliases = [a for a in candidate.aliases if not renderer.is_internal_ref(a)]
+            clean_aliases = [a for a in candidate.aliases if not is_internal_ref(a)]
             if hit is None:
                 hit = repo.upsert_entity(MemoryEntity(
                     entity_type=candidate.entity_type,
@@ -299,7 +298,7 @@ class MemoryConsolidationService:
             resolved[candidate.key] = hit
         return resolved
 
-    def _load_roster(self, repo: MemoryRepository, index: MemoryVectorIndexPort, transcript: str) -> list:
+    def _load_roster(self, repo: MemoryGraphRepositoryPort, index: MemoryVectorIndexPort, transcript: str) -> list:
         """既有实体名册（Tier1）：向量按本轮 transcript 提名，供抽取 prompt 归指。
 
         提名失败/关闭返回空（prompt 省名册节，抽取退回无状态行为）；用户
@@ -315,7 +314,7 @@ class MemoryConsolidationService:
         rows = repo.get_entities([h.ref_id for h in hits])
         return [row for row in rows.values() if not row.is_user]
 
-    def _user_identity_names(self, repo: MemoryRepository, user_node: MemoryEntity) -> frozenset[str]:
+    def _user_identity_names(self, repo: MemoryGraphRepositoryPort, user_node: MemoryEntity) -> frozenset[str]:
         """用户本人已知称呼全集：节点名/别名 + 账号 username/nickname + 姓名/称呼陈述。
 
         账号字段键与 user_node.py 的同步口径一致（字面量，避免环导入）。
@@ -336,7 +335,7 @@ class MemoryConsolidationService:
                 if target is not None:
                     names.add(target.name)
         return frozenset(
-            n for n in names if n and not renderer.is_internal_ref(n)
+            n for n in names if n and not is_internal_ref(n)
         )
 
     def _self_name_literals(self, extracted: ExtractionResult) -> dict[str, str]:
@@ -349,11 +348,11 @@ class MemoryConsolidationService:
             if not fact.object_key or fact.object_key == "user":
                 continue
             name = _clip_text(names_by_key.get(fact.object_key, fact.object_key), 60)
-            if name and not renderer.is_internal_ref(name):
+            if name and not is_internal_ref(name):
                 literals.setdefault(fact.object_key, name)
         return literals
 
-    def _merge_adjudicator(self, repo: MemoryRepository, model) -> resolution.MergeAdjudicator | None:
+    def _merge_adjudicator(self, repo: MemoryGraphRepositoryPort, model) -> resolution.MergeAdjudicator | None:
         """灰度带语义裁决回调（Tier2）：带候选既有事实档案调 LLM 判同一性。"""
         if model is None:
             return None
@@ -366,7 +365,7 @@ class MemoryConsolidationService:
 
         return adjudicate
 
-    def _ensure_user_entity(self, repo: MemoryRepository) -> MemoryEntity:
+    def _ensure_user_entity(self, repo: MemoryGraphRepositoryPort) -> MemoryEntity:
         """每用户一个「用户」节点（is_user=True）：作用域内按规范名查找/创建，
         消歧合并永不参与被吞并的保护语义由 admin 面沿用（不变）。"""
         node = repo.find_entity_by_name(USER_ENTITY_NAME)
@@ -418,7 +417,7 @@ class MemoryConsolidationService:
             ))
         return paired
 
-    def _apply_decision(self, pair: PairedFact, decision: FactDecision, by_id, live_subject, now, repo: MemoryRepository) -> MemoryStatement | None:
+    def _apply_decision(self, pair: PairedFact, decision: FactDecision, by_id, live_subject, now, repo: MemoryGraphRepositoryPort) -> MemoryStatement | None:
         # 身份重复保险：无论裁决结果如何，同主体同谓词同客体的 ACTIVE 行不重复插入
         if any(
             row.predicate == pair.fact.predicate

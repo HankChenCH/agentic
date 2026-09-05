@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from app.components.memory import MemoryRecallService
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.models.domain.memory import MemoryEntity, MemoryStatement
 
 from fakes_memory import FakeMemoryVectorIndex, make_service_config
@@ -16,7 +16,7 @@ THREAD = uuid4()
 
 def _service(engine, **config_overrides):
     return MemoryRecallService(
-        memory_repo=SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID),
+        memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=FakeMemoryVectorIndex(),
         app_config=make_service_config(**config_overrides),
         model_factory=None,
@@ -43,7 +43,7 @@ def _rendered_ids(block: str) -> list[int]:
 
 
 def test_smalltalk_and_disabled_short_circuit(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     svc = _service(engine)
     _seed(repo, "Python")
 
@@ -52,7 +52,7 @@ def test_smalltalk_and_disabled_short_circuit(engine):
 
 
 def test_fast_context_damps_cold_items_without_bumping(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     cold = _seed(repo, "钓鱼", importance=0.2, last_active=NOW - timedelta(days=120))
     hot = _seed(repo, "Python", importance=0.9)
     stale_hot = _seed(repo, "C++", importance=0.9, access=6)
@@ -72,7 +72,7 @@ def test_fast_context_damps_cold_items_without_bumping(engine):
 
 
 def test_fast_block_is_stable_and_marks_registry_for_tools(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     a = _seed(repo, "Python")
     b = _seed(repo, "游泳")
 
@@ -88,6 +88,6 @@ def test_fast_block_is_stable_and_marks_registry_for_tools(engine):
 
 
 def test_disabled_engine_yields_empty_even_with_rows(engine):
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     _seed(repo, "Python")
     assert _service(engine, enabled=False).build_fast_context("任何问题", TEST_USER_ID, THREAD) == ""

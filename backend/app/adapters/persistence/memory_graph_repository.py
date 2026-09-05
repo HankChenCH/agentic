@@ -1,9 +1,10 @@
-"""SQLite 图谱存取策略：复用共享 db 基建注入的 Engine。
+"""SQLite 图谱仓储：``MemoryGraphRepositoryPort`` 的持久化实现。
 
-逐方法短会话（``expire_on_commit=False``）沿用既有惯例；当前量级下个别
-全表扫描（别名消歧）可接受，策略升级时新增实现类换绑即可。
+复用共享 db 基建注入的 Engine。逐方法短会话（``expire_on_commit=False``）
+沿用既有仓储惯例；当前量级下个别全表扫描（别名消歧）可接受，策略升级时
+新增实现类换绑即可。
 
-用户作用域：注入实例 ``user_id=None``（全局算子视角，仅维护 CLI 使用）；
+用户作用域：注入实例 ``user_id=None``（全局算子视角，仅维护链路使用）；
 ``for_user(uid)`` 返回钉死归属的轻量副本（Engine 共享、按调用构造，无并发
 共享状态）。作用域内的读写强制见各方法——id 直取命中他人行视为不存在、
 新行归属钉死、复合纠错先验范围成员，跨用户访问不留旁路。
@@ -25,13 +26,13 @@ from app.models.domain.memory import (
     MemoryEpisodeLink,
     MemoryStatement,
 )
-from app.components.memory.repositories.base import MemoryRepository
-from app.components.memory.internal.vocab import fact_summary
+from app.domain.memory.ports import MemoryGraphRepositoryPort
+from app.domain.memory.vocab import fact_summary
 
 
-@injectable(as_type=MemoryRepository)
+@injectable(as_type=MemoryGraphRepositoryPort)
 @dataclass
-class SqliteGraphMemoryRepository(MemoryRepository):
+class MemoryGraphRepository(MemoryGraphRepositoryPort):
     """关系库承载图谱事实源；引用完整性（FK/唯一约束）由库层兜底。"""
 
     engine: Engine
@@ -40,8 +41,8 @@ class SqliteGraphMemoryRepository(MemoryRepository):
     # 作用域视图由 for_user 构造后回填。
     user_id: UUID | None = field(default=None, init=False, compare=False)
 
-    def for_user(self, user_id: UUID) -> "SqliteGraphMemoryRepository":
-        scoped = SqliteGraphMemoryRepository(engine=self.engine)
+    def for_user(self, user_id: UUID) -> "MemoryGraphRepository":
+        scoped = MemoryGraphRepository(engine=self.engine)
         scoped.user_id = user_id
         return scoped
 
@@ -68,7 +69,7 @@ class SqliteGraphMemoryRepository(MemoryRepository):
         return self.user_id is None or getattr(row, "user_id", None) == self.user_id
 
     def _stamp_user(self, row):
-        """新行归属钉死到作用域用户（全局视角不改动——CLI 侧自行负责）。"""
+        """新行归属钉死到作用域用户（全局视角不改动——维护链路自行负责）。"""
         if self.user_id is not None:
             row.user_id = self.user_id
         return row

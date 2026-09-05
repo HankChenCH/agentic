@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.components.memory import MemoryConsolidationService
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.models.domain.memory import MemoryOrigin, MemoryStatement, StatementState
 
 from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelFactory, make_service_config
@@ -15,7 +15,7 @@ from conftest import TEST_USER_ID, StubUsageService
 
 def _service(engine, llm) -> MemoryConsolidationService:
     return MemoryConsolidationService(
-        memory_repo=SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID),
+        memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=FakeMemoryVectorIndex(),
         model_factory=FakeModelFactory(llm),
         app_config=make_service_config(),
@@ -66,10 +66,10 @@ def test_single_value_predicate_replaces_old_via_llm_decision(engine):
     created = _service(engine, llm).remember("我改行做后端了", [_msg()], TEST_USER_ID, uuid4(), uuid4())
 
     active = created[0].__class__ and [r for r in
-        SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID).list_active_statements()]
+        MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID).list_active_statements()]
     assert len(active) == 1 and active[0].object_text == "后端开发" and active[0].id != old_row.id
 
-    reloaded_old = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID).statements_by_ids([old_row.id])[0]
+    reloaded_old = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID).statements_by_ids([old_row.id])[0]
     assert reloaded_old.state == StatementState.SUPERSEDED.value
     assert reloaded_old.invalidated_at is not None and reloaded_old.valid_to is not None
 
@@ -89,7 +89,7 @@ def test_manual_origin_cannot_be_superseded(engine):
     result = _service(engine, conflict_llm).remember("我现在是程序员", [_msg()], TEST_USER_ID, uuid4(), uuid4())
 
     # 冲突事实整体放弃：人工事实不可被 LLM 推翻（设计 §4 MANUAL 保护）
-    repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+    repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
     assert result == []
     reloaded = repo.statements_by_ids([manual.id])[0]
     assert reloaded.state == StatementState.ACTIVE.value and reloaded.invalidated_at is None
@@ -107,6 +107,6 @@ def test_programmatic_fallback_when_adjudication_fails(engine):
     done = _service(engine, fallback_llm).remember("转岗成测试工程师了", [_msg()], TEST_USER_ID, uuid4(), uuid4())
 
     states = {row.id: row.state for row in
-              SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID).statements_by_ids([old_id])}
+              MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID).statements_by_ids([old_id])}
     assert states[old_id] == StatementState.SUPERSEDED.value
     assert any(row.object_text == "测试工程师" for row in done)

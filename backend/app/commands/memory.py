@@ -18,8 +18,7 @@ from uuid import UUID
 import typer
 from sqlmodel import Session, select
 
-from app.components.memory.internal.renderer import INTERNAL_REF_TOKEN_RE
-from app.components.memory.internal.resolution import entity_content as _entity_content
+from app.domain.memory.vocab import INTERNAL_REF_TOKEN_RE, entity_content as _entity_content
 from app.core.container import build_sync_container
 from app.adapters.db import DatabaseFactory
 from app.models.domain.memory import (

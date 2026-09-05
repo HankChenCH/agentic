@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.components.memory import MemoryRecallService
-from app.components.memory.repositories.sqlite import SqliteGraphMemoryRepository
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
 from app.models.domain.memory import (
     StatementState,
     MemoryEntity,
@@ -25,7 +25,7 @@ class Harness:
 
     def __init__(self, engine, preset_hits=None):
         self.engine = engine
-        self.repo = SqliteGraphMemoryRepository(engine=engine).for_user(TEST_USER_ID)
+        self.repo = MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID)
         self.vector = FakeMemoryVectorIndex(preset_hits=preset_hits)
         self.svc = MemoryRecallService(
             memory_repo=self.repo, vector_index=self.vector,
