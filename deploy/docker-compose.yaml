@@ -14,13 +14,13 @@
 #   浏览器 ── :8080 ──► client(nginx) ──/api/ 去前缀──► server(uvicorn :8000)
 #                                                     │      ├─ migrate(一次性 Alembic)
 #   postgres  weaviate(:8080/:50051)  rustfs(:9000)  redis ──► worker(celery)
-#        └────────── 中间件四件 include 自 ../server/docker-compose.yaml ──┴─► beat(看门狗)
+#        └────────── 中间件四件 include 自 ../backend/docker-compose.yaml ──┴─► beat(看门狗)
 #   Ollama(embedding) 在宿主机，server/worker 经 host.docker.internal 访问
 #
 # 与 server/docker-compose.yaml（纯中间件 dev 栈）的关系:
 #   - 本文件 include 之，中间件定义单一事实源，不在两处漂移；
 #   - 两者同时运行会撞 container_name / 宿主端口，拉起本栈前先
-#     `cd ../server && docker compose down`。
+#     `cd ../backend && docker compose down`。
 #
 # 环境变量: compose 自动读取同目录 .env（模板见 .env.example）。
 #   DEEPSEEK_API_KEY / AUTH_JWT_SECRET 必填（缺失 compose 解析期即报错，
@@ -47,7 +47,7 @@ name: agentic-stack
 include:
   # 中间件四件（postgres / weaviate / rustfs + rustfs-init / redis），
   # 定义、健康检查、数据卷与 dev 栈完全同源；其端口发布仅绑 127.0.0.1。
-  - ../server/docker-compose.yaml
+  - ../backend/docker-compose.yaml
 
 # server 家族共享环境：容器网络内服务名互访 + 宿主机侧资源经 host.docker.internal
 x-server-environment: &server-environment
@@ -81,7 +81,7 @@ x-server-environment: &server-environment
   OLLAMA_API_URL: ${OLLAMA_API_URL:-http://host.docker.internal:11434}
 
 x-server-common: &server-common
-  image: agentic-server:latest
+  image: agentic-backend:latest
   restart: unless-stopped
   extra_hosts:
     # Linux 宿主机需要（Docker Desktop 自带该域名）；Ollama 走此通道
@@ -94,10 +94,10 @@ x-server-common: &server-common
 
 services:
   # ---------- 一次性：数据库迁移（Alembic upgrade head；应用进程不做 DDL） ----------
-  # 本服务同时承担 agentic-server:latest 镜像的构建入口（其余 server 家族按
+  # 本服务同时承担 agentic-backend:latest 镜像的构建入口（其余 backend 家族按
   # 该 tag 复用，全栈只构建一次）。
   migrate:
-    build: ../server
+    build: ../backend
     <<: *server-common
     restart: "no"
     command: python -m app.cmd.admin db upgrade
@@ -106,7 +106,7 @@ services:
         condition: service_healthy
 
   # ---------- 后端 HTTP（uvicorn 单进程；SSE/取消语义在进程内，禁 scale） ----------
-  server:
+  backend:
     <<: *server-common
     ports:
       - "${SERVER_PORT:-8000}:8000" # 直连调试口；同源反代模式下浏览器流量不经此口
@@ -144,22 +144,22 @@ services:
         condition: service_healthy
 
   # ---------- 前端（nginx 托管 Vite 产物 + 同源反代 /api → server） ----------
-  client:
+  frontend:
     build:
-      context: ../client/agentic-client
+      context: ../frontend
       args:
         # 构建期烘焙进静态产物；同源反代模式免 CORS（跨域直连模式见规范文档）
         VITE_API_BASE: /api
-    image: agentic-client:latest
+    image: agentic-frontend:latest
     restart: unless-stopped
     environment:
       # 运行时可改（改的是 nginx 反代目标，非构建期事实），无需重建镜像
-      BACKEND_URL: http://server:8000
+      BACKEND_URL: http://backend:8000
     ports:
       # 8080 已被 weaviate 占用（见上），前端缺省用 8081
       - "${WEB_PORT:-8081}:80"
     depends_on:
-      server:
+      backend:
         condition: service_healthy
 
 volumes:
