@@ -1,0 +1,15 @@
+# 本机依赖与构建产物（构建阶段内重新安装/生成）
+node_modules/
+dist/
+
+# 版本控制与文档
+.git/
+.github/
+.gitignore
+AGENTS.md
+README.md
+.oxlintrc.json
+
+# 构建自身
+Dockerfile
+.dockerignore
