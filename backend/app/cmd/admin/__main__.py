@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from app.commands import db, memory
+from app.commands import db, human_agent, memory
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -31,6 +31,7 @@ def main(
 
 app.add_typer(memory.app, name="memory", help="记忆域维护")
 app.add_typer(db.app, name="db", help="数据库迁移（Alembic）")
+app.add_typer(human_agent.app, name="human-agent", help="人工客服坐席管理")
 
 
 if __name__ == "__main__":

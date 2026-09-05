@@ -1012,9 +1012,14 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   对齐，改名必须两侧同步）。全链路：
   ① 组装侧 `app/packages/a2ui/messages.py`——信封 builder（`createSurface`/
   `updateComponents`，`version="v0.9"`，标准基础目录 catalogId 即官方 URL）+
-  字面量组件构造器（Text/Row/Column/Card/Divider/Image）；刻意只覆盖静态卡片
-  子集，数据绑定（updateDataModel + `{path}`）与交互回传（Button.action）留作
-  扩展面。② 工具侧以 LangChain `response_format="content_and_artifact"` 返回
+  字面量组件构造器（Text/Row/Column/Card/Divider/Image/Button）；覆盖静态
+  卡片 + 按钮回传子集，数据绑定（updateDataModel + `{path}`）与
+  `functionCall` 型 action 留作扩展面。Button 的点击回传走 `chat.send`
+  事件（`CHAT_SEND_ACTION`，与前端 a2ui-data.tsx 对齐）：前端 actionHandler
+  把 `context.text` 作为用户新消息 `aui.thread.append` 进会话——按钮即
+  「替用户说一句话」，无独立动作执行通道。Generative UI 生成通道见
+  components/a2ui（`a2ui_compose`：LLM 以 A2uiNode 树参数自主构造卡片）。
+  ② 工具侧以 LangChain `response_format="content_and_artifact"` 返回
   二元组：content = 结构化数据 JSON（**LLM 唯一可见面**），artifact =
   `{"a2ui": [消息数组]}`（UI 通道）——试点见 demo 组件的
   `weather_surface.build_weather_surface`（数据形态由 ability/weather 门面
@@ -1027,6 +1032,11 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   表现层不回灌模型，天气数据已随 TOOL_RESULT 回放）；前端历史翻译器把 CUSTOM
   行还原为 data part，刷新后卡片照常渲染。新增一张卡片 = 门面定义结构化数据
   + 组装函数产出消息数组 + 工具走 content_and_artifact，其余机制零改动。
+  卡片观感在前端「宿主主题」收口（`frontend/src/components/assistant-ui/
+  a2ui.css`，`.a2ui-host` 作用域）——后端只管结构与内容语义，颜色/字体/间距
+  由前端令牌接管（亮暗自动跟随）。单色线性图标走 `icon()` builder（fill 型
+  单 path，24x24 视口——960 系图标库须先坐标变换，weather_surface 有现成
+  的 Material Symbols 天气图标表与变换产物）。
 - **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
   制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
   ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/

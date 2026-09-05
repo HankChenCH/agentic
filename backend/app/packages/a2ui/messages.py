@@ -15,11 +15,12 @@ A2UI（Agent to UI，https://a2ui.org）是 agent 向客户端「说 UI」的开
   （``{"id", "component": "Text", ...props}``），布局组件的 children 以**组件 id
   数组**引用，组件树根的 id 固定为 ``"root"``。
 
-本模块只覆盖「静态卡片」子集：``createSurface`` + ``updateComponents`` +
-字面量属性的 Text/Row/Column/Card/Divider/Image 组件。刻意留白的扩展面：
-数据绑定（``updateDataModel`` + ``{"path": ...}`` 动态值）与交互回传
-（``Button.action`` 事件）——出现第一批交互卡片时再引入，避免为用不到的
-协议面预付复杂度。
+本模块覆盖「静态卡片 + 按钮回传」子集：``createSurface`` + ``updateComponents``
++ 字面量属性的 Text/Row/Column/Card/Divider/Image 组件，以及 Button（第一批
+交互组件：``action.event`` 点击回传，context 仅支持字面量值）。刻意留白的
+扩展面：数据绑定（``updateDataModel`` + ``{"path": ...}`` 动态值）与
+``functionCall`` 型 action——出现真实需求时再引入，避免为用不到的协议面
+预付复杂度。
 """
 
 from typing import Any
@@ -70,19 +71,39 @@ def text(component_id: str, value: str, *, variant: str | None = None) -> dict[s
     return component
 
 
-def row(component_id: str, children: list[str], *, align: str | None = None) -> dict[str, Any]:
-    """横向布局；children 是子组件 id 数组，align ∈ start/center/end/stretch。"""
+def row(
+    component_id: str,
+    children: list[str],
+    *,
+    align: str | None = None,
+    justify: str | None = None,
+) -> dict[str, Any]:
+    """横向布局；children 是子组件 id 数组。
+
+    align ∈ start/center/end/stretch（交叉轴），justify ∈ start/center/end/
+    spaceBetween/spaceAround/spaceEvenly/stretch（主轴）。
+    """
     component: dict[str, Any] = {"id": component_id, "component": "Row", "children": children}
     if align is not None:
         component["align"] = align
+    if justify is not None:
+        component["justify"] = justify
     return component
 
 
-def column(component_id: str, children: list[str], *, align: str | None = None) -> dict[str, Any]:
-    """纵向布局；children 是子组件 id 数组，align ∈ start/center/end/stretch。"""
+def column(
+    component_id: str,
+    children: list[str],
+    *,
+    align: str | None = None,
+    justify: str | None = None,
+) -> dict[str, Any]:
+    """纵向布局；children 是子组件 id 数组（枚举同 row）。"""
     component: dict[str, Any] = {"id": component_id, "component": "Column", "children": children}
     if align is not None:
         component["align"] = align
+    if justify is not None:
+        component["justify"] = justify
     return component
 
 
@@ -96,9 +117,53 @@ def divider(component_id: str, *, axis: str = "horizontal") -> dict[str, Any]:
     return {"id": component_id, "component": "Divider", "axis": axis}
 
 
+def icon(component_id: str, svg_path: str) -> dict[str, Any]:
+    """单色矢量图标：svg_path 为 24x24 视口的单条 path 数据（fill 型，
+    颜色由客户端主题的 --a2ui-icon-color 控制）。注意协议渲染端把 viewBox
+    硬编码为 "0 0 24 24"——960 坐标系的图标库（如 Material Symbols）须先
+    做坐标变换，示例见 weather_surface 的天气图标表。"""
+    return {
+        "id": component_id,
+        "component": "Icon",
+        "name": {"svgPath": svg_path},
+    }
+
+
 def image(component_id: str, url: str, *, description: str | None = None) -> dict[str, Any]:
     """图片组件；url 为图片地址（A2UI 不会代拉需要鉴权的资源）。"""
     component: dict[str, Any] = {"id": component_id, "component": "Image", "url": url}
     if description is not None:
         component["description"] = description
+    return component
+
+
+# 点击回传的事件名约定：前端 actionHandler 收到该事件时把 context.text 作为
+# 用户新消息追加进会话（chat-page 侧 a2ui-data.tsx 实现）——按钮即「替用户
+# 说一句话」，不引入独立的动作执行通道
+CHAT_SEND_ACTION = "chat.send"
+
+
+def button(
+    component_id: str,
+    child: str,
+    *,
+    action_name: str,
+    context: dict[str, Any] | None = None,
+    variant: str | None = None,
+) -> dict[str, Any]:
+    """按钮组件（交互回传）：child 是 label 子组件的 id（Button.child 为组件
+    id 引用，与 Card.child 同口径）；action.event 为点击回传事件（name +
+    字面量 context），客户端经 MessageProcessor 的 actionHandler 接收。
+    variant ∈ default/primary/borderless。"""
+    event: dict[str, Any] = {"name": action_name}
+    if context:
+        event["context"] = context
+    component: dict[str, Any] = {
+        "id": component_id,
+        "component": "Button",
+        "child": child,
+        "action": {"event": event},
+    }
+    if variant is not None:
+        component["variant"] = variant
     return component

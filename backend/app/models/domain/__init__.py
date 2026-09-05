@@ -6,6 +6,7 @@ metadata 的场景（alembic env.py、测试 fixture）只需
 """
 
 import app.models.domain.agentic  # noqa: F401
+import app.models.domain.human_agent  # noqa: F401 人工客服坐席表
 import app.models.domain.knowledge  # noqa: F401
 import app.models.domain.memory  # noqa: F401 记忆 v2 四表
 import app.models.domain.usage  # noqa: F401 用量流水

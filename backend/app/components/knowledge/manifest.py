@@ -1,8 +1,10 @@
 """knowledge 组件清单：能力声明（spec）+ 工具构造 + LLM/前端共享契约模型。
 
 四件工具的分工与纪律（引导全收在各工具 description，不散落 agent 系统提示词）：
-LLM 必须先经 knowledge_list 了解可用知识库，knowledge_search 再自选库
-（kb_ids）检索——kb_ids 缺省不检索而是返回引导话术（运行时硬闸，防跨库
+可用知识库清单默认经 system prompt 片段注入（``{knowledge_bases}`` 动态槽，
+ability 门面的 digest 与 knowledge_list 工具共用同一行渲染），agent 的
+knowledge_search 直接从清单选 kb_ids；knowledge_list 是清单缺失/需刷新时的
+备用入口。knowledge_search 缺省不检索而是返回引导话术（运行时硬闸，防跨库
 盲搜退化）；定位读取 knowledge_context 以检索结果的 doc_id + position 为
 句柄精确读取某一片段（无邻域泛化、无通读用法——检索结果已自带命中邻域，
 泛化读取只会诱导「多拉上下文」的工具滥用）；knowledge_document_list 是
@@ -38,7 +40,11 @@ from app.components.base import (
     register_component,
 )
 from app.components.knowledge.ability.navigation import KnowledgeNavigationService
-from app.components.knowledge.ability.retrieval import KnowledgeRetrievalService, RetrievalHit
+from app.components.knowledge.ability.retrieval import (
+    KnowledgeRetrievalService,
+    RetrievalHit,
+    render_kb_lines,
+)
 from app.domain.knowledge.ports import DEFAULT_TOP_K
 
 # 单来源 bbox 条数上限：控制工具结果体积（溯源展示取前若干块已够定位）
@@ -105,24 +111,15 @@ def _build_knowledge_list_tool(component: "KnowledgeComponent") -> StructuredToo
     # 识别注入参数，| None 会导致注入失效）；默认值只为语法/直调兜底
     def knowledge_list(config: RunnableConfig = None) -> str:
         kbs = service.list_visible_knowledge(configurable_user(config))
-        if not kbs:
-            return "当前没有可用的知识库"
-        lines = []
-        for index, kb in enumerate(kbs, start=1):
-            visibility = "公开" if kb.is_public else "私有"
-            line = f"{index}. {kb.name}（id: {kb.id}，{visibility}，{kb.doc_num} 篇文档，{kb.status.value}）"
-            if kb.description:
-                line += f" — {kb.description}"
-            lines.append(line)
-        return "\n".join(lines)
+        return render_kb_lines(kbs) or "当前没有可用的知识库"
 
     return StructuredTool.from_function(
         name="knowledge_list",
         description=(
             "列出当前用户可用的知识库（名称、id、公开/私有、文档数、状态）："
             "自己的私有库与所有人可见的公开库。"
-            "回答资料性/事实性问题前必须先调用本工具了解有哪些知识库——"
-            "knowledge_search 依赖本结果选择 kb_ids（不支持缺省全库检索）；"
+            "system prompt 已附知识库清单时无需调用本工具，直接从清单取 kb_ids 检索；"
+            "仅当清单缺失或需要最新状态时调用。"
             "只有「已启用（enabled）」状态的知识库可被检索。"
         ),
         args_schema=KnowledgeListArgs,
@@ -155,8 +152,8 @@ def _build_knowledge_search_tool(component: "KnowledgeComponent") -> StructuredT
             "在指定的知识库中检索与问题相关的文档片段，返回带出处（文档名/页码/标题路径/原文位置框）的 JSON。"
             "检索为混合检索（语义+关键词），命中片段会连同其前后相邻片段一起做融合排序："
             "score 为混合检索相关度，来源顺序为融合名次（可能与 score 大小略有出入，按顺序引用即可）。"
-            "kb_ids 必填：先调 knowledge_list 了解可用知识库，再从中选择与问题最相关的库 id，"
-            "不支持缺省全库检索。"
+            "kb_ids 必填：从 system prompt 的知识库清单中选取与问题最相关的库 id"
+            "（清单缺失时先调 knowledge_list），不支持缺省全库检索。"
             "query: 检索问题或关键词；"
             "top_k: 返回的最大片段数，默认 4（仅控制返回条数，与内部检索深度无关）。"
             "返回 {\"sources\": [{index, doc_name, page_start, page_end, heading_path, score, content, bboxes, ...}], \"notes\": []}；"

@@ -48,8 +48,9 @@ class BaseAgent(ABC):
       动态槽（如 ``{memory}``）必须以 ``<slot>``/``</slot>`` 信封包裹，每轮由
       动态 prompt 中间件渲染，产出为空则整节移除——模板没有的片段静默失配
       （自动退役），模板加了槽没有片段则构建期报错；
-    - ``prompt_fragments``（默认提供 memory 快注片段）：动态槽渲染字典
-      （占位符名 → ``(PromptContext) -> str``，异常/空串由中间件统一降级）；
+    - ``prompt_fragments``（默认提供 memory 快注 + 知识库清单 + 坐席清单片段，
+      模板加槽即 opt-in）：动态槽渲染字典（占位符名 → ``(PromptContext) ->
+      str``，异常/空串由中间件统一降级）；
     - ``build_tools``（默认无工具）：以组合方式装配能力（如记忆深度回忆、
       知识库检索），能力依赖经构造注入的 ``toolbox`` 获取；
     - ``build_middleware``（默认挂动态 prompt 中间件）：中间件装配扩展点，
@@ -156,15 +157,41 @@ class BaseAgent(ABC):
         return [DynamicSystemPromptMiddleware(template, static_values, fragments)]
 
     def prompt_fragments(self) -> dict[str, PromptFragment]:
-        """动态槽片段字典（扩展点）：占位符名 → 渲染函数。默认提供 memory
-        快注片段；子类增删条目即可增减动态节，模板没有对应占位符的条目自动
-        失效。"""
-        return {"memory": self._memory_fragment}
+        """动态槽片段字典（扩展点）：占位符名 → 渲染函数。默认提供 memory 快注、
+        知识库清单、坐席清单三条片段；子类增删条目即可增减动态节，模板没有
+        对应占位符的条目自动失效（不渲染、零开销）——模板加槽即 opt-in。"""
+        return {
+            "memory": self._memory_fragment,
+            "knowledge_bases": self._knowledge_fragment,
+            "human_agents": self._human_agents_fragment,
+        }
 
     def _memory_fragment(self, pctx: PromptContext) -> str:
         if pctx.ctx is None:
             return ""
         return self._fast_memory_block(pctx.ctx)
+
+    def _knowledge_fragment(self, pctx: PromptContext) -> str:
+        """知识库清单片段（``{knowledge_bases}`` 槽）：当前用户可见库清单，检索
+        直接从清单取 kb_ids，省去先调 knowledge_list 的一轮工具往返。数据每轮
+        现取（含可见性过滤），渲染失败降级为空节。"""
+        if pctx.ctx is None:
+            return ""
+        try:
+            return self.toolbox.knowledge.retrieval.list_visible_knowledge_digest(UUID(pctx.ctx.user_id))
+        except Exception:
+            logger.warning("build knowledge digest fragment failed", exc_info=True)
+            return ""
+
+    def _human_agents_fragment(self, pctx: PromptContext) -> str:
+        """人工客服坐席清单片段（``{human_agents}`` 槽）：在线优先的坐席目录，
+        转人工场景直接从清单选人，省去 human_agent_list 工具往返。"""
+        del pctx  # 坐席是全局资源，无需用户身份
+        try:
+            return self.toolbox.human_agent.directory.list_digest()
+        except Exception:
+            logger.warning("build human agent digest fragment failed", exc_info=True)
+            return ""
 
     def _static_prompt_values(self) -> dict[str, str]:
         """静态槽值（构建期一次）。``{tools}`` = 实际装配工具的「名称 + 首行

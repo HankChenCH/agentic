@@ -23,5 +23,8 @@ class RagAgent(BaseAgent):
         return SYSTEM_PROMPT
 
     def build_tools(self) -> list:
-        # 知识四件 + 记忆三件套经 toolbox 按组件名装配（不含 get_weather）
-        return self.toolbox.tools(self.agentic_id, only={"knowledge", "memory"})
+        # 知识检索两件 + 记忆三件套经 toolbox 按组件名装配（不含 get_weather）；
+        # 知识库清单走 {knowledge_bases} prompt 片段，无需 knowledge_list 工具往返
+        return self.toolbox.tools(
+            self.agentic_id, only={"knowledge"}, tool_names={"knowledge_search", "knowledge_context"}
+        ) + self.toolbox.tools(self.agentic_id, only={"memory"})

@@ -8,16 +8,17 @@ system prompt 客服人设（禁出处禁角标）、脱溯源流投影（Suppor
 """
 
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from langchain_core.messages import AIMessage
 
 from app.agents.builtin.rag.agent import RagAgent  # noqa: F401  (注册副作用对齐)
 from app.agents.builtin.support.agent import SupportAgent
-from app.agents.builtin.support.transformer import SupportToolsTransformer
 from tests.test_rag_agent import (
     ScriptedChatModel,
+    StubDirectory,
     StubRetrieval,
+    _TEST_USER_ID,
     _ctx,
     _hit,
     _toolbox,
@@ -25,8 +26,9 @@ from tests.test_rag_agent import (
 )
 
 SUPPORT_TOOL_NAMES = {
-    "knowledge_list", "knowledge_search", "knowledge_context",
+    "knowledge_search", "knowledge_context",
     "timeline", "expand", "state_at",
+    "a2ui_compose",
 }
 
 _SEARCH_RESULT_JSON = json.dumps({
@@ -44,9 +46,10 @@ def test_support_tools_are_retrieval_subset_and_memory():
     agent = SupportAgent(model=ScriptedChatModel(), toolbox=_toolbox())
     names = {tool.name for tool in agent.build_tools()}
     assert names == SUPPORT_TOOL_NAMES
-    # 不装配库内浏览工具（客服用不上）与演示工具；工具名与 RAG 面无新增——
-    # 不引入会让 LLM 困惑的新工具
+    # 不装配库内浏览工具（客服用不上）与演示工具；清单类工具
+    # （knowledge_list/human_agent_list）已被 prompt 片段取代
     assert "knowledge_document_list" not in names and "get_weather" not in names
+    assert "knowledge_list" not in names and "human_agent_list" not in names
 
 
 def test_support_agent_registered_and_exposed():
@@ -64,6 +67,48 @@ def test_support_prompt_forbids_provenance_and_citations():
     assert system.type == "system"
     assert "knowledge_search" in system.content
     assert "不得" in system.content and "引用角标" in system.content
+
+
+def test_support_prompt_guides_transfer_flow():
+    """转人工引导：坐席来自 prompt 清单、a2ui_compose 生成卡片、诚实边界。"""
+    from app.agents.builtin.support.prompts import SYSTEM_PROMPT
+
+    assert "a2ui_compose" in SYSTEM_PROMPT
+    assert "坐席清单" in SYSTEM_PROMPT
+    assert "human_agent_list" not in SYSTEM_PROMPT
+    assert "action_text" in SYSTEM_PROMPT
+    assert "严禁假装" in SYSTEM_PROMPT
+
+
+def test_support_prompt_renders_kb_and_agent_fragments():
+    """{knowledge_bases} / {human_agents} 动态槽：清单预注入 system prompt
+    （省去清单类工具往返），无数据整节移除。"""
+    from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
+
+    kbs = [KnowledgeBase(
+        user_id=UUID(_TEST_USER_ID), name="国标文件", is_public=True,
+        embedding_model="test-embed", status=KnowledgeStatus.ENABLED, doc_num=7,
+    )]
+    agent = SupportAgent(
+        model=ScriptedChatModel(answers=[AIMessage(content="好")]),
+        toolbox=_toolbox(
+            retrieval=StubRetrieval(kbs=kbs),
+            directory=StubDirectory("- 大头儿子（专属客服，online）擅长：售后"),
+        ),
+    )
+    agent.invoke(_ctx("你好"))
+    system = agent.model.prompts[0][0]
+    assert "<knowledge_bases>" in system.content and "国标文件" in system.content
+    assert "<human_agents>" in system.content and "大头儿子" in system.content
+
+    empty = SupportAgent(
+        model=ScriptedChatModel(answers=[AIMessage(content="好")]),
+        toolbox=_toolbox(),
+    )
+    empty.invoke(_ctx("你好"))
+    empty_system = empty.model.prompts[0][0]
+    assert "<knowledge_bases>" not in empty_system.content
+    assert "<human_agents>" not in empty_system.content
 
 
 def test_rag_prompt_keeps_citation_discipline():

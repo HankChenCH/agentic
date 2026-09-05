@@ -14,8 +14,10 @@ from dataclasses import dataclass
 from langchain_core.tools import StructuredTool
 from wireup import injectable
 
+from app.components.a2ui import A2uiComponent
 from app.components.base import ComponentSpec
 from app.components.demo import DemoComponent
+from app.components.human_agent import HumanAgentComponent
 from app.components.knowledge import KnowledgeComponent
 from app.components.memory import MemoryComponent
 
@@ -28,6 +30,8 @@ class AgentToolbox:
     memory: MemoryComponent
     knowledge: KnowledgeComponent
     demo: DemoComponent
+    human_agent: HumanAgentComponent
+    a2ui: A2uiComponent
 
     def __post_init__(self):
         specs = self.specs
@@ -67,5 +71,7 @@ class AgentToolbox:
             tools = [tool for tool in tools if tool.name in tool_names]
         return tools
 
-    def _components(self) -> tuple[MemoryComponent | KnowledgeComponent | DemoComponent, ...]:
-        return (self.memory, self.knowledge, self.demo)
+    def _components(
+        self,
+    ) -> tuple[MemoryComponent | KnowledgeComponent | DemoComponent | HumanAgentComponent | A2uiComponent, ...]:
+        return (self.memory, self.knowledge, self.demo, self.human_agent, self.a2ui)

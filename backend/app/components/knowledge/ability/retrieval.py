@@ -49,6 +49,23 @@ _RRF_K = 60
 _MAX_RETURN_TOP_K = 20
 
 
+def render_kb_lines(kbs: List[KnowledgeBase]) -> str:
+    """知识库清单的行渲染（knowledge_list 工具与 prompt 片段共用的唯一格式）。
+
+    无库返回空串；每行：序号 + 名称（id、公开/私有、文档数、状态）+ 描述。
+    """
+    if not kbs:
+        return ""
+    lines = []
+    for index, kb in enumerate(kbs, start=1):
+        visibility = "公开" if kb.is_public else "私有"
+        line = f"{index}. {kb.name}（id: {kb.id}，{visibility}，{kb.doc_num} 篇文档，{kb.status.value}）"
+        if kb.description:
+            line += f" — {kb.description}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 @dataclass
 class RetrievalHit:
     """面向引用展示的检索命中：文档名 + 溯源 meta（页码/标题路径/资产 key）。"""
@@ -118,6 +135,15 @@ class KnowledgeRetrievalService:
     def list_visible_knowledge(self, user_id: UUID | None) -> List[KnowledgeBase]:
         """当前用户可见（私有=属主本人 + 公开）且未在删除中的知识库，供 knowledge_list 展示。"""
         return self.kb_repo.list_visible_kbs(user_id)
+
+    def list_visible_knowledge_digest(self, user_id: UUID | None) -> str:
+        """可见知识库的清单摘要（prompt 片段用）：行格式与 knowledge_list 工具一致。
+
+        无可见库返回空串（prompt 侧整节移除）。enabled 状态在行内标注，
+        供模型只从可用库中选 kb_ids。
+        """
+        kbs = self.list_visible_knowledge(user_id)
+        return render_kb_lines(kbs)
 
     def search_for_user(
         self,

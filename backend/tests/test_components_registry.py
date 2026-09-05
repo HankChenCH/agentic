@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import BaseModel
+from types import SimpleNamespace
 
 from app.agents.toolbox import AgentToolbox
 from app.components.base import (
@@ -11,7 +12,9 @@ from app.components.base import (
     describe_capabilities,
     register_component,
 )
+from app.components.a2ui import A2uiComponent
 from app.components.demo import DemoComponent, DemoWeatherService
+from app.components.human_agent import HumanAgentComponent
 from app.components.knowledge import KnowledgeComponent
 from app.components.memory import MemoryComponent
 
@@ -92,7 +95,12 @@ def _fake_component(name: str, tool_names: list[str]):
         )
 
         def tools(self, agentic_id: str):
-            return [f"{name}:{tool_name}@{agentic_id}" for tool_name in tool_names]
+            # 带 .name 属性的轻对象（StructuredTool 的鸭子类型面：name 是
+            # 纯工具名，toolbox 的 tool_names 过滤读它）；origin 供断言区分来源
+            return [
+                SimpleNamespace(name=tool_name, origin=f"{name}:{tool_name}@{agentic_id}")
+                for tool_name in tool_names
+            ]
 
     return _Fake()
 
@@ -102,14 +110,18 @@ def test_toolbox_assembles_all_and_filters_by_component():
         memory=_fake_component("memory", ["timeline"]),
         knowledge=_fake_component("knowledge", ["knowledge_list"]),
         demo=_fake_component("demo", ["get_weather"]),
+        human_agent=_fake_component("human_agent", ["human_agent_list"]),
+        a2ui=_fake_component("a2ui", ["a2ui_compose"]),
     )
-    assert [s.name for s in toolbox.specs] == ["memory", "knowledge", "demo"]
-    assert toolbox.tools("builtin:demo") == [
+    assert [s.name for s in toolbox.specs] == ["memory", "knowledge", "demo", "human_agent", "a2ui"]
+    assert [t.origin for t in toolbox.tools("builtin:demo")] == [
         "memory:timeline@builtin:demo",
         "knowledge:knowledge_list@builtin:demo",
         "demo:get_weather@builtin:demo",
+        "human_agent:human_agent_list@builtin:demo",
+        "a2ui:a2ui_compose@builtin:demo",
     ]
-    assert toolbox.tools("builtin:demo", only={"knowledge"}) == ["knowledge:knowledge_list@builtin:demo"]
+    assert [t.origin for t in toolbox.tools("builtin:demo", only={"knowledge"})] == ["knowledge:knowledge_list@builtin:demo"]
     assert toolbox.spec("memory").name == "memory"
     with pytest.raises(KeyError, match="not in toolbox"):
         toolbox.spec("nope")
@@ -121,19 +133,42 @@ def test_toolbox_rejects_cross_component_tool_collision():
             memory=_fake_component("memory", ["same"]),
             knowledge=_fake_component("knowledge", ["same"]),
             demo=_fake_component("demo", ["get_weather"]),
+            human_agent=_fake_component("human_agent", ["human_agent_list"]),
+            a2ui=_fake_component("a2ui", ["a2ui_compose"]),
         )
 
 
+def test_toolbox_filters_by_tool_names():
+    toolbox = AgentToolbox(
+        memory=_fake_component("memory", ["timeline", "expand"]),
+        knowledge=_fake_component("knowledge", ["knowledge_list"]),
+        demo=_fake_component("demo", ["get_weather"]),
+        human_agent=_fake_component("human_agent", ["human_agent_list"]),
+        a2ui=_fake_component("a2ui", ["a2ui_compose"]),
+    )
+    # ``tool_names`` 过滤后按 origin 断言
+    selected = toolbox.tools(
+        "builtin:support", only={"memory", "knowledge"}, tool_names={"knowledge_list", "timeline", "expand"}
+    )
+    assert [t.origin for t in selected] == [
+        "memory:timeline@builtin:support",
+        "memory:expand@builtin:support",
+        "knowledge:knowledge_list@builtin:support",
+    ]
+
+
 def test_real_components_no_tool_collision_and_assemble():
-    # 真实三组件的装配冒烟：spec 校验不依赖门面服务（服务仅 build 时触达），
+    # 真实五组件的装配冒烟：spec 校验不依赖门面服务（服务仅 build 时触达），
     # 工具名互不冲突且数量与声明一致
     toolbox = AgentToolbox(
         memory=MemoryComponent(recall=None),
         knowledge=KnowledgeComponent(retrieval=None, navigation=None),
         demo=DemoComponent(weather=None),
+        human_agent=HumanAgentComponent(directory=None),
+        a2ui=A2uiComponent(),
     )
     names = [t.name for s in toolbox.specs for t in s.tools]
-    assert len(names) == len(set(names)) == 8
+    assert len(names) == len(set(names)) == 10
 
 
 def test_demo_weather_tool_returns_canned_report():

@@ -25,7 +25,9 @@ from app.agents.builtin.demo.agent import DemoAgent
 from app.agents.builtin.rag.agent import RagAgent
 from app.agents.context import AgentRunContext
 from app.agents.toolbox import AgentToolbox
+from app.components.a2ui import A2uiComponent
 from app.components.demo import DemoComponent
+from app.components.human_agent import HumanAgentComponent
 from app.components.knowledge import KnowledgeComponent
 from app.components.knowledge.ability.retrieval import RetrievalHit
 from app.components.memory import MemoryComponent
@@ -38,7 +40,7 @@ _KB_ID = uuid4()
 _NOW = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
 
 RAG_TOOL_NAMES = {
-    "knowledge_list", "knowledge_search", "knowledge_context", "knowledge_document_list",
+    "knowledge_search", "knowledge_context",
     "timeline", "expand", "state_at",
 }
 DEMO_TOOL_NAMES = {"timeline", "expand", "state_at", "get_weather"}
@@ -91,14 +93,24 @@ class ScriptedChatModel(BaseChatModel):
 
 
 class StubRetrieval:
-    """检索门面替身：按脚本返回（hits, notes），记录调用参数。"""
+    """检索门面替身：按脚本返回（hits, notes)，记录调用参数。
 
-    def __init__(self, result=([], [])):
+    ``kbs`` 供 {knowledge_bases} prompt 片段的清单渲染（None = 无可见库，
+    digest 为空串、整节移除）。
+    """
+
+    def __init__(self, result=([], []), kbs=None):
         self.result = result
+        self.kbs = kbs or []
         self.captured = None
 
     def list_visible_knowledge(self, user_id):
-        return []
+        return self.kbs
+
+    def list_visible_knowledge_digest(self, user_id):
+        from app.components.knowledge.ability.retrieval import render_kb_lines
+
+        return render_kb_lines(self.kbs)
 
     def search_for_user(self, user_id, query, kb_ids=None, top_k=4):
         self.captured = {"user_id": user_id, "query": query, "kb_ids": kb_ids, "top_k": top_k}
@@ -126,6 +138,19 @@ class StubRecall:
         return ""
 
 
+class StubDirectory:
+    """坐席目录替身：digest 固定文案（空串测空节移除）。"""
+
+    def __init__(self, digest=""):
+        self.digest = digest
+
+    def list_agents(self):
+        return []
+
+    def list_digest(self):
+        return self.digest
+
+
 # ---------------------------------------------------------------- helpers
 def _hit(content: str = "RAG 指检索增强生成。") -> RetrievalHit:
     return RetrievalHit(
@@ -134,11 +159,13 @@ def _hit(content: str = "RAG 指检索增强生成。") -> RetrievalHit:
     )
 
 
-def _toolbox(retrieval=None, recall=None) -> AgentToolbox:
+def _toolbox(retrieval=None, recall=None, directory=None) -> AgentToolbox:
     return AgentToolbox(
         memory=MemoryComponent(recall=recall or StubRecall()),
         knowledge=KnowledgeComponent(retrieval=retrieval or StubRetrieval(), navigation=SimpleNamespace()),
         demo=DemoComponent(weather=SimpleNamespace()),
+        human_agent=HumanAgentComponent(directory=directory or StubDirectory()),
+        a2ui=A2uiComponent(),
     )
 
 
@@ -291,6 +318,33 @@ def test_agui_single_message_id_across_tool_rounds():
     assert text_delta == "我来查一下资料。RAG 是检索增强生成 [1]。"
 
 
+def test_system_prompt_renders_knowledge_base_fragment():
+    """{knowledge_bases} 动态槽：有可见库时清单渲染进 system prompt（检索
+    直接取 kb_ids，无需 knowledge_list 工具往返），无库时整节移除。"""
+    from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
+
+    kbs = [KnowledgeBase(
+        user_id=UUID(_TEST_USER_ID), name="国标文件", is_public=True,
+        embedding_model="test-embed", status=KnowledgeStatus.ENABLED,
+        doc_num=7, description="国家标准相关知识",
+    )]
+    agent = RagAgent(
+        model=ScriptedChatModel(answers=[AIMessage(content="好")]),
+        toolbox=_toolbox(retrieval=StubRetrieval(kbs=kbs)),
+    )
+    agent.invoke(_ctx("你好"))
+    system = agent.model.prompts[0][0]
+    assert "<knowledge_bases>" in system.content
+    assert "国标文件" in system.content and "enabled" in system.content
+
+    empty = RagAgent(
+        model=ScriptedChatModel(answers=[AIMessage(content="好")]),
+        toolbox=_toolbox(),
+    )
+    empty.invoke(_ctx("你好"))
+    assert "<knowledge_bases>" not in empty.model.prompts[0][0].content
+
+
 def test_storage_persists_node_tool_call_from_tool_started():
     st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
     st.translate("tools", {
@@ -338,6 +392,8 @@ def test_stream_emits_a2ui_custom_event_for_weather_card():
         memory=MemoryComponent(recall=StubRecall()),
         knowledge=KnowledgeComponent(retrieval=StubRetrieval(), navigation=SimpleNamespace()),
         demo=DemoComponent(weather=DemoWeatherService()),
+        human_agent=HumanAgentComponent(directory=StubDirectory()),
+        a2ui=A2uiComponent(),
     ))
 
     translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
