@@ -13,6 +13,9 @@
   工具调用），前端零适配映射到 assistant-ui。
 - **多轮会话**：历史由服务端权威落库（SQLite / PostgreSQL），每轮从 DB 重建 LLM
   上下文（含工具调用对的重放），而非信任客户端回传的 messages。
+- **用量统计**：`usage_record` 计量流水表（一次 LLM 调用一行，覆盖对话主链路、
+  标题生成与记忆巩固）+ `GET /stats/usage/{summary,daily,records}` 个人用量查询
+  （汇总/按天序列/流水分页，前端管理侧「我的用量」页消费）。
 - **长期记忆**：记忆 v2 双层图谱（实体/双时间轴事实/事件），轮末巩固落库，
   聊天中快注注入 + 深召回三工具。
 - **知识库（RAG）**：PDF 上传 → MinerU 云端解析 → 分块 → bge-m3 嵌入 → Weaviate
@@ -70,7 +73,7 @@ app/
 │   └── domain/               # SQLModel 表模型 = 全系统共享数据形状（既定取舍：
 │                             #   实体即表不拆映射层；业务不变量只在领域服务强制）
 ├── core/                     # config / logging / exceptions / container（组装根保留原位）
-└── exceptions/               # 业务异常 1xxx–5xxx
+└── exceptions/               # 业务异常 1xxx–6xxx
 ```
 
 ## 依赖箭头表（单向，`tests/test_layer_boundaries.py` AST 强制）

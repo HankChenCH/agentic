@@ -99,6 +99,12 @@ text part, `TOOL_CALL_*` → tool-call part), so **do not** write an extra
 adapter layer on the client. When changing either side, keep the event
 sequence/format consistent.
 
+**A2UI**: declarative UI (Google's A2UI v0.9 spec, e.g. the demo agent's
+weather card) rides the same stream as a `CUSTOM` event named `a2ui`, which
+react-ag-ui surfaces as a data part rendered by the registered A2UI renderer.
+The transport/persistence contract lives in the scoped guides (backend
+「A2UI 通道」gotcha / frontend「A2UI 通道」gotcha).
+
 **Auth**: the backend requires JWT Bearer auth (register/login at `/auth/*`)
 for run, conversations, and memory; the client injects the token via an axios
 request interceptor (REST) and a custom `fetch` on the HttpAgent (SSE). See the

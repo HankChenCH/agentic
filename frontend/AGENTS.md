@@ -17,6 +17,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 登出跳转）
 │   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）+ attachments 适配器
 │   │                        #   （ServerImageAttachmentAdapter：图片附件 send 阶段上传后端，成功才放行提交）
+│   ├── services/a2ui.ts     # A2UI 载荷防御性解析（parseA2uiPayload 纯函数）+
+│   │                        #   a2ui-data.tsx（useAssistantDataUI 注册的官方渲染器接线，天气卡片）
 │   ├── stores/              # auth-store.ts（首个 zustand store：token/user + localStorage 持久化，
 │   │                        #   getToken() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
 │   │                        #   缓存 name→中文标题，幂等拉取一次，useToolDisplay 的降级链一环）
@@ -27,6 +29,7 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   + profile-page（/profile 用户资料）
 │   ├── pages/admin/         # 管理侧：admin-home-page（模块启动页）+ knowledge-list-page / knowledge-detail-page
 │   │                        #   / knowledge-document-detail-page + memory-graph-page（React Flow 径向布局，时点回放/详情面板）
+│   │                        #   + usage-stats-page（我的用量：recharts 每日柱状图 + 场景/模型分布 + 流水分页）
 │   ├── components/assistant-ui/  # assistant-ui chat UI (thread, reasoning, markdown-text, tool-*, ...)
 │   ├── components/ui/        # shadcn/ui 原语（base-nova 风格，Base UI 原语；table/input/select/dialog/... ）
 │   ├── components/shared/    # 聊天/管理两侧共用组件：confirm-dialog、dialog-footer、password-input、
@@ -37,6 +40,7 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   edit/identity/maintenance 对话框 + use-memory-graph-actions
 │   ├── hooks/               # use-conversation-list（聊天；初始拉取按登录态门控）+ use-knowledge-list/-base/-documents/-document/-segments
 │   │                        #   （知识库，含 pending/processing/deleting 状态的条件轮询）+ use-memory-graph（快照）
+│   │                        #   + use-usage-stats（用量统计：预置范围 + 汇总/序列/流水并行拉取）
 │   ├── lib/                 # utils.ts (cn())、config.ts (REST_BASE/SSE_URL)、http.ts (axios 信封封装 +
 │   │                        #   请求拦截器注 Bearer/401 登出跳转)、format.ts (文件大小/时间格式化)、
 │   │                        #   admin-modules.ts（管理模块注册表）
@@ -44,7 +48,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
 │       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）、
 │       │                    #   agent-service（GET /agentic/agents 智能体目录，agent-store/选择器消费）、
-│       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）
+│       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）、
+│       │                    #   stats-service（GET /stats/usage/*，契约也是 camelCase 特例）
 │       │                    #   + types.ts（后端 snake_case 镜像类型）+ translators/（后端历史→
 │       │                    #   ThreadMessageLike 翻译器；user 消息 image part 还原为附件卡片）
 ├── .oxlintrc.json
@@ -176,6 +181,23 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
   列表刷新才进入集合，此后继续聊/重生成一律不携带。新会话视图的附件
   加号按选中智能体的 `supportsVision` 显隐；既有会话绑定前端不感知，
   入口保守显示（服务端降级兜底）。
+- **A2UI 通道（声明式 UI 渲染，天气卡片为第一块基石）** → 后端把 A2UI v0.9
+  消息数组（Google 开放标准，a2ui.org）经 ag-ui `CUSTOM` 事件下发，react-ag-ui
+  把 CUSTOM 聚合为 data part（`thread.tsx` 的 `case "data"` 分支），渲染由
+  **name 注册制**解决：`chat-page.tsx` 挂载 `<A2uiDataUI />`（=
+  `useAssistantDataUI({ name: "a2ui", render })`，与 KnowledgeSearchToolUI 的
+  mount-and-register 同模式）。链路：`services/a2ui.ts` 的 `parseA2uiPayload`
+  防御性校验（双形态：对象数组/JSON 字符串；非法整体返回 null）→
+  `components/assistant-ui/a2ui-data.tsx` 把消息数组喂给官方渲染器
+  （`@a2ui/react/v0_9` 的 `MessageProcessor` + `A2uiSurface` + `basicCatalog`，
+  React 19 peer 版本 0.11.0）。样式接线三件事：`injectStyles()` 注入
+  `.a2ui-surface` 结构样式（模块级幂等调用，**组件本身不带该根类名，须自包
+  wrapper**）；调色板 CSS 变量由 basicCatalog 导入时自动注入；A2UI 结构样式
+  带 `all: revert`，卡片内是浏览器默认排版（刻意与 Tailwind 预检隔离）。
+  载荷非法/处理失败降级为折叠 JSON，不渲染半棵组件树。历史回放：
+  `thread-message-translator.ts` 把 CUSTOM 行还原为 data part，刷新后卡片照常
+  渲染。新增卡片类型 = 后端组装新消息数组，前端零改动（渲染器按 name 注册，
+  不按卡片类型分支）。
 - 「停止生成」走**双通道取消**（`agentic-runtime.tsx` 的 `onCancel`）：先
   `POST /agentic/run/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
   工具执行中不可打断的场景），再 `agent.abortRun()` 本地断链（即时取消态 +

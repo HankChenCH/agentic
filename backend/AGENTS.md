@@ -98,7 +98,11 @@ backend/                         # this directory is its own git repo (the works
 │                              domain/memory/admin_service.py 经 ports.MemoryEditor 端口，
 │                              实现在 components/memory/admin.py——用例级事务+定向向量同步；
 │                              身份纠错的归属改写走仓储复合事务 absorb/split_entity，
-│                              拆分双方互写 attributes.merge_blocklist，消歧遇禁令对优先于余弦）
+│                              拆分双方互写 attributes.merge_blocklist，消歧遇禁令对优先于余弦）;
+│                              stats.py -> GET /stats/usage/{summary,daily,records} 个人用量统计
+│                              （汇总/按天序列/流水分页，半开区间 [start,end)，按 UTC 日分桶；
+│                              服务为 domain/usage/usage_service.py，数据源 usage_record
+│                              计量流水表——一行一次 LLM 调用，scene = chat/title/memory）
 ├── application/             # 用例层（原 orchestration 上提）：用户侧行程——agentic_service.py
 │                            #   （AgenticService：run SSE 行程 + cancel_run + begin_shutdown 优雅关闭）
 │                            #   + turn_finalizer.py（轮次收尾：标题/记忆/用户节点，后台线程执行）
@@ -190,7 +194,9 @@ backend/                         # this directory is its own git repo (the works
 │                            #   （AST 强制）——居民 signal/：SignalStore 契约（key 寻址的
 │                            #   分布式 Event：fire/is_fired/reset/wait/get，wait 轮询默认
 │                            #   可被后端覆写；ttl 必选）+ RedisSignalStore（默认绑定）+
-│                            #   InMemorySignalStore（测试/单机）；详见「packages」条目
+│                            #   InMemorySignalStore（测试/单机）；a2ui/：A2UI v0.9 消息
+│                            #   构造库（声明式 UI 的服务端组装侧，含 CUSTOM 事件名约定），
+│                            #   见「A2UI 通道」gotcha；详见「packages」条目
 ├── models/
 │   ├── schema/request/run.py     # RunRequest / RunMessage (camelCase fields for ag-ui；
 │                             #   content 为 str | ag-ui InputContent 数组——多模态口径，
@@ -433,7 +439,7 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   (`BusinessError` base defined in core as the handlers' anchor; concrete
   classes are user-defined in `app/exceptions/` carrying `http_status` +
   int codes: 1xxx conversation, 2xxx agent, 3xxx memory, 4xxx knowledge,
-  5xxx user —
+  5xxx user, 6xxx stats —
   the memory one is `MemoryComponentError`, never `MemoryError`, which
   would shadow the built-in). Handlers return the `Response` envelope (`error_code`/
   `error_message`, plus `detail`+`trace` in dev/test only — endpoints must
@@ -999,6 +1005,28 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
     仍是自建图扩展点（覆写后中间件与模板机制不再适用），当前无内置消费者；
     检索步骤可见性现走标准 `ToolsTransformer` 真实工具事件，前端/落库契约
     不变（`StorageTranslator` 的 tool-started 补齐分支保留为通用机具）。
+- **A2UI 通道（agent→客户端的声明式 UI，天气卡片为第一块基石）** → A2UI 是
+  Google 开放标准（a2ui.org，v0.9 stable），agent 发声明式 JSON 消息描述 UI、
+  客户端原生渲染，不投递可执行代码。本仓库的传输绑定：A2UI 消息数组经 ag-ui
+  的 `CUSTOM` 事件下发，**事件名约定 `a2ui`**（与前端 `A2UI_DATA_PART_NAME`
+  对齐，改名必须两侧同步）。全链路：
+  ① 组装侧 `app/packages/a2ui/messages.py`——信封 builder（`createSurface`/
+  `updateComponents`，`version="v0.9"`，标准基础目录 catalogId 即官方 URL）+
+  字面量组件构造器（Text/Row/Column/Card/Divider/Image）；刻意只覆盖静态卡片
+  子集，数据绑定（updateDataModel + `{path}`）与交互回传（Button.action）留作
+  扩展面。② 工具侧以 LangChain `response_format="content_and_artifact"` 返回
+  二元组：content = 结构化数据 JSON（**LLM 唯一可见面**），artifact =
+  `{"a2ui": [消息数组]}`（UI 通道）——试点见 demo 组件的
+  `weather_surface.build_weather_surface`（数据形态由 ability/weather 门面
+  定义，LLM 与卡片共用同一展示契约，同 knowledge 的 sources JSON 先例）。
+  ③ 通道：`ToolsTransformer` 把 artifact 透传为 tools 契约事件的 `ui` 字段 →
+  `AgUiTranslator` 在该工具的 TOOL_CALL_RESULT 之后追加 `CUSTOM` 事件 →
+  `StorageTranslator` 追加一行 `message_type=CUSTOM`（content =
+  `[{"type":"custom","name":"a2ui","value":[消息数组]}]`，sequence 紧跟
+  TOOL_RESULT）。④ 回放语义：`replay_history` 显式跳过 CUSTOM 行（UI 是
+  表现层不回灌模型，天气数据已随 TOOL_RESULT 回放）；前端历史翻译器把 CUSTOM
+  行还原为 data part，刷新后卡片照常渲染。新增一张卡片 = 门面定义结构化数据
+  + 组装函数产出消息数组 + 工具走 content_and_artifact，其余机制零改动。
 - **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
   制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
   ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/
