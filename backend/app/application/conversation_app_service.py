@@ -12,7 +12,12 @@ from uuid import UUID
 from wireup import injectable
 
 from app.domain.conversation import ConversationService
-from app.domain.conversation.attachments import ConversationAttachmentStore
+from app.domain.conversation.attachments import (
+    ATTACHMENT_URL_PREFIX,
+    ConversationAttachmentStore,
+)
+
+__all__ = ["ATTACHMENT_URL_PREFIX", "ConversationAppService"]
 from app.exceptions import AttachmentNotFoundError
 
 

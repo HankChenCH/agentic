@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.domain.usage import UsageService
+from app.application import UsageAppService
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.response.biz_response import Response
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/stats", tags=["Stats"])
 
 @router.get("/usage/summary")
 def usage_summary(
-    usage: Injected[UsageService],
+    usage: Injected[UsageAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     start: Optional[datetime] = Query(default=None, description="起始时间（含），ISO 8601"),
     end: Optional[datetime] = Query(default=None, description="结束时间（不含），ISO 8601"),
@@ -36,7 +36,7 @@ def usage_summary(
 
 @router.get("/usage/daily")
 def usage_daily(
-    usage: Injected[UsageService],
+    usage: Injected[UsageAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     start: Optional[datetime] = Query(default=None, description="起始时间（含），ISO 8601"),
     end: Optional[datetime] = Query(default=None, description="结束时间（不含），ISO 8601"),
@@ -50,7 +50,7 @@ def usage_daily(
 
 @router.get("/usage/records")
 def usage_records(
-    usage: Injected[UsageService],
+    usage: Injected[UsageAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     pagination: Annotated[PaginationRequest, Depends()],
     start: Optional[datetime] = Query(default=None, description="起始时间（含），ISO 8601"),

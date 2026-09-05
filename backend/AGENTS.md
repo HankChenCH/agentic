@@ -42,12 +42,16 @@ backend/                         # this directory is its own git repo (the works
 ├── tasks/                   # Celery task layer: one module per task domain; __init__.py auto-imports
 │                            #   every non-underscore module so tasks self-register (include=["app.tasks"]
 │                            #   声明在 adapters/tasking/app.py)；celery_app 从 app.adapters.tasking 导入
-│                            #   （tasks 不得 import cmd 入口层）——knowledge.py (process_document 摄取)、
-│                            #   maintenance.py (reap_stuck_documents 看门狗)、ping.py
+│                            #   （tasks 只消费 application 用例层，不 import cmd 入口层）——
+│                            #   knowledge.py (process_document 摄取 → IngestionAppService)、
+│                            #   maintenance.py (reap_stuck_documents 看门狗 → IngestionAppService)、
+│                            #   ping.py
 ├── commands/                # admin 命令行的领域命令层，一域一模块、各自暴露 typer.Typer，由 cmd/admin 入口
-│                            #   add_typer 挂载：memory 域 repair（实体错合并存量修复，幂等，默认 dry-run，
-│                            #   --apply 落库）+ rebuild-index（全量重建记忆向量索引，默认仅统计，--yes 真执行）
-│                            #   + db 域：Alembic 迁移薄封装（upgrade/downgrade/revision/current/history/stamp/check）
+│                            #   add_typer 挂载（命令体只做 CLI 接线与展示，业务在 application
+│                            #   用例门面）：memory 域 repair（实体错合并存量修复 → MemoryAppService，
+│                            #   幂等，默认 dry-run，--apply 落库）+ rebuild-index（全量重建记忆向量
+│                            #   索引，默认仅统计，--yes 真执行）+ human-agent 域（坐席 CRUD →
+│                            #   HumanAgentAppService）+ db 域：Alembic 迁移薄封装（守卫豁免登记）
 ├── api/                     # exception_handlers.py (global AOP handlers); middleware.py (纯 ASGI 边缘中间件，SSE
 │                              #   友好：RequestIDMiddleware——X-Request-ID 生成/透传 + loguru 上下文注入，
 │                              #   SSE 线程池日志同携带；BodySizeLimitMiddleware——请求体
@@ -85,31 +89,39 @@ backend/                         # this directory is its own git repo (the works
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
 │                              #   （agentic/knowledge/memory 组，/auth、/health 公开）；
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传——端点透传 UploadFile
-│                              #   底层流，服务层流式转存对象存储边计数/摘要，不整读入内存，文件落 rustfs）;
+│                              #   底层流，用例/服务层流式转存对象存储边计数/摘要，不整读入内存，
+│                              #   文件落 rustfs；任务派发经 KnowledgeAppService 的
+│                              #   IngestionDispatcher 端口，api 不 import tasks）;
 │                              memory.py -> /memory/graph 记忆图快照（at 参数做时点回放，
-│                              服务为 domain/memory/graph_snapshot.py 经 ports.MemoryGraphReader 端口）
+│                              经 application.MemoryAppService → domain/memory/graph_snapshot.py
+│                              #   的 ports.MemoryGraphReader 端口）
 │                              + POST/PATCH/DELETE /memory/statements、PATCH/POST/DELETE
 │                              /memory/entities/{ref}[/merge|/split]、PATCH/DELETE
 │                              /memory/episodes/{ref}、PATCH /memory/episode-links/{ref}、
 │                              /memory/maintenance/{purge-preview,purge,export,reset}
 │                              记忆编辑 L1–L4（取代式纠正/归档/手工补充/实体改名 +
 │                              合并/拆分/孤立清理 + 事件直改/删除/参与改挂 + 当日清除/
-│                              会话遗忘/导出/整体重置；服务为
-│                              domain/memory/admin_service.py 经 ports.MemoryEditor 端口，
+│                              会话遗忘/导出/整体重置；经 MemoryAppService →
+│                              domain/memory/admin_service.py 的 ports.MemoryEditor 端口，
 │                              实现在 components/memory/admin.py——用例级事务+定向向量同步；
 │                              身份纠错的归属改写走仓储复合事务 absorb/split_entity，
 │                              拆分双方互写 attributes.merge_blocklist，消歧遇禁令对优先于余弦）;
 │                              stats.py -> GET /stats/usage/{summary,daily,records} 个人用量统计
 │                              （汇总/按天序列/流水分页，半开区间 [start,end)，按 UTC 日分桶；
-│                              服务为 domain/usage/usage_service.py，数据源 usage_record
-│                              计量流水表——一行一次 LLM 调用，scene = chat/title/memory）
-├── application/             # 用例层（原 orchestration 上提）：用户侧行程——agentic_service.py
-│                            #   （AgenticService：run SSE 行程 + cancel_run + begin_shutdown 优雅关闭）
-│                            #   + turn_finalizer.py（轮次收尾：标题/记忆/用户节点，后台线程执行）
-│                            #   + translator/（AgUiTranslator LangChain→ag-ui 唯一映射点 +
-│                            #   StorageTranslator 落库翻译）+ agent_catalog.py（智能体目录）+
-│                            #   tool_catalog.py（工具能力目录——api 禁触 components，由本层中转
-│                            #   describe_capabilities() 供 GET /agentic/tool-catalog）
+│                              经 application.UsageAppService → domain/usage/usage_service.py，
+│                              数据源 usage_record 计量流水表——一行一次 LLM 调用，
+│                              scene = chat/title/memory）
+├── application/             # 用例层（原 orchestration 上提）：入口侧唯一消费面。行程面——
+│                            #   agentic_service.py（AgenticService：run SSE 行程 + cancel_run +
+│                            #   begin_shutdown 优雅关闭）+ turn_finalizer.py（轮次收尾：标题/记忆/
+│                            #   用户节点，后台线程执行）+ translator/（AgUiTranslator LangChain→
+│                            #   ag-ui 唯一映射点 + StorageTranslator 落库翻译）+ agent_catalog.py
+│                            #   （智能体目录）+ tool_catalog.py（工具能力目录——api 禁触
+│                            #   components，由本层中转 describe_capabilities()）；管理面
+│                            #   一域一门面 *AppService：auth（含 verify_access_token 验签通道）、
+│                            #   conversation（会话管理+附件）、knowledge（含摄取派发）、
+│                            #   memory（管理侧委托 + repair/rebuild-index 维护编排，
+│                            #   事故定位常量在此）、usage、human_agent、ingestion（tasks 消费）
 ├── domain/                  # 领域层：按聚合分包，每包 = 领域服务 + ports.py（本聚合端口协议）。
 │                            #   零 adapters/供应商 SDK 依赖（LangChain 消息信封白名单除外）——
 │                            #   机制一律经端口由 adapters 以 wireup as_type 回填（见「端口反转」）。
@@ -133,13 +145,19 @@ backend/                         # this directory is its own git repo (the works
 │                            #   门面（经 Filesystem 端口）+ support.py 纯函数 + document_chunker.py
 │                            #   （消费 domain/ports 的 Parsed*））、
 │                            #   memory/（ports.py = MemoryGraphReader/MemoryEditor 端口 +
-│                            #   MemoryVectorIndexPort + KIND_*/VectorEntry/MemoryVectorHit/
-│                            #   vector_object_id 契约；admin_service.py + graph_snapshot.py）、
+│                            #   MemoryGraphRepositoryPort 图谱仓储 + MemoryMaintenancePort
+│                            #   维护原语 + MemoryVectorIndexPort + KIND_*/VectorEntry/
+│                            #   MemoryVectorHit/vector_object_id 契约；admin_service.py +
+│                            #   graph_snapshot.py + vocab.py 规范文本唯一源——谓词基数词表/
+│                            #   fact_summary 句式/entity_content 档案文本/溯源 token 拦截）、
 │                            #   user/（ports.py = UserRepositoryPort + UserNodeSyncPort；
 │                            #   user_service.py + passwords.py + token.py）
 ├── adapters/                # 被驱动适配器：实现 domain 端口 + 持有机制，可整体替换
 │                            #   persistence/（ConversationRepository/UserRepository/
-│                            #   KnowledgeBaseRepository/KnowledgeDocumentRepository——
+│                            #   KnowledgeBaseRepository/KnowledgeDocumentRepository/
+│                            #   UsageRepository/HumanAgentRepository/MemoryGraphRepository
+│                            #   （图谱四表 + for_user 作用域视图）/MemoryMaintenanceRepository
+│                            #   （维护面通用原语，全局算子视角）——
 │                            #   @injectable(as_type=<领域端口>) 绑定；SQLModel sessions over
 │                            #   注入 Engine。claim_document 幂等认领门闸与 mark_reaped 重投
 │                            #   记账的 updated_at 钉住不变量见 Gotchas「Celery 可靠性」；
@@ -172,14 +190,16 @@ backend/                         # this directory is its own git repo (the works
 │                            #   + cancel.py（CancelGuardMiddleware 取消守卫）
 ├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
 │                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
-│                            #   register_component/describe_capabilities）+ memory/ + knowledge/ + demo/。
+│                            #   register_component/describe_capabilities）+ memory/ + knowledge/ +
+│                            #   demo/ + a2ui/ + human_agent/。
 │                            #   组件解剖学：__init__.py（公共面再导出）+ manifest.py（能力声明与
 │                            #   工具构造，必有）+ ability/（能力模块，按能力命名持门面服务，必有）+
 │                            #   internal/（跨能力共享机件，可选，app 层禁入）+ admin.py（管理面端口
-│                            #   实现，可选）+ repositories/（自有存储，可选）。
+│                            #   实现，可选）。组件不自持存储——数据访问经 domain 端口由
+│                            #   adapters/persistence 实现（2026-09-05 起 repositories/ 槽位废除）。
 │                            #   memory: ability/{recall,consolidation,user_node} + internal/{extraction,resolution,
-│                            #   renderer,scoring,vocab} + admin.py（MemoryEditor/MemoryGraphReader 端口
-│                            #   回填）+ repositories/ 图谱实现；knowledge: ability/{retrieval,
+│                            #   renderer,scoring} + admin.py（MemoryEditor/MemoryGraphReader 端口
+│                            #   回填）；knowledge: ability/{retrieval,
 │                            #   navigation}（检索 + 定位读取——精确单点读取/文档清单，
 │                            #   守卫口径与检索一致：可见性 + KB/文档 enabled）+ manifest 契约模型
 │                            #   KnowledgeSearchResult（检索与定位读取共用同形 sources JSON）；
@@ -187,8 +207,8 @@ backend/                         # this directory is its own git repo (the works
 │                            #   门面内部，未来替换实现工具层不动）。
 │                            #   能力（v1 仅 tools）经 manifest 静态登记注册表，装配器绑定服务产出
 │                            #   StructuredTool；唯一显式组件清单点是 agents/toolbox.py。
-│                            #   components 消费 domain 端口与 adapters 契约（单向），
-│                            #   严禁 application / app.agents / app.api
+│                            #   components 消费 domain 端口与 adapters.llm 契约（单向，
+│                            #   供应商 SDK 禁入），严禁 application / app.agents / app.api
 ├── packages/                # 可复用能力库层：契约+后端内聚一包，领域无关，禁向上依赖
 │                            #   domain/application/components/agents/api/tasks/models
 │                            #   （AST 强制）——居民 signal/：SignalStore 契约（key 寻址的
@@ -357,18 +377,24 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
 
   ```
   cmd ──► 全部                          （组装根 core/container 保留原位）
-  api ──► {application | domain}        tasks ──► {domain, adapters/tasking}
-  commands ──► domain
+  api ──► application                   tasks ──► application（+ adapters/tasking）
+  commands ──► application
   application ──► {domain, components, agents}
   domain ──► models/domain              ← 唯一下向依赖；零 adapters/供应商 SDK
-  components ──► {domain 端口, adapters 契约}
+  components ──► {domain 端口, adapters.llm 契约}
   agents ──► components
   adapters ──► {domain 端口（实现）, models, core/config}
   packages ──► {core, adapters}
   ```
 
-  供应商红线：domain/application 禁 import weaviate/redis/obstore/sqlalchemy/
-  sqlmodel——机制只住 adapters（AST 强制）。langchain 消息信封类型
+  入口侧（api/tasks/commands）只消费 application 用例层（一域一门面
+  ``*AppService``）：领域服务不直接进端点/任务体/命令体，任务派发经
+  domain 的 ``IngestionDispatcher`` 端口反转（实现住 adapters/tasking）。
+  机制面豁免登记制：守卫测试 ``EXEMPTED_IMPORTS``（现仅 commands/db.py
+  的 Alembic 薄封装），新增豁免必须带理由入表。
+
+  供应商红线：domain/application/components 禁 import weaviate/redis/obstore/
+  sqlalchemy/sqlmodel——机制只住 adapters（AST 强制）。langchain 消息信封类型
   （`HumanMessage`/`AIMessage`/`BaseMessage`）是领域侧允许的框架白名单。
 - **端口反转（v2 题眼）** → 协议（`Protocol`/ABC）一律声明在 domain——聚合私有
   端口住各聚合 `ports.py`（仓储/向量索引/模型网关/记忆编辑等），跨聚合基础契约
@@ -395,18 +421,23 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   pub/sub / etcd watch），消费方无感；④ 一次性消费（auto-reset，读后自动复位）为
   显式决策点，v1 sticky；⑤ SSE 流内信号（客户端可见 keepalive）独立于 SignalStore，
   属 ag-ui 协议议题（@ag-ui/client 丢弃未知事件类型，须走 CUSTOM 事件或 SSE 注释行）。
-- **application（用例层）** → 用户侧行程的唯一编排地：`AgenticService`（run SSE
-  行程 + 显式取消 + 优雅关闭注册）、`TurnFinalizer`（轮次收尾：标题/记忆/用户
-  节点，流闭后 daemon 线程执行）、`translator/`（`AgUiTranslator` 把 LangChain
-  流块翻成 ag-ui 事件——**ag-ui 映射的唯一归属地**；`StorageTranslator` 落库
-  翻译）、`AgentCatalogService`/`ToolCatalogService`（目录中转——api 禁入
-  components）。可调 domain/components/agents；禁止直触 `adapters/persistence`
-  （持久化一律经领域服务/端口）、api 与向上反向调用。
+- **application（用例层）** → 入口侧（api/tasks/commands）的唯一消费面：行程面
+  `AgenticService`（run SSE 行程 + 显式取消 + 优雅关闭注册）、`TurnFinalizer`
+  （轮次收尾：标题/记忆/用户节点，流闭后 daemon 线程执行）、`translator/`
+  （`AgUiTranslator` 把 LangChain 流块翻成 ag-ui 事件——**ag-ui 映射的唯一
+  归属地**；`StorageTranslator` 落库翻译）、`AgentCatalogService`/
+  `ToolCatalogService`（目录中转——api 禁入 components）；管理面一域一门面
+  `*AppService`（auth/conversation+附件/knowledge+派发/memory+维护/usage/
+  human_agent/ingestion）——领域服务不直接进端点/任务体/命令体，事故级编排
+  （memory repair 的定位常量与流程）住本层。可调 domain/components/agents；
+  禁止直触 `adapters`（持久化与任务派发一律经领域端口——派发走 domain 的
+  `IngestionDispatcher`）、api 与向上反向调用。
 - **domain（领域层）** → 按聚合分包，每包 = 领域服务 + ports.py；零 adapters/
   供应商依赖，外部事实用端口倒置。实现风格统一为 `@injectable` + `@dataclass`
   构造注入（如 `ConversationService`）。会话持久化规则的唯一归属是
   `ConversationService`（编排不触碰仓储端口细节）。
-- **api** → only HTTP wiring; delegate to **application/domain**. Besides the business
+- **api** → only HTTP wiring; delegate to **application**（用例门面；机制面
+  ——health/metrics/middleware/exception_handlers/deps——不承载业务用例）. Besides the business
   routers, `api/health.py` mounts the `GET /health` readiness probe（db/redis
   依赖逐项探测,503 口径）and `api/metrics.py` the `GET /metrics` Prometheus
   endpoint + `MetricsMiddleware` (pure-ASGI request counters/histogram/gauge —
@@ -453,7 +484,8 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
 - **knowledge domain split** → 管理侧在 `domain/knowledge/`（one service per
   aggregate root + pipeline: `KnowledgeBaseService` / `KnowledgeDocumentService` /
   `KnowledgeSegmentService`（分段管理：查看/搜索/手动新增/编辑（自动重嵌）/启停/
-  删除/整篇 rechunk 受理——Celery 分发留端点层；分段写要求文档处于稳定态
+  删除/整篇 rechunk 受理——Celery 分发经 application 用例的 IngestionDispatcher
+  端口（实现住 adapters/tasking），api/tasks 不互相触碰；分段写要求文档处于稳定态
   ready/enabled/disabled）/ `DocumentIngestionService`），检索能力在
   `components/knowledge/`（检索编排既要被 agent 工具消费又要碰领域端口与仓储
   契约，放 components）。领域服务经 `knowledge/ports.py` 的仓储端口与
@@ -618,8 +650,9 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   `internal/` 可选——跨能力共享机件，app 层禁入（tests 与 `app/commands`
   白盒豁免，AST 扫描强制）；`admin.py` 可选——管理面端口实现
   （`@injectable(as_type=...)` 回填领域端口，如 `MemoryEditor`）；
-  `repositories/` 可选——组件自有存储策略（ABC 经 `as_type` 绑定实现，
-  存储引擎来自共享 adapters，表模型在 `models/domain`）。
+  组件不自持存储（2026-09-05 起 `repositories/` 槽位废除）：数据访问一律经
+  domain 端口（如 memory 的 `MemoryGraphRepositoryPort`）由 adapters/persistence
+  实现——组件是纯算法引擎，表模型与存储策略都在外层。
   **能力范式**（v1 仅 tools）：spec 是静态数据——`COMPONENT_REGISTRY` 登记时
   fail-fast 校验组件重名/组内工具重名/空描述；装配是 DI 行为——manifest 内
   `@injectable` 装配器（如 `MemoryComponent`）持门面服务，把 `ToolSpec.build`
@@ -639,8 +672,9 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   占位符覆盖/空节移除/片段降级语义见 middleware 模块注释）。轮次收尾不在
   v1 能力范式内：编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
   `MemoryConsolidationService`）。
-- **adapters/persistence** → 4 个仓储（conversation/user/knowledge_base/
-  knowledge_document+segment），`@injectable(as_type=<domain 端口>)` 绑定，
+- **adapters/persistence** → 7 个仓储（conversation/user/knowledge_base/
+  knowledge_document+segment/usage/human_agent/memory_graph+memory_maintenance），
+  `@injectable(as_type=<domain 端口>)` 绑定，
   backed by the injected SQLAlchemy `Engine` (SQLModel sessions)。两条领域
   不变量：① 认领门闸 `claim_document` 用「读后乐观锁条件 UPDATE」收口幂等
   （详见 Gotchas「Celery 可靠性」）；② `mark_reaped` 记账写显式钉住
@@ -898,7 +932,8 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   Long-term memory is the v2 graph model (`docs/memory-v2-design.md` is the
   design contract): four tables in `app/models/domain/memory/` (entity /
   bi-temporal statement / episode / episode-link), consolidated into the
-  component at `app/components/memory/` by `TurnFinalizer`'s third step
+  component at `app/components/memory/`（存取经 `MemoryGraphRepositoryPort`
+  领域端口，实现住 adapters/persistence）by `TurnFinalizer`'s third step
   (extract→resolve entities→adjudicate ADD/REPLACE/SKIP→persist+vector upsert;
   收尾加工在流闭后的 daemon 线程执行——标题/记忆是**最终一致**，断言/轮询
   需等待收敛).
@@ -965,11 +1000,13 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   (parent_turn_id, attempt_no)/turn_num 无唯一约束，同会话并发开轮可重复兄弟序号
   （由单进程 uvicorn + 客户端不并发发 run 的部署现实兜底，非数据库保证）。③ **记忆用户级作用域（设计反转）**：memory v2 原
   锁定「单用户全局」（docs/memory-v2-design.md §3.3），现 entity/statement/
-  episode 三表带 `user_id`；`MemoryRepository.for_user(uid)` / 
+  episode 三表带 `user_id`；`MemoryGraphRepositoryPort.for_user(uid)`（实现
+  `adapters/persistence/memory_graph_repository.py`）/ 
   `MemoryVectorIndexPort.for_user(uid)` / `MemoryEditor·GraphReader.for_user(uid)`
   返回作用域视图（scope 过滤在 sqlite 仓储与 `_scope_rows` 内强制，id 直取
   命中他人行视为不存在；向量按用户分 collection `Memory_{uid.hex}`）；注入
-  单例是无作用域的全局算子视角，**仅供维护 CLI 与 for_user 工厂使用**，
+  单例是无作用域的全局算子视角，**仅供 application 维护用例（repair /
+  rebuild-index 编排）与 for_user 工厂使用**，
   用户侧行程必须先 for_user。作用域标记字段一律 `field(init=False)`——
   wireup 按 `__init__` 签名提取依赖，可选 UUID 构造参数会破坏其注册表校验
   （作为他人依赖时先于自身清理被递归验证 → KeyError）。深度回忆三件套经
@@ -1062,7 +1099,10 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   丢失（Redis 无持久化重启/dispatch 失败）→直接补发。跑 beat：
   `uv run celery -A app.adapters.tasking.celery_app beat`。域分层约束：reap 只产出
   补发决策（`DocumentIngestionService.reap_stuck_documents` 返回 dispatch/
-  finalized 清单），实际 `.delay` 在 tasks 层——domain 禁向上 import tasks。
+  finalized 清单），`.delay` 派发经 domain 的 `IngestionDispatcher` 端口
+  （实现 `adapters/tasking/ingestion_dispatcher.py`，方法内懒 import 任务对象
+  防 tasks↔adapters 导入环），由 application 摄取用例编排、tasks 层消费——
+  domain 禁向上 import tasks，application 亦不 import tasks。
   **⑤ mark_reaped 的 updated_at 钉住不变量（v2 迁移期间 e2e 实证）**：记账写
   必须显式钉住 `updated_at`（Core update 携带原值）——`TimeFieldMixin.updated_at`
   的 onupdate 会把时钟顶成记账时刻，重投任务的认领随即看到 fresh processing 而

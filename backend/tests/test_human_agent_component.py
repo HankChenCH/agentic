@@ -13,6 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from app.adapters.persistence.human_agent_repository import HumanAgentRepository
+from app.application import HumanAgentAppService
 from app.commands.human_agent import app as human_agent_cli
 from app.components.a2ui.ability.compose import A2uiNode, ComposeError, compose_components
 from app.components.human_agent.ability.directory import HumanAgentDirectoryService
@@ -190,7 +191,8 @@ def test_messages_button_constructor():
 # ---------------------------------------------------------------- 管理命令
 def test_admin_cli_add_and_list(engine, monkeypatch):
     monkeypatch.setattr(
-        "app.commands.human_agent._repo", lambda: HumanAgentRepository(engine=engine)
+        "app.commands.human_agent._service",
+        lambda: HumanAgentAppService(repo=HumanAgentRepository(engine=engine)),
     )
     runner = CliRunner()
     result = runner.invoke(human_agent_cli, [
@@ -204,7 +206,8 @@ def test_admin_cli_add_and_list(engine, monkeypatch):
 
 def test_admin_cli_update_and_remove(engine, monkeypatch):
     monkeypatch.setattr(
-        "app.commands.human_agent._repo", lambda: HumanAgentRepository(engine=engine)
+        "app.commands.human_agent._service",
+        lambda: HumanAgentAppService(repo=HumanAgentRepository(engine=engine)),
     )
     repo = HumanAgentRepository(engine=engine)
     created = repo.create_agent(_agent(name="钱七"))

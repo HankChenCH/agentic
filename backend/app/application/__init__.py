@@ -17,7 +17,7 @@ commands）只消费本层门面：
 from .agent_catalog import AgentCatalogService
 from .agentic_service import AgenticService
 from .auth_app_service import AuthAppService, verify_access_token
-from .conversation_app_service import ConversationAppService
+from .conversation_app_service import ATTACHMENT_URL_PREFIX, ConversationAppService
 from .human_agent_app_service import HumanAgentAppService
 from .ingestion_app_service import IngestionAppService
 from .knowledge_app_service import KnowledgeAppService
@@ -28,6 +28,7 @@ from .translator import AgUiTranslator, StorageTranslator
 from .usage_app_service import UsageAppService
 
 __all__ = [
+    "ATTACHMENT_URL_PREFIX",
     "AgentCatalogService",
     "AgUiTranslator",
     "AgenticService",

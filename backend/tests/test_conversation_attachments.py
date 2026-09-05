@@ -13,6 +13,7 @@ import pytest
 
 from app.api.deps import UserPrincipal
 from app.api.v1.endpoints.attachments import display_attachment_url
+from app.application import ConversationAppService
 from app.exceptions import (
     AttachmentNotFoundError,
     AttachmentTooLargeError,
@@ -120,6 +121,11 @@ def _principal():
     return UserPrincipal(user_id=TEST_USER_ID, username="tester")
 
 
+def _app_service(store) -> ConversationAppService:
+    """端点直测装配：附件门面包住真 store（会话面不参与）。"""
+    return ConversationAppService(conversations=None, attachments=store)
+
+
 def test_display_url_endpoint_returns_envelope(store, monkeypatch):
     """展示地址端点：预签名可用返回签名 URL，本地后端降级 url=None
     （调用方转鉴权回源）。ref 接受带 host 的绝对引用（resolve_own_key
@@ -127,13 +133,13 @@ def test_display_url_endpoint_returns_envelope(store, monkeypatch):
     stored = _save_png(store)
 
     resp = display_attachment_url(
-        store=store, principal=_principal(), ref=f"http://any-host:8000{stored.url}",
+        app_service=_app_service(store), principal=_principal(), ref=f"http://any-host:8000{stored.url}",
     )
     assert resp == Response.success({"url": None}).to_dict()
 
     monkeypatch.setattr(store, "presign", lambda key, expires_in=600: f"http://signed/{key}")
     resp = display_attachment_url(
-        store=store, principal=_principal(), ref=stored.url,
+        app_service=_app_service(store), principal=_principal(), ref=stored.url,
     )
     assert resp["response"]["url"].startswith("http://signed/")
 
@@ -141,10 +147,10 @@ def test_display_url_endpoint_returns_envelope(store, monkeypatch):
 def test_display_url_endpoint_rejects_foreign_ref(store):
     # 形态非法（非本域/非 UUID/缺文件名段）→ resolve_own_key 为 None → 404
     with pytest.raises(AttachmentNotFoundError):
-        display_attachment_url(store=store, principal=_principal(), ref="/knowledge/kb/doc")
+        display_attachment_url(app_service=_app_service(store), principal=_principal(), ref="/knowledge/kb/doc")
     with pytest.raises(AttachmentNotFoundError):
         display_attachment_url(
-            store=store, principal=_principal(),
+            app_service=_app_service(store), principal=_principal(),
             ref="/agentic/attachments/not-a-uuid/pic.png",
         )
 
@@ -153,7 +159,7 @@ def test_display_url_endpoint_missing_object_degrades(store):
     # 形态合法但对象不存在：key 命中本人前缀下的空位，与下载 302 路径同款
     # ——签名地址指向不存在的对象，浏览器端 404（S3 预签名不做存在性检查）
     resp = display_attachment_url(
-        store=store, principal=_principal(),
+        app_service=_app_service(store), principal=_principal(),
         ref="/agentic/attachments/00000000-0000-0000-0000-000000000000/gone.png",
     )
     assert resp == Response.success({"url": None}).to_dict()

@@ -1,4 +1,6 @@
-"""知识库文档处理任务：编排全部在 DocumentIngestionService（解析→分块→嵌入→写向量）。
+"""知识库文档处理任务：Celery 接线（重试分类/超时/载荷）——编排全部在
+application 摄取用例（IngestionAppService → DocumentIngestionService：
+解析→分块→嵌入→写向量）。
 
 载荷只传 ID（可序列化），worker 侧重新加载领域对象；处理失败时文档已由
 服务置 failed（含 error_message），任务继续抛错供 worker 日志留痕。
@@ -22,10 +24,10 @@ from weaviate.exceptions import WeaviateBaseError
 from wireup import Injected
 
 from app.adapters.tasking import celery_app
+from app.application import IngestionAppService
 from app.core.config import AppConfig
 from app.core.exceptions import BusinessError, InfrastructureError
 from app.core.logging import LoggerFactory
-from app.domain.knowledge.ingestion_service import DocumentIngestionService
 
 # 瞬时（可重试）异常面：基础设施抖动。MinerU 解析器已统一抛 InfrastructureError
 # （含 httpx 上传/轮询错误的包装）；其余覆盖 DB、嵌入模型（httpx）与向量库连接。
@@ -56,7 +58,7 @@ def process_document(
     self,
     kb_id: str,
     doc_id: str,
-    ingestion_service: Injected[DocumentIngestionService],
+    app_service: Injected[IngestionAppService],
     logger_factory: Injected[LoggerFactory],
     app_config: Injected[AppConfig],
 ) -> dict:
@@ -71,7 +73,7 @@ def process_document(
     stale_before = datetime.now(timezone.utc) - timedelta(
         seconds=app_config.task.stale_processing_seconds
     )
-    doc = ingestion_service.process_document(UUID(kb_id), UUID(doc_id), stale_before=stale_before)
+    doc = app_service.process_document(UUID(kb_id), UUID(doc_id), stale_before=stale_before)
     logger.info(
         "document %s processing finished: status=%s seg_num=%s",
         doc_id,

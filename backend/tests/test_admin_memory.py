@@ -5,12 +5,10 @@ from uuid import uuid4
 
 from sqlmodel import Session, select
 
-from app.commands.memory import (
-    COMPANY_NAME,
-    SCHOOL_NAME,
-    rebuild_index,
-    repair,
-)
+from app.adapters.persistence.memory_graph_repository import MemoryGraphRepository
+from app.adapters.persistence.memory_maintenance_repository import MemoryMaintenanceRepository
+from app.application import MemoryAppService
+from app.application.memory_app_service import COMPANY_NAME, SCHOOL_NAME
 from app.models.domain.memory import (
     EntityType,
     MemoryEntity,
@@ -23,6 +21,17 @@ from app.domain.memory import KIND_ENTITY, KIND_EPISODE, KIND_STATEMENT
 
 from fakes_memory import FakeMemoryVectorIndex
 from conftest import TEST_USER_ID
+
+
+def _service(engine, vector) -> MemoryAppService:
+    """维护用例单测装配：全局算子视角仓储 + 假向量索引（管理面服务不参与）。"""
+    return MemoryAppService(
+        graph_service=None,
+        admin_service=None,
+        memory_repo=MemoryGraphRepository(engine=engine),
+        maintenance_repo=MemoryMaintenanceRepository(engine=engine),
+        vector_index=vector,
+    )
 
 
 def _seed_polluted(engine):
@@ -70,7 +79,7 @@ def test_repairs_polluted_archive_and_rebinds(engine):
     company_id, system_id, stmt_id, _episode_id, link_id = _seed_polluted(engine)
     vector = FakeMemoryVectorIndex()
 
-    report = repair(engine, vector, apply=True)
+    report = _service(engine, vector).repair(apply=True)
 
     # 别名清理：#S 编号全清，学校名离开公司档案
     with Session(engine) as session:
@@ -102,8 +111,8 @@ def test_repair_is_idempotent(engine):
     first_vector = FakeMemoryVectorIndex()
     second_vector = FakeMemoryVectorIndex()
 
-    first = repair(engine, first_vector, apply=True)
-    second = repair(engine, second_vector, apply=True)
+    first = _service(engine, first_vector).repair(apply=True)
+    second = _service(engine, second_vector).repair(apply=True)
 
     assert first.changed and not second.changed
     assert any("未发现需修复的数据" in line for line in second.lines)
@@ -113,7 +122,7 @@ def test_repair_is_idempotent(engine):
 def test_dry_run_writes_nothing(engine):
     company_id, _system_id, stmt_id, _episode_id, link_id = _seed_polluted(engine)
 
-    report = repair(engine, FakeMemoryVectorIndex(), apply=False)
+    report = _service(engine, FakeMemoryVectorIndex()).repair(apply=False)
 
     assert report.changed and any(line.startswith("[计划]") for line in report.lines)
     with Session(engine) as session:
@@ -139,7 +148,7 @@ def test_rebuild_index_collects_active_truth_only(engine):
         session.commit()
     vector = FakeMemoryVectorIndex()
 
-    counts = rebuild_index(engine, vector)
+    counts = _service(engine, vector).rebuild_index().counts
 
     assert counts == {KIND_ENTITY: 2, KIND_STATEMENT: 1, KIND_EPISODE: 1}
     entries = vector.rebuilds[0]

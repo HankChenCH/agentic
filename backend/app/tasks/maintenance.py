@@ -6,8 +6,8 @@
 - pending 超时判消息丢失（Redis 无持久化重启 / dispatch 失败）：直接补发，
   队列中残留的重复消息由 claim 门闸幂等吸收。
 
-重投决策在 DocumentIngestionService.reap_stuck_documents（domain 层），
-实际 .delay 在本任务（tasks 层，domain 禁向上 import tasks）。
+对账决策与补发派发都在 application 摄取用例（IngestionAppService：reap
+决策出领域层，.delay 经 IngestionDispatcher 端口）——本任务只剩 Celery 接线。
 """
 
 from datetime import datetime, timedelta, timezone
@@ -16,38 +16,31 @@ import wireup.integration.celery
 from wireup import Injected
 
 from app.adapters.tasking import celery_app
+from app.application import IngestionAppService
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
-from app.domain.knowledge.ingestion_service import DocumentIngestionService
-from app.tasks.knowledge import process_document
 
 
 @celery_app.task(name="agentic.knowledge.reap_stuck_documents")
 @wireup.integration.celery.inject
 def reap_stuck_documents(
-    ingestion_service: Injected[DocumentIngestionService],
+    app_service: Injected[IngestionAppService],
     logger_factory: Injected[LoggerFactory],
     app_config: Injected[AppConfig],
 ) -> dict:
     logger = logger_factory.get_logger(__name__)
     task_cfg = app_config.task
     now = datetime.now(timezone.utc)
-    result = ingestion_service.reap_stuck_documents(
+    result = app_service.reap_stuck_documents(
         stale_processing=now - timedelta(seconds=task_cfg.stale_processing_seconds),
         stale_pending=now - timedelta(seconds=task_cfg.stale_pending_seconds),
         max_attempts=task_cfg.max_reap_attempts,
     )
-    for kb_id, doc_id in result["dispatch"]:
-        process_document.delay(str(kb_id), str(doc_id))
-    if result["dispatch"] or result["finalized"]:
+    if result["dispatched"] or result["finalized"]:
         logger.warning(
-            "reap cycle: redispatched %d document(s) %s, finalized %d %s",
-            len(result["dispatch"]),
-            [str(doc_id) for _, doc_id in result["dispatch"]],
+            "reap cycle: redispatched %d document(s), finalized %d %s",
+            result["dispatched"],
             len(result["finalized"]),
-            [str(doc_id) for doc_id in result["finalized"]],
+            result["finalized"],
         )
-    return {
-        "dispatched": len(result["dispatch"]),
-        "finalized": [str(doc_id) for doc_id in result["finalized"]],
-    }
+    return result

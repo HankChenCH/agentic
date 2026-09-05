@@ -23,9 +23,9 @@ from uuid import UUID
 import jwt
 from fastapi import Request
 
+from app.application import verify_access_token
 from app.core.config import AuthConfig, load_section
 from app.exceptions import InvalidCredentialsError
-from app.domain.user.token import decode_access_token
 
 _BEARER_PREFIX = "Bearer "
 
@@ -52,7 +52,7 @@ def require_user(request: Request) -> UserPrincipal:
     token = auth_header[len(_BEARER_PREFIX):].strip()
     auth = _auth_config()
     try:
-        payload = decode_access_token(token, secret=auth.jwt_secret, algorithm=auth.jwt_algorithm)
+        payload = verify_access_token(token, secret=auth.jwt_secret, algorithm=auth.jwt_algorithm)
     except jwt.InvalidTokenError:
         # 过期/签名非法/结构不符同口径：不给攻击者区分信息
         raise InvalidCredentialsError("访问令牌无效或已过期") from None

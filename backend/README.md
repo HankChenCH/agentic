@@ -36,10 +36,12 @@ app/
 │   └── admin/                #   Typer 复合入口（命令体在 commands/）
 ├── api/                      # 驱动适配器① HTTP/SSE（限流归网关层，应用内无 429）
 ├── tasks/                    # 驱动适配器② Celery 任务体（process_document、看门狗）
-├── commands/                 # 驱动适配器③ 维护 CLI 命令体（memory/db）
-├── application/              # 用例层（原 orchestration）：agentic_service、
+├── commands/                 # 驱动适配器③ 维护 CLI 命令体（memory/human-agent/db）
+├── application/              # 用例层（入口侧唯一消费面）：agentic_service、
 │   │                         #   turn_finalizer、translator/（ag-ui 映射唯一归属地）、
-│   │                         #   agent_catalog / tool_catalog
+│   │                         #   agent_catalog / tool_catalog + 管理面一域一门面
+│   │                         #   *AppService（auth/conversation/knowledge/memory/usage/
+│   │                         #   human_agent/ingestion）
 ├── domain/                   # 领域层：按聚合分包，零 adapters/框架机制依赖
 │   ├── ports/                #   跨聚合基础契约：Filesystem、DocumentParser+Parsed*、
 │   │                         #   RepositoryConflictError（仓储冲突的契约级信号）
@@ -48,10 +50,12 @@ app/
 │   ├── knowledge/            #   领域服务 + ports.py（KB/Doc 仓储端口、
 │   │                         #   KnowledgeVectorIndexPort/VectorHit）
 │   ├── memory/               #   领域服务 + ports.py（MemoryEditor/MemoryGraphReader/
-│   │                         #   MemoryVectorIndexPort + KIND_*/VectorEntry 等）
+│   │                         #   MemoryGraphRepositoryPort/MemoryMaintenancePort/
+│   │                         #   MemoryVectorIndexPort）+ vocab.py（规范文本唯一源）
 │   └── user/                 #   领域服务 + ports.py（UserRepositoryPort、UserNodeSyncPort）
 ├── adapters/                 # 被驱动适配器：实现 domain 端口 + 持有机制
-│   ├── persistence/          #   4 个仓储（conversation/user/kb/document），
+│   ├── persistence/          #   7 个仓储（conversation/user/kb/document/usage/
+│   │                         #   human_agent/memory_graph+memory_maintenance），
 │   │                         #   @injectable(as_type=<领域端口>)；驱动异常
 │   │                         #   （IntegrityError）在此翻译为 RepositoryConflictError
 │   ├── tasking/              #   celery_app 实例 + 队列 conf（tasks/与发送方共用）
@@ -61,7 +65,8 @@ app/
 │   ├── db/  redis/           #   引擎/客户端工厂（sqlite/postgresql、standalone redis）
 │   ├── filesystem/           #   local/s3 实现（Filesystem 契约归 domain/ports）
 │   └── document_parser/      #   mineru_cloud 实现（解析契约归 domain/ports）
-├── components/               # 能力组件（manifest/ability/internal/admin/repositories 范式）
+├── components/               # 能力组件（manifest/ability/internal/admin 范式；
+│   │                         #   不自持存储——数据访问经 domain 端口由 persistence 实现）
 │   ├── knowledge/            #   retrieval（RRF 双通道检索编排）+ navigation
 │   ├── memory/               #   抽取/巩固/召回/编辑（admin 回填 MemoryEditor 等端口）
 │   └── demo/
@@ -80,19 +85,23 @@ app/
 
 ```
 cmd ──► 全部
-api ──► {application | domain}        tasks ──► {domain, adapters.tasking}
-commands ──► domain
+api ──► application                     tasks ──► application（+ adapters.tasking）
+commands ──► application
 application ──► {domain, components, agents}
 domain ──► models/domain              ← 唯一下向依赖；零 adapters/供应商 SDK
-components ──► {domain 端口, adapters 契约}
+components ──► {domain 端口, adapters.llm 契约}
 agents ──► components
 adapters ──► {domain 端口（实现）, models, core/config}
 packages ──► {core, adapters}
 ```
 
-供应商红线：`domain`/`application` 禁 import weaviate / redis / obstore /
-sqlalchemy / sqlmodel——机制只住 adapters（AST 扫描强制）。langchain 消息
-信封类型（AIMessage 等）是领域侧允许的框架白名单。
+入口侧（api/tasks/commands）只消费 application 用例层（`*AppService` 门面；
+任务派发经 domain 的 `IngestionDispatcher` 端口反转）——机制面豁免
+（commands/db.py 的 Alembic 薄封装）在守卫测试 `EXEMPTED_IMPORTS` 登记制。
+
+供应商红线：`domain`/`application`/`components` 禁 import weaviate / redis /
+obstore / sqlalchemy / sqlmodel——机制只住 adapters（AST 扫描强制）。
+langchain 消息信封类型（AIMessage 等）是领域侧允许的框架白名单。
 
 ## 端口反转约定
 

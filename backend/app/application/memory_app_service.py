@@ -137,13 +137,17 @@ class MemoryAppService:
         status = "修复" if apply else "计划"
 
         # ---- 纯读检测（dry-run 零写入的前提）----
+        # 全量实体取一次并复用同一批对象：仓储逐方法短会话（无 identity map），
+        # 同一实体的两份脱管副本先后 merge 会互相覆盖字段，编辑必须收敛在单副本上
+        entities = graph.list_entities()
+        by_name = {e.name: e for e in entities}
         polluted: list[tuple[MemoryEntity, list[str]]] = []
-        for entity in graph.list_entities():
+        for entity in entities:
             bad = [a for a in (entity.aliases or []) if INTERNAL_REF_TOKEN_RE.match(a)]
             if bad:
                 polluted.append((entity, bad))
 
-        company = graph.find_entity_by_name(COMPANY_NAME)
+        company = by_name.get(COMPANY_NAME)
         drop_school_alias = company is not None and SCHOOL_NAME in (company.aliases or [])
         wrong_statements = (
             self.maintenance_repo.list_statements_by_object_predicate(MISBOUND_PREDICATE, company.id)
@@ -161,7 +165,7 @@ class MemoryAppService:
             report.log("跳过", f"未找到实体「{COMPANY_NAME}」（可能已修复或无此数据）")
         elif drop_school_alias:
             report.log(status, f"实体#{company.id}「{COMPANY_NAME}」移除错合并别名：「{SCHOOL_NAME}」")
-        school = graph.find_entity_by_name(SCHOOL_NAME)
+        school = by_name.get(SCHOOL_NAME)
         if school is None:
             report.log(status, f"新建 ORG 实体「{SCHOOL_NAME}」")
         else:
@@ -182,16 +186,16 @@ class MemoryAppService:
             report.log("计划", "以上为 dry-run 结果；确认后加 --apply 执行")
             return report
 
-        # ---- 落写（仅 apply）----
+        # ---- 落写（仅 apply）：别名编辑先全部累积在检测期对象上，统一持久化 ----
         touched: dict[int, MemoryEntity] = {}
         for entity, bad in polluted:
             entity.aliases = [a for a in entity.aliases if a not in bad]
-            saved = graph.save_entity(entity)
-            touched[saved.id] = saved
+            touched[entity.id] = entity
         if drop_school_alias:
             company.aliases = [a for a in company.aliases if a != SCHOOL_NAME]
-            saved = graph.save_entity(company)
-            touched[saved.id] = saved
+            touched[company.id] = company
+        for entity in touched.values():
+            graph.save_entity(entity)
         if school is None:
             # 归属沿用被拆档（公司）的用户；公司也不存在时落默认用户（存量回填归属）
             school = graph.upsert_entity(MemoryEntity(
@@ -260,12 +264,13 @@ class MemoryAppService:
         }
         return RebuildPlan(grouped=grouped, counts=counts)
 
-    def rebuild_index(self) -> dict[str, int]:
-        """按用户 drop 各自 collection 后全量重嵌，返回分类计数。"""
+    def rebuild_index(self) -> RebuildPlan:
+        """按用户 drop 各自 collection 后全量重嵌，返回本次执行的收集计划
+        （counts/total/用户 collection 数，CLI 展示用）。"""
         plan = self.collect_index_entries()
         for user_id, entries in plan.grouped.items():
             self.vector_index.for_user(user_id).rebuild(entries)
-        return plan.counts
+        return plan
 
     def _rewrite_vectors(self, touched_entities: list[MemoryEntity], rebound_statements: list) -> None:
         """触达对象定向向量重写（touched 实体 + 改挂陈述；按行归属分组进各用户 collection）。"""

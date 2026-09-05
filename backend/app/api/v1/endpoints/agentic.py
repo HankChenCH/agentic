@@ -8,8 +8,12 @@ from starlette.types import Receive, Scope, Send
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
-from app.application import AgentCatalogService, AgenticService, ToolCatalogService
-from app.domain.conversation import ConversationService
+from app.application import (
+    AgentCatalogService,
+    AgenticService,
+    ConversationAppService,
+    ToolCatalogService,
+)
 
 from app.models.schema.request.pagination import PaginationRequest
 from app.models.schema.request.conversation import ActivateTurnRequest
@@ -55,13 +59,14 @@ class ClosingStreamingResponse(StreamingResponse):
             if aclose is not None:
                 await aclose()
 
-# 受众分流：conversation 增删查是管理侧读路径，直接消费领域服务；
-# run 是用户侧行程，经编排层。身份经 require_user 注入（JWT 无状态验签）；
-# 归属校验在领域层（仓储查询条件 / open_turn 比对），非本人会话统一 404。
+# 受众分流：全部业务经 application 用例层——run 是用户侧行程（AgenticService），
+# conversation 增删查是管理侧用例（ConversationAppService）。身份经
+# require_user 注入（JWT 无状态验签）；归属校验在领域层（仓储查询条件 /
+# open_turn 比对），非本人会话统一 404。
 
 @router.get("/conversation")
 def list_conversation(
-    conversations: Injected[ConversationService],
+    conversations: Injected[ConversationAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     pagination: Annotated[PaginationRequest, Depends()],
 ):
@@ -71,7 +76,7 @@ def list_conversation(
 
 @router.get("/conversation/{thread_id}")
 def get_conversation(
-    conversations: Injected[ConversationService],
+    conversations: Injected[ConversationAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     thread_id: UUID,
 ):
@@ -79,7 +84,7 @@ def get_conversation(
 
 @router.get("/conversation/{thread_id}/history")
 def list_conversation_history_messages(
-    conversations: Injected[ConversationService],
+    conversations: Injected[ConversationAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     thread_id: UUID,
     offset: int = Query(default=0, ge=0),
@@ -90,7 +95,7 @@ def list_conversation_history_messages(
 
 @router.delete("/conversation/{thread_id}")
 def delete_conversation(
-    conversations: Injected[ConversationService],
+    conversations: Injected[ConversationAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     thread_id: UUID,
 ):
@@ -98,7 +103,7 @@ def delete_conversation(
 
 @router.post("/conversation/{thread_id}/activate-turn")
 def activate_conversation_turn(
-    conversations: Injected[ConversationService],
+    conversations: Injected[ConversationAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     thread_id: UUID,
     request: ActivateTurnRequest,
