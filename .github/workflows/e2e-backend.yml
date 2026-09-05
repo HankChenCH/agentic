@@ -1,0 +1,87 @@
+# 端到端套件（tests_e2e/）：针对运行中的真实服务链路——中间件 compose 栈 +
+# Ollama 嵌入（bge-m3）+ 真实 LLM（DeepSeek）。夜间定时 + 手动触发，
+# 不占 PR 门禁（耗时长、烧 token、依赖外部 secrets）。
+#
+# 所需 secrets：DEEPSEEK_API_KEY（未配置时作业直接失败并提示，不哑跑）。
+name: E2E Backend
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 每天 UTC 18:00（北京时间 02:00，避开白天开发时段）
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  e2e:
+    name: E2E (compose middleware + run server + real LLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # llm.yaml 必填占位符：真实 key 经 secrets 注入（run 用例会发起真实调用）
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # db.yaml 切 postgres（与中间件 compose 的缺省凭据/端口一致）
+      DB_DEFAULT: postgres
+      POSTGRES_HOST: 127.0.0.1
+      # 中间件 compose 把 weaviate gRPC 宿主侧映射到 50052（原因见该文件注释）
+      WEAVIATE_GRPC_PORT: "50052"
+      # CI runner 本机起 Ollama 提供嵌入（vector_db.yaml 默认 ollama-embedding）
+      OLLAMA_API_URL: http://127.0.0.1:11434
+    steps:
+      - uses: actions/checkout@v4
+
+      # 无 secrets 的 fork/新仓库直接失败并说明，避免烧时间起栈后哑跑
+      - name: Guard secrets present
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "::error::secret DEEPSEEK_API_KEY 未配置：e2e 需要真实 LLM key，请在仓库 Settings → Secrets 配置后重跑"
+            exit 1
+          fi
+
+      # ---------- 中间件栈（postgres/weaviate/rustfs/redis + 建桶） ----------
+      - name: Start middleware stack
+        run: docker compose up -d --wait --wait-timeout 180
+
+      # ---------- Ollama 嵌入模型（记忆巩固/知识检索的向量化依赖） ----------
+      - name: Start Ollama and pull embedding model
+        timeout-minutes: 15
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > /tmp/ollama.log 2>&1 &
+          ollama pull bge-m3
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # 空库跑完整迁移链（口径同 ci-backend 的 migrations 作业与部署栈 migrate 服务）
+      - name: Alembic upgrade head
+        run: uv run python -m app.cmd.admin db upgrade
+
+      # ---------- 起服务（后台）并等 /health 就绪 ----------
+      - name: Start backend server
+        run: |
+          nohup uv run uvicorn app.cmd.http.main:server --host 127.0.0.1 --port 8000 \
+            > /tmp/agentic-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/health > /dev/null 2>&1; then
+              echo "server ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::server 120s 未就绪"; tail -100 /tmp/agentic-server.log; exit 1
+
+      # ---------- 端到端用例（真实 LLM，全量串行） ----------
+      - name: Run e2e tests
+        run: uv run pytest tests_e2e/ -v
+
+      - name: Dump server log on failure
+        if: failure()
+        run: tail -300 /tmp/agentic-server.log

@@ -13,6 +13,7 @@
 
 import json
 import os
+import re
 import time
 import uuid
 
@@ -404,7 +405,9 @@ def test_08_knowledge_kb_crud():
 
 
 def test_09_rag_agent_grounded_answer():
-    """builtin:rag 图智能体：无命中时如实兜底（不编造），流正常收口。"""
+    """builtin:rag 图智能体：无命中时如实兜底（不编造），流正常收口；
+    兜底回答不得出现 [n] 角标——引用角标是「检索命中」的专属信号，
+    无依据时输出 [n] 即编造出处（引用纪律见 rag/prompts.py）。"""
     with _client() as c:
         user = _register(c, "rag")
         thread_id = uuid.uuid4().hex
@@ -435,6 +438,9 @@ def test_09_rag_agent_grounded_answer():
         types = _types(events)
         assert "RUN_FINISHED" in types, events
         assert "RUN_ERROR" not in types, events
+        # 新用户无任何知识库，检索必空 → 兜底回答不得携带 [n] 引用角标
+        answer = _text_of(events)
+        assert not re.search(r"\[\d+\]", answer), answer
 
 
 def test_10_unauthorized_rejected():
