@@ -1,0 +1,18 @@
+# HTTP 入口边缘策略：CORS 白名单 / 请求体大小上限
+# 模型见 app/core/config/http.py，中间件实现见 app/api/middleware.py（路由作用域在
+# app/cmd/http/main.py 接线）。限流不走本文件：应用内不限流，
+# 由网关层（反向代理/API 网关）实现。
+
+cors:
+  # 浏览器源白名单（精确匹配 scheme+host+port）。默认覆盖 Vite dev server 的两种
+  # loopback 形态（localhost/127.0.0.1 是不同源，需分别登记）；部署环境用
+  # CORS_ORIGINS 以逗号分隔整体覆盖，如 https://app.example.com,https://admin.example.com
+  origins: ${CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  allow_credentials: ${CORS_ALLOW_CREDENTIALS:true}
+
+max_body_bytes:
+  # run 为纯 JSON（含前端回放的历史消息），1 MiB 足够宽裕；
+  # 上传为 multipart：服务层单文件上限 50 MiB（support.MAX_UPLOAD_BYTES），
+  # 此处 64 MiB 含 multipart 表单开销
+  run: ${RUN_MAX_BODY_BYTES:1048576}
+  upload: ${UPLOAD_MAX_BODY_BYTES:67108864}

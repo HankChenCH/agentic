@@ -1,0 +1,133 @@
+# 本地开发中间件栈：PostgreSQL / Weaviate / RustFS (S3 兼容对象存储) / Redis
+#
+#   启动:    docker compose up -d
+#   停止:    docker compose down        （保留数据卷）
+#   清数据:  docker compose down -v
+#
+# 所有端口只发布到 127.0.0.1；凭据均为本地开发默认值，
+# 可通过环境变量覆盖（compose 会自动读取同目录 .env）:
+#   POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+#   RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY / RUSTFS_BUCKET
+#
+# 说明: redis 已被任务执行器（app/cmd/task_executor，Celery broker/backend，
+# 地址经 app/configs/task.yaml 的驱动+key引用指向 redis.yaml，与默认 entry 对齐）使用；数据库当前默认仍为
+# SQLite，postgres 经 app/infrastructures/db（db.yaml 的 postgres entry，
+# psycopg3 驱动）接入，切换只需把 default 改为 postgres；weaviate 经
+# app/infrastructures/vector（vector_db.yaml）预留接入、rustfs 经
+# app/infrastructures/filesystem（filesystem.yaml）预留接入——均 lazy，
+# 首次使用才真正连接；rustfs 的默认 bucket 由下方的 rustfs-init 幂等创建。
+
+name: agentic
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: agentic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+      POSTGRES_DB: ${POSTGRES_DB:-agentic}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # postgres 18 起数据目录按版本隔离（/var/lib/postgresql/<major>/docker），
+      # 挂父目录以便日后大版本升级沿用数据卷
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentic} -d ${POSTGRES_DB:-agentic}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  weaviate:
+    image: semitechnologies/weaviate:1.39.0
+    container_name: agentic-weaviate
+    restart: unless-stopped
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --scheme
+      - http
+    ports:
+      - "127.0.0.1:8080:8080" # HTTP / gRPC-Web，对应 vector_db.yaml 预留地址
+      # gRPC（weaviate-client v4 需要）。宿主侧用 50052：本机新版 Ollama
+      # 桌面版会占 127.0.0.1:50051（ui server），且 loopback 精确绑定优先于
+      # Docker 的通配绑定，会把 gRPC 流量截走报 "Trying to connect an
+      # http1.x server"。覆盖 .env 的 WEAVIATE_GRPC_PORT 保持一致。
+      - "127.0.0.1:50052:50051"
+    environment:
+      QUERY_AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true" # 本地开发: 匿名访问
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none" # 向量由应用侧 embedding 模型生成
+      ENABLE_MODULES: ""
+      ENABLE_TOKENIZER_GSE: "true" # gse 分词器（中文 BM25/混合检索）：collection content 属性按 gse 建倒排
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate-data:/var/lib/weaviate
+    healthcheck:
+      # weaviate 1.39 起就绪端点为 /v1/.well-known/ready（旧路径 /v1/.well-known.ready 返回 404）
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: agentic-rustfs
+    restart: unless-stopped
+    command: ["/data"] # 数据目录作为启动参数（官方 docker run 用法）
+    ports:
+      - "127.0.0.1:9000:9000" # S3 API
+      - "127.0.0.1:9001:9001" # Web 控制台端口保留；rustfs 1.0.0-beta.12 的 console 未随容器启动（9001 当前也由 S3 API 应答），待上游修复
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-agentic}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-agentic-secret}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:9000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # 幂等初始化 rustfs 默认 bucket（obstore 不提供建 bucket 能力，应用侧
+  # S3Filesystem 假定 bucket 已存在；bucket 名与 filesystem.yaml 的
+  # ${RUSTFS_BUCKET:agentic} 对齐）。一次性服务：跑完即退出。
+  rustfs-init:
+    image: minio/mc:latest
+    container_name: agentic-rustfs-init
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-agentic}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-agentic-secret}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-agentic}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set agentic http://rustfs:9000 \"$$RUSTFS_ACCESS_KEY\" \"$$RUSTFS_SECRET_KEY\"
+      && mc mb --ignore-existing agentic/$$RUSTFS_BUCKET
+      "
+
+  redis:
+    image: redis:8-alpine
+    container_name: agentic-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379" # Celery broker/backend + 直连 Redis 能力，对应 redis.yaml 默认 entry
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  weaviate-data:
+  rustfs-data:

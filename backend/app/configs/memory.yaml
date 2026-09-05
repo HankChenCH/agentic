@@ -1,0 +1,33 @@
+enabled: true
+# 抽取/裁决走 with_structured_output：thinkable 模型上由
+# ThinkingAwareChatDeepSeek 自动关思考，无需为调用策略另设 entry
+extraction_provider: deepseek-flash
+
+recall:
+  top_k: 8
+  alpha: 0.7
+  expansion_limit: 12
+  fast_limit: 10
+
+score:
+  relevance_weight: 0.5
+  recency_weight: 0.2
+  importance_weight: 0.3
+  recency_half_life_days: 14
+
+resolution:
+  similarity_threshold: 0.85
+  # 灰度带 [0.55, 0.85)：余弦落带内交给 LLM 语义裁决（简称/代称归一），
+  # 不确定宁可新建；≤0 关闭该层
+  grey_zone_lower: 0.55
+
+# 抽取 prompt 注入的既有实体名册上限（向量按本轮 transcript 提名；0 关闭）
+roster_limit: 12
+
+deep:
+  max_rounds: 3
+
+render:
+  max_fragments: 3
+  topology_max_edges: 8
+  evidence_max_quotes: 3

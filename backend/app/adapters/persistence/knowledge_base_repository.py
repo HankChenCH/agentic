@@ -1,0 +1,125 @@
+"""知识库聚合数据访问：仅关系表，向量/对象存储不进仓库层。"""
+
+from dataclasses import dataclass
+from typing import List, Tuple
+from uuid import UUID
+
+from sqlalchemy import Engine, func, or_
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, select
+from wireup import injectable
+
+from app.domain.ports import RepositoryConflictError
+from app.domain.knowledge.ports import KnowledgeBaseRepositoryPort
+from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
+
+
+def _visible_clause(user_id: UUID | None):
+    """可见性谓词：私有库仅属主可见，公开库所有人可见。
+
+    user_id 缺失（无身份上下文）按匿名处理——只看公开库，不泄露他人私有库。
+    """
+    if user_id is None:
+        return col(KnowledgeBase.is_public)
+    return or_(
+        col(KnowledgeBase.user_id) == user_id,
+        col(KnowledgeBase.is_public),
+    )
+
+
+@injectable(as_type=KnowledgeBaseRepositoryPort)
+@dataclass
+class KnowledgeBaseRepository:
+    engine: Engine
+
+    def create_kb(self, kb: KnowledgeBase) -> KnowledgeBase:
+        # 名称唯一冲突的并发窗口在此收口为契约级冲突信号（驱动异常不出适配器）
+        with Session(self.engine, expire_on_commit=False) as session:
+            session.add(kb)
+            try:
+                session.commit()
+            except IntegrityError:
+                raise RepositoryConflictError("knowledge base name already exists") from None
+            session.refresh(kb)
+        return kb
+
+    def get_kb(self, kb_id: UUID) -> KnowledgeBase | None:
+        with Session(self.engine, expire_on_commit=False) as session:
+            kb = session.get(KnowledgeBase, kb_id)
+            session.commit()
+        return kb
+
+    def get_kb_by_name(self, name: str, user_id: UUID) -> KnowledgeBase | None:
+        # 名称唯一性是每用户的：重名预检限定在属主作用域内
+        with Session(self.engine, expire_on_commit=False) as session:
+            kb = session.exec(
+                select(KnowledgeBase).where(
+                    col(KnowledgeBase.name) == name,
+                    col(KnowledgeBase.user_id) == user_id,
+                )
+            ).first()
+            session.commit()
+        return kb
+
+    def update_kb(self, kb: KnowledgeBase) -> KnowledgeBase:
+        # 入参为携带修改的游离实例（expire_on_commit=False 产物），add 按主键重关联走 UPDATE
+        with Session(self.engine, expire_on_commit=False) as session:
+            session.add(kb)
+            session.commit()
+            session.refresh(kb)
+        return kb
+
+    def delete_kb(self, kb_id: UUID) -> bool:
+        # documents/segments 由 Relationship 的 delete-orphan 在库内级联删除
+        with Session(self.engine, expire_on_commit=False) as session:
+            kb = session.get(KnowledgeBase, kb_id)
+            if kb is None:
+                session.commit()
+                return False
+            session.delete(kb)
+            session.commit()
+        return True
+
+    def list_kbs(
+        self, page: int, page_size: int, user_id: UUID
+    ) -> Tuple[List[KnowledgeBase], int]:
+        # 分页 offset 必须按页大小计算：(page-1) * page_size
+        # deleting 资源视同已删除：列表与计数都不返回（详情接口仍可查到）
+        # 可见性：属主本人或公开库；他人私有库不出现在列表与计数中
+        offset = (page - 1) * page_size
+        visible = _visible_clause(user_id)
+        with Session(self.engine, expire_on_commit=False) as session:
+            total = session.exec(
+                select(func.count())
+                .select_from(KnowledgeBase)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    visible,
+                )
+            ).one()
+            result = session.exec(
+                select(KnowledgeBase)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    visible,
+                )
+                .order_by(col(KnowledgeBase.weight).desc(), col(KnowledgeBase.created_at).desc())
+                .offset(offset)
+                .limit(page_size)
+            ).all()
+            session.commit()
+        return list(result), int(total)
+
+    def list_visible_kbs(self, user_id: UUID | None) -> List[KnowledgeBase]:
+        # 检索组件用的非分页口径：与 list_kbs 同一可见性谓词与排序
+        with Session(self.engine, expire_on_commit=False) as session:
+            result = session.exec(
+                select(KnowledgeBase)
+                .where(
+                    col(KnowledgeBase.status) != KnowledgeStatus.DELETING,
+                    _visible_clause(user_id),
+                )
+                .order_by(col(KnowledgeBase.weight).desc(), col(KnowledgeBase.created_at).desc())
+            ).all()
+            session.commit()
+        return list(result)

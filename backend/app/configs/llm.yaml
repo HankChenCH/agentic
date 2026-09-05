@@ -1,0 +1,70 @@
+default: deepseek-flash-vision
+providers:
+  deepseek-flash-vision:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-flash-vision-exp
+    capabilities:
+      thinkable: true
+      # 多模态输入模态声明：含 vision 表示可接收图片输入（chat 消息带图）
+      multimodal:
+        - text
+        - vision
+      features:
+        - "json_mode"
+        - "function_calling"
+  deepseek-flash:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-flash
+    # 能力声明（描述事实，不携带调用策略）：features = 该模型支持的
+    # with_structured_output method 白名单（声明顺序即自发现优先级）。
+    # DeepSeek 思考模式拒绝强制 tool_choice，function_calling/json_schema
+    # （强制 tool_choice 通道）由 ThinkingAwareChatDeepSeek 自动以关思考副本
+    # 执行；声明 json_mode 则思考兼容，无需关思考
+    capabilities:
+      thinkable: true
+      features:
+        - "function_calling"
+  deepseek-pro:
+    type: deepseek
+    task_type: chat
+    api_key: ${DEEPSEEK_API_KEY}
+    model: deepseek-v4-pro
+    capabilities:
+      thinkable: true
+      features:
+        - "function_calling"
+  # OpenAI 兼容中转/三方网关：api_url 填实际网关地址，model 按网关支持的模型调整
+  # openai-chat:
+  #   type: openai
+  #   task_type: chat
+  #   api_url: ${OPENAI_API_URL}
+  #   api_key: ${OPENAI_API_KEY}
+  #   model: gpt-4o-mini
+  #   capabilities:
+  #     thinkable: true
+  #     features:
+  #       - "function_calling"
+  #       - "json_schema"
+  # openai-embedding:
+  #   type: openai
+  #   task_type: embedding
+  #   api_url: ${OPENAI_API_URL}
+  #   api_key: ${OPENAI_API_KEY}
+  #   model: text-embedding-3-small
+  # 本地 Ollama：先 `ollama pull bge-m3`，api_url 按实际部署地址调整（无需 api_key）
+  ollama-embedding:
+    type: ollama
+    task_type: embedding
+    # 容器化部署时指向宿主机 Ollama（compose 传 host.docker.internal），本地开发缺省不变
+    api_url: ${OLLAMA_API_URL:http://127.0.0.1:11434}
+    model: bge-m3
+  ollama-reranker:
+    type: ollama
+    task_type: rerank
+    api_url: ${OLLAMA_API_URL:http://127.0.0.1:11434}
+    model: qllama/bge-reranker-v2-m3:q8_0
+

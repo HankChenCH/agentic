@@ -1,0 +1,12 @@
+default: ${DB_DEFAULT:sqlite} # 切换 PostgreSQL 设 DB_DEFAULT=postgres 即可（容器编排走此路径，无需改文件；需先拉起 postgres）
+providers:
+  sqlite:
+    type: sqlite
+    dsn: ${SQLITE_DB_PATH:data/agentic.db}
+  postgres: # 与 docker-compose 的 postgres 服务对齐（psycopg3 驱动，lazy 连接）
+    type: postgresql
+    host: ${POSTGRES_HOST:127.0.0.1}
+    port: ${POSTGRES_PORT:5432}
+    user: ${POSTGRES_USER:agentic}
+    password: ${POSTGRES_PASSWORD:agentic}
+    db: ${POSTGRES_DB:agentic}
