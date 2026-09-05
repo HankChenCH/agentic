@@ -19,7 +19,7 @@ def _service(engine, vector=None):
     return MemoryConsolidationService(
         memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=vector or FakeMemoryVectorIndex(),
-        model_factory=None,
+        model_gateway=None,
         app_config=make_service_config(),
         usage=StubUsageService(),
     )

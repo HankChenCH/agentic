@@ -4,7 +4,7 @@ from uuid import UUID
 from wireup import injectable
 from langchain.messages import HumanMessage, SystemMessage
 
-from app.domain.conversation.ports import ChatModel, ChatModelGateway
+from app.domain.ports.llm import ChatModel, ChatModelGateway
 from app.domain.usage import UsageService
 from app.domain.usage.extract import llm_model_name
 from app.models.domain.agentic import AgenticConversationMessage, AgenticMessageType

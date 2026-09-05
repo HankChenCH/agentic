@@ -7,7 +7,7 @@
     commands ──► application
     application ──► {domain, components, agents}
     domain ──► models/domain              （唯一向下依赖；零 adapters/框架机制）
-    components ──► {domain 端口, adapters.llm 契约}
+    components ──► domain 端口              （纯算法引擎，零机制依赖）
     agents ──► components
     adapters ──► {domain 端口（实现）, models, core/config}
     packages ──► {core, adapters}         （能力库层，禁向上）
@@ -57,6 +57,7 @@ FORBIDDEN_EDGES = {
         "app.agents",
         "app.api",
         "app.tasks",
+        "app.adapters",  # 组件零机制依赖：LLM 经 ChatModelGateway 端口（domain/ports/llm）
     ],
     "app.agents": ["app.api", "app.tasks"],
     # 驱动适配器（HTTP）：只消费 application 用例层（机制面豁免见 EXEMPTED_IMPORTS）

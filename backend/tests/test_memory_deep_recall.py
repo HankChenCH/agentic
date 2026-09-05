@@ -30,7 +30,7 @@ class Harness:
         self.svc = MemoryRecallService(
             memory_repo=self.repo, vector_index=self.vector,
             app_config=make_service_config(),
-            model_factory=None,
+            model_gateway=None,
         )
 
     def user(self):

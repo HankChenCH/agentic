@@ -15,7 +15,7 @@ from app.adapters.persistence.memory_graph_repository import MemoryGraphReposito
 from app.models.domain.memory import MemoryEntity, MemoryStatement
 from app.domain.memory import MemoryVectorHit
 
-from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelFactory, make_service_config
+from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelGateway, make_service_config
 from conftest import TEST_USER_ID, StubUsageService
 
 
@@ -23,7 +23,7 @@ def _service(engine, llm, vector=None) -> MemoryConsolidationService:
     return MemoryConsolidationService(
         memory_repo=MemoryGraphRepository(engine=engine).for_user(TEST_USER_ID),
         vector_index=vector or FakeMemoryVectorIndex(),
-        model_factory=FakeModelFactory(llm),
+        model_gateway=FakeModelGateway(llm),
         app_config=make_service_config(),
         usage=StubUsageService(),
     )
@@ -228,7 +228,7 @@ def test_expand_anchor_resolves_via_grey_zone_adjudication(engine):
     svc = MemoryRecallService(
         memory_repo=repo, vector_index=vector,
         app_config=make_service_config(),
-        model_factory=FakeModelFactory(llm),
+        model_gateway=FakeModelGateway(llm),
     )
 
     out = svc.expand("广东禹通", TEST_USER_ID, uuid4())

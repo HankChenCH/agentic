@@ -10,8 +10,9 @@ best-effort）。由 TurnFinalizer 第三步在后台 daemon 线程调用；任�
 失败都不抛出（调用方另有兜底），只返回已落库条目。
 
 组件自内聚惯例：存取经注入的 ``MemoryGraphRepositoryPort`` 领域端口（实现住
-adapters/persistence）；向量适配器经 domain 端口注入（components→domain 合法边）；抽取走 ModelFactory 裸模型而非 AgentFactory——memory 组件不得依赖
-agents（智能体工具装配会反向依赖本组件），否则形成包级环。
+adapters/persistence）；向量适配器经 domain 端口注入（components→domain 合法边）；抽取走 ChatModelGateway 端口的裸模型而非 AgentFactory——memory 组件不得
+依赖 agents（智能体工具装配会反向依赖本组件），否则形成包级环；也不
+直接依赖 adapters（模型获取经 domain 端口，用量追踪包装属 domain/usage）。
 """
 
 import logging
@@ -23,8 +24,8 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
-from app.adapters.llm import ModelFactory
-from app.adapters.llm.usage_tracking import UsageTrackingChatModel
+from app.domain.ports.llm import ChatModelGateway
+from app.domain.usage.tracking import UsageTrackingChatModel
 from app.components.memory.internal.extraction import (
     ExtractionResult,
     ExtractedEntity,
@@ -82,7 +83,7 @@ class MemoryConsolidationService:
 
     memory_repo: MemoryGraphRepositoryPort
     vector_index: MemoryVectorIndexPort
-    model_factory: ModelFactory
+    model_gateway: ChatModelGateway
     app_config: AppConfig
     # 用量落库门面（components→domain 合法边）：巩固管线的 LLM 调用此前完全
     # 无计量，模型经 UsageTrackingChatModel 包装后由 sink 以 memory 场景落库
@@ -115,7 +116,7 @@ class MemoryConsolidationService:
         # 模型经用量追踪包装：抽取/消歧裁决/陈述裁决的每次调用（含
         # with_structured_output 链内）都以 memory 场景落库，调用点零改动
         model = UsageTrackingChatModel(
-            inner=self.model_factory.create(self.app_config.memory.extraction_provider),
+            inner=self.model_gateway.create(self.app_config.memory.extraction_provider),
             sink=self.usage.usage_sink(
                 user_id=user_id, thread_id=thread_id, turn_id=turn_id,
                 scene=UsageScene.MEMORY,

@@ -6,7 +6,7 @@ adapters/persistence）；向量适配器经 domain 端口注入（components→
 工具由 manifest.py 薄封装成 agent 可调用的闭包。会话内已投喂的记忆经
 SessionInjectRegistry 登记，深度工具只返回增量。expand 的锚点解析复用
 resolution 的三层消歧漏斗（与收尾写路同规：精确/强余弦直并 + 灰度带
-LLM 语义裁决——model_factory 未注入时灰度带自动退化为不启用）。
+LLM 语义裁决——model_gateway 未注入时灰度带自动退化为不启用）。
 """
 
 import logging
@@ -18,7 +18,7 @@ from uuid import UUID
 from wireup import injectable
 
 from app.core.config import AppConfig
-from app.adapters.llm import ModelFactory
+from app.domain.ports.llm import ChatModelGateway
 from app.components.memory.internal import renderer, resolution
 from app.components.memory.internal.extraction import (
     adjudicate_entity_merge,
@@ -79,9 +79,9 @@ class MemoryRecallService:
     memory_repo: MemoryGraphRepositoryPort
     vector_index: MemoryVectorIndexPort
     app_config: AppConfig
-    # 灰度带锚点裁决用的裸模型工厂（惯例同 consolidation；单测传 None，
+    # 灰度带锚点裁决用的裸模型网关（惯例同 consolidation；单测传 None，
     # 灰度带随之退化为不启用——快注路径零 LLM 的语义不变，模型按需惰性创建）
-    model_factory: ModelFactory
+    model_gateway: ChatModelGateway
 
     def __post_init__(self):
         self.inject_registry = SessionInjectRegistry()
@@ -243,7 +243,7 @@ class MemoryRecallService:
 
     def _anchor_adjudicator(self, repo: MemoryGraphRepositoryPort):
         """expand 锚点的灰度带语义裁决回调；灰度带关闭或无模型工厂时返回 None。"""
-        if self.model_factory is None or self.app_config.memory.resolution.grey_zone_lower <= 0:
+        if self.model_gateway is None or self.app_config.memory.resolution.grey_zone_lower <= 0:
             return None
 
         def adjudicate(ref: str, expected_type: str | None, candidates: list) -> int | None:
@@ -258,7 +258,7 @@ class MemoryRecallService:
 
     def _extraction_model(self):
         if self._model is None:
-            self._model = self.model_factory.create(self.app_config.memory.extraction_provider)
+            self._model = self.model_gateway.create(self.app_config.memory.extraction_provider)
         return self._model
 
 

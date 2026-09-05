@@ -1,6 +1,6 @@
-"""用量追踪包装：非流式 LLM 调用的 usage 捕获（记忆巩固管线的模型面）。
+"""用量追踪包装：非流式 LLM 调用的 usage 捕获（内部任务的模型面）。
 
-背景：记忆巩固的三个 LLM 调用点（结构化抽取/实体消歧裁决/陈述裁决）都是
+背景：记忆巩固/消歧裁决等内部 LLM 调用点都是
 ``model.with_structured_output(...).invoke(...)`` 形态——``include_raw=False``
 只返回解析后的 pydantic 对象，usage 根本不可达。本模块用 duck-typed 薄包装
 把用量旁路出来，调用点零改动：
@@ -11,9 +11,14 @@
   ``LLMResult`` 的 llm_output["token_usage"]（OpenAI 兼容族）或末条
   generation 消息的 usage_metadata 都能取到用量（与 LangSmith 追踪同机制）。
 
-只承诺 ``invoke`` / ``with_structured_output`` 两个消费面（巩固管线的全部
+只承诺 ``invoke`` / ``with_structured_output`` 两个消费面（内部任务的全部
 用法），不继承 BaseChatModel——避免为非流式内部任务承担流式/绑定等完整
-模型协议面。产出经 sink 回调（UsageService.usage_sink）落库，容错在 sink 内。
+模型协议面。产出经 sink 回调（``UsageService.usage_sink``，调用方按
+user/thread/turn/scene 组装）落库，容错在 sink 内。
+
+归属说明：本模块是计量域的纯逻辑（零供应商依赖，langchain-core 回调协议
+属领域侧框架白名单）——调用方（组件/application）从模型获取端口拿裸模型
+后自行包装，「是否计量、何场景、何上下文」的策略留在编排侧。
 """
 
 from typing import Any, Callable

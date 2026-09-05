@@ -31,7 +31,7 @@ from conftest import TEST_USER_ID, StubUsageService
 from fakes_memory import (
     CannedLLM,
     FakeMemoryVectorIndex,
-    FakeModelFactory,
+    FakeModelGateway,
     make_service_config,
 )
 
@@ -289,7 +289,7 @@ def test_merge_blocklist_overrides_cosine_ranking(engine):
             # 第 1 次判定弹出 [0.90, 0.86]：A 余弦更高本该 A 胜出；
             # 第 2 次（对照）弹出 [0.95, 0.94]：与候选行顺序无关，A 恢复胜出
         ),
-        model_factory=FakeModelFactory(CannedLLM()),
+        model_gateway=FakeModelGateway(CannedLLM()),
         app_config=make_service_config(),
         usage=StubUsageService(),
     )

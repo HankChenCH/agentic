@@ -44,9 +44,10 @@ app/
 │   │                         #   human_agent/ingestion）
 ├── domain/                   # 领域层：按聚合分包，零 adapters/框架机制依赖
 │   ├── ports/                #   跨聚合基础契约：Filesystem、DocumentParser+Parsed*、
+│   │                         #   LLM（ChatModel/ChatModelGateway）、
 │   │                         #   RepositoryConflictError（仓储冲突的契约级信号）
-│   ├── conversation/         #   领域服务 + ports.py（ConversationRepositoryPort、
-│   │                         #   ChatModelGateway）+ attachments/branching/multimodal/signals
+│   ├── conversation/         #   领域服务 + ports.py（ConversationRepositoryPort）
+│   │                         #   + attachments/branching/multimodal/signals/title
 │   ├── knowledge/            #   领域服务 + ports.py（KB/Doc 仓储端口、
 │   │                         #   KnowledgeVectorIndexPort/VectorHit）
 │   ├── memory/               #   领域服务 + ports.py（MemoryEditor/MemoryGraphReader/
@@ -89,7 +90,7 @@ api ──► application                     tasks ──► application（+ ad
 commands ──► application
 application ──► {domain, components, agents}
 domain ──► models/domain              ← 唯一下向依赖；零 adapters/供应商 SDK
-components ──► {domain 端口, adapters.llm 契约}
+components ──► domain 端口              （纯算法引擎，零机制依赖）
 agents ──► components
 adapters ──► {domain 端口（实现）, models, core/config}
 packages ──► {core, adapters}

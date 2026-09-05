@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.adapters.llm.usage_tracking import (
+from app.domain.usage.tracking import (
     UsageTrackingChatModel,
     _SinkHandler,
     _usage_from_llm_result,

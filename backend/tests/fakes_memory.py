@@ -55,8 +55,8 @@ def _outermost_json(text: str) -> str:
     return text[start : end + 1]
 
 
-class FakeModelFactory:
-    """ModelFactory 的最小替身：create(N) 返回绑定的 CannedLLM。"""
+class FakeModelGateway:
+    """ChatModelGateway 的最小替身：create(provider) 返回绑定的 CannedLLM。"""
 
     def __init__(self, llm: CannedLLM):
         self.llm = llm

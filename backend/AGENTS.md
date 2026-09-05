@@ -128,12 +128,14 @@ backend/                         # this directory is its own git repo (the works
 │                            #   跨聚合基础契约住 domain/ports/ 包：filesystem.py（Filesystem ABC——
 │                            #   read/put/delete/exists/list + presign_get 预签名 GET）、
 │                            #   parsing.py（DocumentParser ABC + ParsedDocument/ParsedBlock/
-│                            #   ParsedBlockType 归一化解析模型）、RepositoryConflictError
+│                            #   ParsedBlockType 归一化解析模型）、llm.py（ChatModel/
+│                            #   ChatModelGateway 裸模型契约——标题生成与 memory 抽取/裁决
+│                            #   的模型获取口）、RepositoryConflictError
 │                            #   （仓储契约级冲突信号——唯一约束等并发窗口由 adapters/persistence
 │                            #   在仓储方法内从驱动异常翻译而来，驱动异常不出适配器边界）。
 │                            #   各聚合：
-│                            #   conversation/（ports.py = ConversationRepositoryPort +
-│                            #   ChatModel/ChatModelGateway 裸模型协议；conversation_service.py
+│                            #   conversation/（ports.py = ConversationRepositoryPort；
+│                            #   conversation_service.py
 │                            #   开轮单事务/replay_history 权威回放/分支定位 + branching.py
 │                            #   分支树纯函数 + signals.py 会话域信号 key/常量 + multimodal.py
 │                            #   存储形态↔LangChain 块唯一翻译点 + attachments.py 附件门面
@@ -207,8 +209,9 @@ backend/                         # this directory is its own git repo (the works
 │                            #   门面内部，未来替换实现工具层不动）。
 │                            #   能力（v1 仅 tools）经 manifest 静态登记注册表，装配器绑定服务产出
 │                            #   StructuredTool；唯一显式组件清单点是 agents/toolbox.py。
-│                            #   components 消费 domain 端口与 adapters.llm 契约（单向，
-│                            #   供应商 SDK 禁入），严禁 application / app.agents / app.api
+│                            #   components 零 adapters 依赖，只消费 domain 端口（LLM 经
+│                            #   ChatModelGateway，用量包装属 domain/usage/tracking），
+│                            #   严禁 application / app.agents / app.api / app.adapters
 ├── packages/                # 可复用能力库层：契约+后端内聚一包，领域无关，禁向上依赖
 │                            #   domain/application/components/agents/api/tasks/models
 │                            #   （AST 强制）——居民 signal/：SignalStore 契约（key 寻址的
@@ -381,7 +384,7 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   commands ──► application
   application ──► {domain, components, agents}
   domain ──► models/domain              ← 唯一下向依赖；零 adapters/供应商 SDK
-  components ──► {domain 端口, adapters.llm 契约}
+  components ──► domain 端口            （纯算法引擎，零机制依赖）
   agents ──► components
   adapters ──► {domain 端口（实现）, models, core/config}
   packages ──► {core, adapters}
@@ -395,12 +398,16 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
 
   供应商红线：domain/application/components 禁 import weaviate/redis/obstore/
   sqlalchemy/sqlmodel——机制只住 adapters（AST 强制）。langchain 消息信封类型
-  （`HumanMessage`/`AIMessage`/`BaseMessage`）是领域侧允许的框架白名单。
+  （`HumanMessage`/`AIMessage`/`BaseMessage`）与回调/用量协议类型
+  （`domain/usage/tracking.py` 的 on_llm_end 捕获面）是领域侧允许的
+  langchain-core 框架白名单。
 - **端口反转（v2 题眼）** → 协议（`Protocol`/ABC）一律声明在 domain——聚合私有
-  端口住各聚合 `ports.py`（仓储/向量索引/模型网关/记忆编辑等），跨聚合基础契约
-  （Filesystem、DocumentParser+Parsed*）住 `domain/ports/` 包；实现住 adapters，
-  经 `@injectable(as_type=<端口>)` 回填（既有先例：components/memory 的
-  `MemoryEditor`/`MemoryGraphReader`）。domain 与 components 的构造注入一律注
+  端口住各聚合 `ports.py`（仓储/向量索引/记忆编辑等），跨聚合基础契约
+  （Filesystem、DocumentParser+Parsed*、ChatModel/ChatModelGateway）住
+  `domain/ports/` 包；实现住 adapters，经 `@injectable(as_type=<端口>)` 回填
+  （既有先例：components/memory 的 `MemoryEditor`/`MemoryGraphReader` 管理面、
+  `adapters/llm/gateway.py` 的模型网关——组件零机制依赖，LLM 获取与用量
+  计量分属模型端口与 domain/usage/tracking 包装）。domain 与 components 的构造注入一律注
   协议类型。仓储方法的驱动级冲突（唯一约束并发窗口）在适配器内翻译为
   `domain.ports.RepositoryConflictError`，领域捕获后映射为业务异常——驱动异常
   不出适配器边界。
@@ -692,7 +699,8 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   openai (chat + embedding, for RAG), ollama (chat + embedding, local —
   `api_key` optional for local providers; auth via `api_url` userinfo).
   `gateway.py` — `DefaultChatModelGateway`（`ChatModelGateway` 端口实现，
-  每次调用按 default entry 新建模型）。
+  协议住 `domain/ports/llm.py`；按入参 entry 新建模型——缺省 default entry，
+  指名即按用途路由如 `memory.extraction_provider`）。
   `db/` — `DatabaseFactory` builds SQLAlchemy `Engine` instances from
   `AppConfig.db` provider entries: `create(name=None)` (default falls back to
   `DBConfig.default`), engines cached per entry key (connection pools are heavy
@@ -966,7 +974,9 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   messages; fragment failure/empty degrades to dropping the section) — pure
   SQL scoring, no LLM/embedding — a stable top-10 standing digest: it neither
   skips session-fed ids nor bumps access counts, but still marks ids so deep
-  tools return only增量. Deep recall = three tools (`timeline`/`expand`/`state_at`,
+  tools return only增量. Deep recall = three tools
+  （已知缺口：expand 锚点灰度带裁决为裸模型调用不经用量包装，读路径 LLM 不落
+  用量——补齐需先定 scene/turn 上下文口径，登记为后续项） (`timeline`/`expand`/`state_at`,
   declared and built in `components/memory/manifest.py`, reading the current
   thread from the langgraph-injected `RunnableConfig` — `BaseAgent._config` puts `thread_id`
   into `configurable`, and tools declare a `config: RunnableConfig` param that
