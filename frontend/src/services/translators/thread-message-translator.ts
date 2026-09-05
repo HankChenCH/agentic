@@ -1,4 +1,5 @@
 import type {
+  DataMessagePart,
   ReasoningMessagePart,
   TextMessagePart,
   ThreadMessageLike,
@@ -15,13 +16,15 @@ import type {
  * 后端历史（turn 两层结构）→ assistant-ui ThreadMessageLike[]（一维）的翻译器。
  *
  * 与 server 的 StorageTranslator 对称：后端把一条 assistant ChatModelStream
- * 拆成 [THOUGHT, MESSAGE, TOOL_CALL, TOOL_RESULT] 多条 AgenticConversationMessage；
- * 这里把它们重新组装回 assistant-ui 的 parts 模型。
+ * 拆成 [THOUGHT, MESSAGE, TOOL_CALL, TOOL_RESULT, CUSTOM] 多条
+ * AgenticConversationMessage；这里把它们重新组装回 assistant-ui 的 parts 模型。
  *
- * 合并粒度对齐实时路径：RunAggregator 在一个 run 内只维护一条 assistant
- * 消息的 parts，而落库时每次 LLM 调用（ChatModelStream）是独立的
- * parent 链根 —— 所以不能按 parent 根分组（那会把一个多步 turn 拆成
- * N 条独立 assistant 消息），必须整 turn 合并。
+ * 合并粒度对齐实时路径：服务端流式侧整个 run 复用一个 run 级 messageId
+ * （AgUiTranslator 的消息 id 契约；react-ag-ui ≥0.0.58 把 TEXT_MESSAGE_* 里
+ * messageId 的变化当作消息边界），前端一个 run 只呈现一条 assistant 消息；
+ * 而落库时每次 LLM 调用（ChatModelStream）是独立的 parent 链根 —— 所以不能按
+ * parent 根分组（那会把一个多步 turn 拆成 N 条独立 assistant 消息），必须整
+ * turn 合并。
  *
  * 规则：
  *   - user MESSAGE          → 1 条 user ThreadMessage（content: [text]）
@@ -30,6 +33,8 @@ import type {
  *     调用会产生多段 reasoning/text/tool-call part）
  *   - TOOL_RESULT           → 不单独成条，并回同 tool_call_id 的 tool-call part
  *     的 result 字段
+ *   - CUSTOM                → data part（name/value 原样透传，由注册的
+ *     useAssistantDataUI 渲染器呈现，如 A2UI 天气卡片）
  *   - 轮次状态随消息下发：FAILED/CANCELED（及悬挂 RUNNING）轮次的 assistant
  *     消息标注 incomplete（error/cancelled）；无任何 assistant 内容时合成
  *     失败/已停止占位，避免悬空提问
@@ -119,10 +124,11 @@ function toAssistantThreadMessage(
   type AssistantPart =
     | TextMessagePart
     | ReasoningMessagePart
-    | ToolCallMessagePart;
+    | ToolCallMessagePart
+    | DataMessagePart;
   const parts: AssistantPart[] = [];
 
-  // thought → message → tool_call，按 group 内出现顺序（后端按序 append）
+  // thought → message → tool_call → custom，按 group 内出现顺序（后端按序 append）
   let lastId = "";
   for (const m of group) {
     lastId = m.message_id;
@@ -145,6 +151,12 @@ function toAssistantThreadMessage(
         argsText: JSON.stringify(args),
         result: toolResults.get(c.tool_call_id),
       });
+    } else if (m.message_type === "custom") {
+      // A2UI 等表现层载荷 → data part（由注册的 data 渲染器呈现，如天气卡片；
+      // 载荷非法时渲染器自行折叠降级，翻译层不做结构校验）
+      const c = m.content.find((c) => c.type === "custom");
+      if (!c || c.type !== "custom") continue;
+      parts.push({ type: "data", name: c.name, data: c.value });
     }
   }
 

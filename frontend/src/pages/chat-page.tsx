@@ -9,6 +9,7 @@ import {
   XIcon,
 } from "lucide-react";
 
+import { A2uiDataUI } from "@/components/assistant-ui/a2ui-data";
 import {
   KnowledgeContextToolUI,
   KnowledgeSearchToolUI,
@@ -166,6 +167,8 @@ export const ChatPage: FC = () => {
           {/* 注册 knowledge_search / knowledge_context 的溯源卡片渲染器（须在 runtime 内，自身不渲染） */}
           <KnowledgeSearchToolUI />
           <KnowledgeContextToolUI />
+          {/* 注册 A2UI data part 渲染器（name="a2ui"，天气卡片等声明式 UI） */}
+          <A2uiDataUI />
         </main>
 
         {/* 检索溯源抽屉：fixed 定位不占布局，点来源卡片「查看原文」弹出 */}

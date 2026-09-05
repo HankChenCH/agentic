@@ -269,3 +269,95 @@ describe("附件解析", () => {
     expect(messages[0]).not.toHaveProperty("attachments");
   });
 });
+
+// ---------------------------------------------------------------------------
+// CUSTOM 行（A2UI 卡片等表现层载荷）→ data part
+// ---------------------------------------------------------------------------
+
+describe("toThreadMessages 的 CUSTOM 行", () => {
+  const a2uiPayload = [
+    {
+      version: "v0.9",
+      createSurface: { surfaceId: "weather-x", catalogId: "https://a2ui.org/x" },
+    },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "weather-x",
+        components: [{ id: "root", component: "Card", child: "t" }],
+      },
+    },
+  ];
+
+  it("custom 行翻译为 data part（name/value 原样透传），排在 tool-call part 之后", () => {
+    const turnId = "turn-a2ui";
+    const turn = makeTurn({
+      turn_id: turnId,
+      turn_num: 0,
+      parent_turn_id: null,
+      messages: [
+        userMsg(turnId, "u-1", "中山天气如何", 0),
+        makeMessage(turnId, {
+          message_id: "a-1",
+          role: "assistant",
+          sequence_num: 1,
+          message_type: "tool_call",
+          content: [{ type: "tool_call", tool_call_id: "c1", name: "get_weather", args: { city: "中山" } }],
+        }),
+        makeMessage(turnId, {
+          message_id: "a-2",
+          role: "tool",
+          sequence_num: 2,
+          message_type: "tool_result",
+          content: [{ type: "tool_result", tool_call_id: "c1", content: '{"city": "中山"}' }],
+        }),
+        makeMessage(turnId, {
+          message_id: "a-3",
+          role: "assistant",
+          sequence_num: 3,
+          message_type: "custom",
+          content: [{ type: "custom", name: "a2ui", value: a2uiPayload }],
+        }),
+        makeMessage(turnId, {
+          message_id: "a-4",
+          role: "assistant",
+          sequence_num: 4,
+          message_type: "message",
+          content: [{ type: "text", text: "中山今天晴朗。" }],
+        }),
+      ],
+    });
+
+    const messages = toThreadMessages([turn]);
+    expect(messages).toHaveLength(2);
+    const assistant = messages[1]!;
+    const parts = assistant.content as unknown as Array<Record<string, unknown>>;
+    expect(parts.map((p) => p.type)).toEqual(["tool-call", "data", "text"]);
+    expect(parts[1]).toEqual({ type: "data", name: "a2ui", data: a2uiPayload });
+    // tool_result 仍并入 tool-call part 的 result
+    expect(parts[0]).toMatchObject({ toolCallId: "c1", result: '{"city": "中山"}' });
+  });
+
+  it("坏 custom content（无 custom part）静默跳过不产 part", () => {
+    const turnId = "turn-a2ui-bad";
+    const turn = makeTurn({
+      turn_id: turnId,
+      turn_num: 0,
+      parent_turn_id: null,
+      messages: [
+        userMsg(turnId, "u-1", "q", 0),
+        makeMessage(turnId, {
+          message_id: "a-1",
+          role: "assistant",
+          sequence_num: 1,
+          message_type: "custom",
+          content: [],
+        }),
+      ],
+    });
+    const messages = toThreadMessages([turn]);
+    // assistant 组无可渲染 part → 不产出消息（user 行照常）
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
+  });
+});

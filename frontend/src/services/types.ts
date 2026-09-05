@@ -37,6 +37,13 @@ export type BackendMessageContent =
     }
   | { type: "tool_result"; tool_call_id: string; content: unknown }
   | {
+      // A2UI 等前端表现层载荷（message_type=CUSTOM 行的存储形态）：
+      // name 是 ag-ui CUSTOM 事件名（当前仅 "a2ui"），value 是消息数组
+      type: "custom";
+      name: string;
+      value: unknown;
+    }
+  | {
       // 多模态 image part（ag-ui InputContent 存储形态，camelCase 特例）：
       // source 为稳定附件引用（url）或 base64 内联（data）
       type: "image";
@@ -278,4 +285,59 @@ export interface ToolCatalogComponent {
 
 export interface ToolCatalog {
   components: ToolCatalogComponent[];
+}
+
+// ===========================================================================
+// 用量统计（GET /stats/usage/*）
+//
+// camelCase 特例（同记忆图谱契约）：后端 stats 端点在领域服务层手工组装
+// camelCase 载荷（见 backend app/domain/usage/usage_service.py），不走
+// SQLModel model_dump 的 snake_case 直出。
+// ===========================================================================
+
+/** 用量场景：chat = 对话主链路；title = 会话标题生成；memory = 记忆巩固 */
+export type UsageScene = "chat" | "title" | "memory";
+
+/** 一个分组切片的用量小计（总量 / 按场景 / 按模型 / 按天分桶共用同形） */
+export interface UsageSlice {
+  /** 分组键：scene 值 / 模型名 / YYYY-MM-DD（UTC 日）；总量切片恒为 "total" */
+  key: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+/** GET /stats/usage/summary —— 区间总量 + 按场景/按模型分布 */
+export interface UsageSummary {
+  totals: UsageSlice;
+  byScene: UsageSlice[];
+  byModel: UsageSlice[];
+}
+
+/** GET /stats/usage/daily —— 按天时间序列（UTC 日分桶，日期升序） */
+export interface UsageDailyResult {
+  items: UsageSlice[];
+}
+
+/** GET /stats/usage/records 的行：一次 LLM 调用的用量流水 */
+export interface UsageRecord {
+  id: number;
+  scene: UsageScene;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  threadId: string | null;
+  turnId: string | null;
+  agenticId: string | null;
+  createdAt: string;
+}
+
+/** GET /stats/usage/records —— 流水分页（时间倒序） */
+export interface UsageRecordListResult {
+  items: UsageRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
