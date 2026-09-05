@@ -190,14 +190,31 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
   防御性校验（双形态：对象数组/JSON 字符串；非法整体返回 null）→
   `components/assistant-ui/a2ui-data.tsx` 把消息数组喂给官方渲染器
   （`@a2ui/react/v0_9` 的 `MessageProcessor` + `A2uiSurface` + `basicCatalog`，
-  React 19 peer 版本 0.11.0）。样式接线三件事：`injectStyles()` 注入
-  `.a2ui-surface` 结构样式（模块级幂等调用，**组件本身不带该根类名，须自包
-  wrapper**）；调色板 CSS 变量由 basicCatalog 导入时自动注入；A2UI 结构样式
-  带 `all: revert`，卡片内是浏览器默认排版（刻意与 Tailwind 预检隔离）。
-  载荷非法/处理失败降级为折叠 JSON，不渲染半棵组件树。历史回放：
+  React 19 peer 版本 0.11.0）。载荷非法/处理失败降级为折叠 JSON，不渲染半棵
+  组件树。交互回传：
+  A2UI Button 的 `chat.send` 事件经 `MessageProcessor` 第二参 actionHandler
+  接住（a2ui-data.tsx 的 `A2uiDataRender`），把 `context.text` 用
+  `aui.thread.append` 作为用户新消息追加进会话（按钮即「替用户说一句话」，
+  与后端 `packages/a2ui` 的 `CHAT_SEND_ACTION` 对齐；append 异步生效——发送
+  即返回、消息稍后出现，勿以同步读 messages.length 判断成败；消息渲染树内
+  的 scoped client 上 `aui.composer` 不可用，`thread.append` 可用）。历史回放：
   `thread-message-translator.ts` 把 CUSTOM 行还原为 data part，刷新后卡片照常
   渲染。新增卡片类型 = 后端组装新消息数组，前端零改动（渲染器按 name 注册，
   不按卡片类型分支）。
+  **宿主主题（`a2ui.css` 的 `.a2ui-host` 作用域）**是卡片观感与聊天页同风格
+  的关键：① 容器组件（Card/Row/Column/Divider）观感全走 `--a2ui-*` 内联
+  变量，由 `.a2ui-host` 接管到应用主题令牌（暖砂渐变 + 噪点纸感、圆角、
+  间距、图标色 `--a2ui-icon-color`）；`injectStyles()` 的 `.a2ui-surface`
+  结构样式幂等注入，但组件自身不带该类名，须由 wrapper（`a2ui-data.tsx`）
+  自包。② Text 的包内 CSS Module 类名在本项目打包链下**丢失**（DOM 只剩
+  h1–h5/em/`.body` 标签），排版规则须按**标签选择器**重建（em 去斜体并弱化、
+  caption 缩小、h2 主数值放大）。③ 结构样式的 `:where(*){all:revert}` 会把
+  字体颜色打回浏览器默认，`.a2ui-host :where(*)` 声明回「继承宿主」。④
+  Row `align="end"` 的内联 flex-end 在大小字号同行时阶梯错位，用属性选择器
+  + `!important` 覆盖为 baseline。升级 `@a2ui/react` 须回归这些 DOM 假设。
+  **Icon 约束**：`Icon` 的 `svgPath` 模式硬编码 `viewBox="0 0 24 24"`，
+  960 坐标系的图标库（Material Symbols）须先做坐标变换（后端 weather_surface
+  有现成变换产物与注释）。
 - 「停止生成」走**双通道取消**（`agentic-runtime.tsx` 的 `onCancel`）：先
   `POST /agentic/run/cancel` 置服务端 Redis 取消标志（兜底代理吞断链事件、
   工具执行中不可打断的场景），再 `agent.abortRun()` 本地断链（即时取消态 +

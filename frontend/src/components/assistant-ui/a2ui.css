@@ -1,0 +1,133 @@
+/*
+ * A2UI 宿主主题（暖砂编辑部风）：把 @a2ui/react 基础目录的调色板/排版变量
+ * 接管到应用主题令牌上，并补齐它丢失的 Text 排版规则。
+ *
+ * 背景：@a2ui/react v0.9 的容器组件（Card/Row/Column/Divider）把观感全部
+ * 落在 `--a2ui-*` CSS 变量上（内联样式）——变量接管即可控；但 Text 的排版
+ * 规则住包内 CSS Module，类名在本项目打包链下丢失（DOM 只剩 h1–h5/em/body
+ * 语义标签），叠加结构样式的 `all: revert` 会把它们打回浏览器默认——所以
+ * 这里按标签选择器等价重建排版。变量覆盖与标签规则全部收口在 `.a2ui-host`
+ * 作用域内；令牌引用应用 CSS 变量，暗色自动跟随。升级 @a2ui/react 时需
+ * 回归（DOM 形态见 a2ui-data.tsx 注释）。
+ */
+
+.a2ui-host {
+  /* ---- 调色板 → 应用主题（亮暗自动跟随） ---- */
+  --a2ui-color-background: var(--card);
+  --a2ui-color-on-background: var(--card-foreground);
+  --a2ui-color-surface: var(--card);
+  --a2ui-color-on-surface: var(--card-foreground);
+  --a2ui-color-primary: var(--primary);
+  --a2ui-color-on-primary: var(--primary-foreground);
+  --a2ui-color-secondary: var(--secondary);
+  --a2ui-color-on-secondary: var(--secondary-foreground);
+  --a2ui-color-border: var(--border);
+  --a2ui-color-border-hover: var(--border);
+  --a2ui-text-caption-color: var(--muted-foreground);
+
+  /* ---- 形状与密度 ---- */
+  --a2ui-border-radius: var(--radius);
+  --a2ui-border-width: 1px;
+  --a2ui-card-border: 1px solid
+    color-mix(in oklab, var(--border) 78%, var(--primary) 14%);
+  --a2ui-card-border-radius: var(--radius-lg);
+  /* 暖砂纸感：极淡噪点叠在「白卡 → 焦糖暖调」渐变上（亮暗跟随主题令牌） */
+  --a2ui-card-background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.028 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
+    linear-gradient(
+      170deg,
+      var(--card) 45%,
+      color-mix(in oklab, var(--primary) 12%, var(--card))
+    );
+  --a2ui-card-box-shadow: 0 1px 2px oklch(0 0 0 / 0.04), 0 4px 12px oklch(0 0 0 / 0.05);
+  --a2ui-card-margin: 0;
+  --a2ui-card-padding: 1.125rem 1.25rem;
+  --a2ui-column-gap: 0.5rem;
+  --a2ui-row-gap: 0.625rem;
+  --a2ui-divider-spacing: 0.375rem;
+
+  /* 单色图标：焦糖强调色（暗色下换亮调） */
+  --a2ui-icon-color: var(--primary);
+  --a2ui-icon-size: 2.75rem;
+
+  /* ---- 排版：正文 Geist 黑体、标题回落衬线 display 族 ---- */
+  --a2ui-font-size: 0.875rem;
+  --a2ui-font-scale: 1.25;
+  --a2ui-font-family-title: var(--font-heading);
+  font-family: var(--font-sans);
+  color: var(--card-foreground);
+}
+
+/* 结构样式的 `:where(*) { all: revert }` 把字体/颜色打回浏览器默认：
+   以更高优先级声明回「继承宿主」。 */
+.a2ui-host :where(*) {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* ---- Text 排版（按真实 DOM 的标签选择器重建；包内 CSS Module 类名丢失） ---- */
+.a2ui-host h1,
+.a2ui-host h2,
+.a2ui-host h3,
+.a2ui-host h4,
+.a2ui-host h5 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.15;
+  margin: 0;
+}
+/* h1 槽位 = 展示性大字 */
+.a2ui-host h1 {
+  font-size: 2.75rem;
+  font-weight: 400;
+  line-height: 1;
+}
+/* h2 槽位 = 主数值（温度大字，衬线收紧字距——卡片的视觉锚点） */
+.a2ui-host h2 {
+  font-size: 2.75rem;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+.a2ui-host h3 {
+  font-size: 1.125rem;
+}
+.a2ui-host h4 {
+  font-size: 1.0625rem;
+  letter-spacing: 0.02em;
+}
+.a2ui-host h5 {
+  font-size: 0.8125rem;
+}
+/* caption 槽位 = 弱化元信息（Text 的 caption variant 渲染为 em） */
+.a2ui-host em {
+  font-style: normal;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+}
+/* body 槽位（markdown 路径带 class="body"） */
+.a2ui-host .body {
+  font-size: 0.9375rem;
+}
+
+/* 主行基线对齐：Row 的 align="end" 内联样式是 flex-end，大号 h2 与小号
+   body 同行时呈阶梯错位；覆盖为 baseline 对齐视觉正确。内联样式优先级
+   高，须 !important（作用域限定 align-end 的行，避免影响 header 行）。 */
+.a2ui-host div[style*="align-items: flex-end"] {
+  align-items: baseline !important;
+}
+
+/* 图标：焦糖色 + 轻投影（与主题强调色同源） */
+.a2ui-host svg.a2ui-icon {
+  filter: drop-shadow(0 2px 4px oklch(0 0 0 / 0.1));
+}
+
+/* 发丝分隔线：比卡片描边更淡（元信息区的轻量分界） */
+.a2ui-host .a2ui-card div[style*="background-color"] {
+  background-color: color-mix(in oklab, var(--border) 55%, transparent) !important;
+}
+
+/* 卡片本体宽度贴合 wrapper（占位与对齐由 a2ui-data.tsx 控制） */
+.a2ui-host .a2ui-card {
+  width: 100%;
+}
