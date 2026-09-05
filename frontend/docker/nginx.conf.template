@@ -1,4 +1,14 @@
 # agentic-client 静态站点 + 同源反代（envsubst 模板：${BACKEND_URL} 来自容器环境变量）
+#
+# 限流：默认网关即本 nginx，阈值口径取自 deploy/deployment-spec.md §12.3
+# （示例值，按实际流量调整）。本文件经 envsubst 落到 conf.d/，属 http 上下文
+# include，故 limit_req_zone 直接写在顶层。键用 $binary_remote_addr（每 IP
+# 计数最小内存）；前面再有 LB/CDN 时需先配 real_ip 还原真实客户端 IP。
+
+# ---- http 上下文：按来源 IP 定义两个限流区 ----
+limit_req_zone $binary_remote_addr zone=api_general:10m rate=20r/s; # 常规 API
+limit_req_zone $binary_remote_addr zone=api_auth:10m    rate=1r/s;  # 认证端点（防爆破）
+
 server {
     listen 80;
     listen [::]:80;
@@ -6,6 +16,9 @@ server {
 
     root /usr/share/nginx/html;
     index index.html;
+
+    # 超额返回 429（limit_req 缺省回 503，语义不当）；网关层是全栈唯一的 429 来源
+    limit_req_status 429;
 
     # 与后端上传口径对齐（run 1 MiB / multipart 64 MiB，经 /api 反代时在此放开）
     client_max_body_size 64m;
@@ -30,9 +43,23 @@ server {
         add_header Cache-Control "no-cache";
     }
 
+    # 认证端点从严：login/register 是爆破面，burst 小且无排队
+    location /api/auth/ {
+        limit_req zone=api_auth burst=5 nodelay;
+        proxy_pass ${BACKEND_URL}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # 同源反代模式：构建时 VITE_API_BASE=/api，前端全部请求落在 /api/ 下，
     # 这里去掉前缀转发给后端（后端端点均挂顶级路径：/agentic... /knowledge... /auth... /memory...）
     location /api/ {
+        # 常规 API（含 SSE）：限流按「请求数」计——一个 run 是一条请求，流式
+        # 时长不占速率配额；burst+nodelay 突发一次放行、超额直接 429（不排队）
+        limit_req zone=api_general burst=40 nodelay;
         proxy_pass ${BACKEND_URL}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
