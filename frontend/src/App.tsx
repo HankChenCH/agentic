@@ -37,6 +37,9 @@ const KnowledgeDocumentDetailPage = lazy(() =>
 const MemoryGraphPage = lazy(() =>
   import("@/pages/admin/memory-graph-page").then((m) => ({ default: m.MemoryGraphPage })),
 );
+const UsageStatsPage = lazy(() =>
+  import("@/pages/admin/usage-stats-page").then((m) => ({ default: m.UsageStatsPage })),
+);
 
 /** 分包页面的加载占位（骨架屏，避免 Suspense 空白闪烁） */
 const LazyFallback = () => (
@@ -100,6 +103,7 @@ const router = createBrowserRouter([
         ),
       },
       { path: "/admin/memory-graph", element: <Suspense fallback={<LazyFallback />}><MemoryGraphPage /></Suspense> },
+      { path: "/admin/usage", element: <Suspense fallback={<LazyFallback />}><UsageStatsPage /></Suspense> },
       { path: "/knowledge", element: <Navigate to="/admin/knowledge" replace /> },
       {
         path: "/knowledge/:kbId",

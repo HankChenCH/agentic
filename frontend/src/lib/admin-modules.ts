@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { BrainIcon, DatabaseIcon } from "lucide-react";
+import { BrainIcon, ChartColumnIcon, DatabaseIcon } from "lucide-react";
 
 /**
  * 管理侧模块注册表：管理首页（模块启动页）据此渲染入口卡片。
@@ -32,5 +32,12 @@ export const ADMIN_MODULES: AdminModule[] = [
     description: "可视化长期记忆：人/物、事件与事实关系，支持时点回放",
     icon: BrainIcon,
     path: "/admin/memory-graph",
+  },
+  {
+    key: "usage-stats",
+    name: "我的用量",
+    description: "LLM 调用与 token 消耗统计：趋势、按场景/模型分布与明细",
+    icon: ChartColumnIcon,
+    path: "/admin/usage",
   },
 ];
