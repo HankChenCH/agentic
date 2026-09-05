@@ -49,13 +49,23 @@ class AgentToolbox:
                 return component.spec
         raise KeyError(f"component not in toolbox: {name}")
 
-    def tools(self, agentic_id: str, only: Collection[str] | None = None) -> list[StructuredTool]:
-        """实例化全部（或 ``only`` 指定组件名的）能力工具。
+    def tools(
+        self,
+        agentic_id: str,
+        only: Collection[str] | None = None,
+        tool_names: Collection[str] | None = None,
+    ) -> list[StructuredTool]:
+        """实例化全部（或 ``only`` 指定组件名 / ``tool_names`` 指定工具名的）能力工具。
 
-        与各组件的工具名冲突校验在构造期已完成，此处不再重复。
+        ``only`` 与 ``tool_names`` 可叠加（先选组件再选工具，如客服智能体取
+        knowledge 组件的检索三件而不要浏览工具）。与各组件的工具名冲突校验
+        在构造期已完成，此处不再重复。
         """
         selected = self._components() if only is None else [c for c in self._components() if c.spec.name in only]
-        return [tool for component in selected for tool in component.tools(agentic_id)]
+        tools = [tool for component in selected for tool in component.tools(agentic_id)]
+        if tool_names is not None:
+            tools = [tool for tool in tools if tool.name in tool_names]
+        return tools
 
     def _components(self) -> tuple[MemoryComponent | KnowledgeComponent | DemoComponent, ...]:
         return (self.memory, self.knowledge, self.demo)

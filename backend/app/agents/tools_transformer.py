@@ -56,11 +56,18 @@ class ToolsTransformer(StreamTransformer):
             # 不把 name/id/tool_call_id 等无关字段泄漏出去。
             output = payload.get("output")
             content = output.content if hasattr(output, "content") else str(output)
-            self.channel.push({
+            result: dict[str, Any] = {
                 "event": "tool-result",
                 "tool_call_id": payload["tool_call_id"],
                 "content": content,
-            })
+            }
+            # UI 通道（A2UI 基石）：工具以 content_and_artifact 形态返回时，
+            # artifact 是 LLM 不可见的伴随载荷（约定 {"a2ui": [消息数组]}），
+            # 原样透传给 translator 下发 CUSTOM 事件；无 artifact 则不带 ui 键。
+            artifact = getattr(output, "artifact", None)
+            if isinstance(artifact, dict) and artifact:
+                result["ui"] = artifact
+            self.channel.push(result)
             self.channel.push({
                 "event": "tool-finished",
                 "tool_call_id": payload["tool_call_id"],

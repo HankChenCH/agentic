@@ -12,7 +12,9 @@ LLM 必须先经 knowledge_list 了解可用知识库，knowledge_search 再自�
 
 检索与定位读取返回同形 JSON（``{"sources": [...], "notes": [...]}``），
 形状由 ``KnowledgeSearchResult`` 契约模型单源定义：LLM 依据 sources 的
-content 作答并按 index 标注 [n] 引用，前端 ToolUI 解析同一 JSON 渲染溯源
+content 作答（引用策略属智能体人设层——是否标注 [n] 角标由各 agent 的
+system prompt 决定，工具 description 保持中性，见 builtin/rag/prompts.py），
+前端 ToolUI 解析同一 JSON 渲染溯源
 卡片（bboxes 为原文 0-1 归一化位置框，用于 PDF 高亮定位）——模型即契约，
 不再是无 schema 的口头约定；定位读取无检索相关度，score 字段整体省略。
 检索管线（混合检索 + 命中邻域扩展 + RRF 排名融合）收敛在
@@ -158,7 +160,7 @@ def _build_knowledge_search_tool(component: "KnowledgeComponent") -> StructuredT
             "query: 检索问题或关键词；"
             "top_k: 返回的最大片段数，默认 4（仅控制返回条数，与内部检索深度无关）。"
             "返回 {\"sources\": [{index, doc_name, page_start, page_end, heading_path, score, content, bboxes, ...}], \"notes\": []}；"
-            "回答时依据 sources 的 content 作答，并以 [index] 角标注明引用出处（文档名/页码）；未检索到时如实说明。"
+            "依据 sources 的 content 作答，未检索到时如实说明。"
             "sources 中的 doc_id + position 可调 knowledge_context 精确读取某一片段——"
             "仅在检索节选确实不足以作答时使用。"
         ),

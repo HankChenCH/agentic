@@ -55,6 +55,8 @@ class BaseAgent(ABC):
     - ``build_middleware``（默认挂动态 prompt 中间件）：中间件装配扩展点，
       需要叠加其他内置中间件（摘要/重试/调用限额等）的子类覆写并以
       ``super()`` 起始；
+    - ``build_transformers``（默认仅 ``ToolsTransformer``）：流 transformer
+      装配扩展点，需改写前端透传内容的子类覆写；
     - ``preferred_provider``（默认走全局配置）：智能体级模型路由，取值为
       ``LLMConfig.providers`` 的 entry key。
 
@@ -127,7 +129,7 @@ class BaseAgent(ABC):
             model=self.model,
             system_prompt=self._baseline_prompt(template, static_values, fragments),
             tools=self.build_tools(),
-            transformers=[ToolsTransformer],
+            transformers=self.build_transformers(),
             middleware=[CancelGuardMiddleware(), *self.build_middleware(template, static_values, fragments)],
         )
 
@@ -251,6 +253,15 @@ class BaseAgent(ABC):
         """返回该智能体的 system prompt 模板（PromptTemplate 兼容的 f-string：
         静态槽如 ``{tools}`` 构建期由基类填充；动态槽如 ``{memory}`` 须以
         ``<slot>`` 信封包裹，每轮由 ``prompt_fragments`` 的片段渲染）。"""
+
+    def build_transformers(self) -> list:
+        """返回该智能体的流 transformer 类列表（构建期静态，扩展点）。
+
+        默认仅 ``ToolsTransformer``（tools stream mode → 中间契约投影）；
+        需要改写/过滤透传给前端的工具事件（如客服场景裁剪溯源内容）的
+        子类覆写本方法。只影响流帧投影，不影响进 LLM 的 ToolMessage。
+        """
+        return [ToolsTransformer]
 
     def build_tools(self) -> list:
         """返回该智能体携带的工具列表（构建期静态），默认无工具。"""
