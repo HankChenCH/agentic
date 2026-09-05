@@ -1,4 +1,5 @@
 from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
 from time import monotonic, time
@@ -29,6 +30,12 @@ CANCEL_CHECK_INTERVAL_SECONDS = 0.5
 # 语义提示而非空串（避免 transcript 出现「用户：」空提问）
 _IMAGE_ONLY_QUERY_PLACEHOLDER = "（图片）"
 
+# 收尾加工线程池：流收尾后异步执行标题/记忆（含 LLM 调用），并发上限防
+# 收尾洪峰（大量 run 同时收口时打爆下游 LLM/嵌入配额）；SIGTERM 排空等待
+# 上限——收尾是 best-effort 加工，进程关闭不为它无限期滞留
+FINALIZER_MAX_WORKERS = 4
+FINALIZER_DRAIN_TIMEOUT_SECONDS = 30.0
+
 
 @injectable
 @dataclass
@@ -58,6 +65,12 @@ class AgenticService:
         # 所有在途 run 点亮取消标志（见 begin_shutdown）
         self._active_lock = threading.Lock()
         self._active_runs: Counter[UUID] = Counter()
+        # 收尾加工走固定线程池（替代裸 daemon Thread）：可命名可排空——SIGTERM
+        # 后 drain_finalizers 等待在途收尾跑完，标题/记忆不因发布重启丢任务
+        self._finalizer_executor = ThreadPoolExecutor(
+            max_workers=FINALIZER_MAX_WORKERS, thread_name_prefix="turn-finalizer"
+        )
+        self._finalizer_futures: set[Future] = set()
 
     def run(
         self,
@@ -263,13 +276,40 @@ class AgenticService:
         self.conversations.store_assistant_messages(storage_translator.messages)
         self._flush_usage(storage_translator)
 
-        # 收尾加工含标题生成（LLM 调用），放后台线程避免拖住 SSE 连接收尾。
+        # 收尾加工含标题生成（LLM 调用），放后台线程池避免拖住 SSE 连接收尾。
         # 标题/记忆是纯文本消费方：只喂 text part（图片走占位语义）
-        threading.Thread(
-            target=self.turn_finalizer.run,
-            args=(conversation, turn, storage_translator.messages, text_of(message_content) or _IMAGE_ONLY_QUERY_PLACEHOLDER),
-            daemon=True,
-        ).start()
+        future = self._finalizer_executor.submit(
+            self.turn_finalizer.run,
+            conversation,
+            turn,
+            storage_translator.messages,
+            text_of(message_content) or _IMAGE_ONLY_QUERY_PLACEHOLDER,
+        )
+        with self._active_lock:
+            self._finalizer_futures.add(future)
+        future.add_done_callback(self._finalizer_done)
+
+    def _finalizer_done(self, future: Future) -> None:
+        """收尾任务完成回调：从在册集合摘除（drain 只看在途任务）。
+        任务内异常已由 TurnFinalizer.run 整体兜底，这里不再消费结果。"""
+        with self._active_lock:
+            self._finalizer_futures.discard(future)
+
+    def drain_finalizers(self, timeout: float = FINALIZER_DRAIN_TIMEOUT_SECONDS) -> int:
+        """进程优雅关闭时排空收尾任务：等待在途收尾（标题/用量/记忆）至多
+        timeout 秒，超时剩余任务放弃（收尾本就是 best-effort，不阻断退出）。
+        由 HTTP 入口 lifespan 关闭段调用（非信号上下文，可安全阻塞）。"""
+        with self._active_lock:
+            pending = {f for f in self._finalizer_futures if not f.done()}
+        if not pending:
+            return 0
+        done, not_done = wait(pending, timeout=timeout)
+        self._finalizer_executor.shutdown(wait=False, cancel_futures=True)
+        if not_done:
+            self.logger.warning("优雅关闭：%d 个收尾任务超时未完成，已放弃", len(not_done))
+        else:
+            self.logger.info("优雅关闭：收尾任务已全部排空（%d 个）", len(done))
+        return len(not_done)
 
     def cancel_run(self, user_id: UUID, thread_id: UUID) -> None:
         """显式取消通道（REST cancel 端点）：置 thread 作用域标志，由流式循环在

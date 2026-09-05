@@ -2,12 +2,13 @@
 轮次 FAILED 收口；客户端断连（生成器被 close 注入 GeneratorExit）时轮次 CANCELED 收口。
 
 纯单测：真实 ConversationRepository + 临时 SQLite（conftest 的 engine fixture），
-agent 工厂 / 记忆 / 日志全替身；threading.Thread 换成同步 InlineThread，
+agent 工厂 / 记忆 / 日志全替身；收尾线程池换成同步 InlineFinalizerExecutor，
 保证断言时收尾加工（TurnFinalizer.run）已确定性完成。
 """
 
 import base64
 import json
+from concurrent.futures import Future
 from io import BytesIO
 from time import sleep
 from types import SimpleNamespace
@@ -209,15 +210,20 @@ class RecordingLoggerFactory:
         return self.logger
 
 
-class InlineThread:
-    """threading.Thread 替身：start() 同步执行 target，消除后台线程竞态。"""
+class InlineFinalizerExecutor:
+    """ThreadPoolExecutor 替身：submit() 同步执行并返回已完成 Future，
+    消除后台收尾线程竞态（收尾加工在测试内即时可见）。"""
 
-    def __init__(self, target, args=(), daemon=None):
-        self._target = target
-        self._args = args
+    def __init__(self, *args, **kwargs):
+        pass
 
-    def start(self):
-        self._target(*self._args)
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+    def shutdown(self, *args, **kwargs):
+        pass
 
 
 class FakeUserService:
@@ -242,7 +248,7 @@ class FakeUserNodeSync:
 
 @pytest.fixture()
 def make_service(engine, monkeypatch, tmp_path):
-    monkeypatch.setattr("app.application.agentic_service.threading.Thread", InlineThread)
+    monkeypatch.setattr("app.application.agentic_service.ThreadPoolExecutor", InlineFinalizerExecutor)
 
     def _make(agent_factory, conversation_repo=None, memory=None, signal_store=None, title_generator=None):
         repo = conversation_repo or ConversationRepository(engine=engine)
@@ -372,7 +378,7 @@ def test_happy_path_lifecycle(engine, make_service, monkeypatch):
     ]
     assert events[2]["delta"] == "你好，世界"
     assert turn_status(engine, thread_id) == AgenticTurnStatus.COMPLETED
-    # 用户消息 + assistant MESSAGE 各一行（InlineThread 已同步跑完收尾加工）
+    # 用户消息 + assistant MESSAGE 各一行（InlineFinalizerExecutor 已同步跑完收尾加工）
     assert len(stored_messages(engine, thread_id)) == 2
 
 

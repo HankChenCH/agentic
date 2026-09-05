@@ -19,7 +19,7 @@ from app.models.domain.agentic import (
 @injectable
 @dataclass
 class TurnFinalizer:
-    """agentic run 一轮结束后的收尾加工（流收尾后由 AgenticService 在后台 daemon 线程调用）。
+    """agentic run 一轮结束后的收尾加工（流收尾后由 AgenticService 提交到收尾线程池执行）。
 
     三步固定顺序执行，容错语义各不相同，故不做统一的阶段抽象：
     - 填标题：仅首轮（conversation_title 为空）调 LLM；失败只记日志，
