@@ -146,3 +146,16 @@ class KnowledgeVectorIndexPort(Protocol):
     def search_many(
         self, kb_ids: List[UUID], query: str, *, top_k: int = DEFAULT_TOP_K, alpha: float = 1.0
     ) -> List[VectorHit]: ...
+
+
+class IngestionDispatcher(Protocol):
+    """摄取任务派发端口：文档上传/retry/rechunk 受理与看门狗补发的统一通道。
+
+    Celery 机制不进领域与应用层——实现住 ``app/adapters/tasking/``（方法内
+    懒 import 任务对象，防 tasks ↔ adapters 模块环）。契约 fail-loud：派发
+    失败如实上抛，容错口径归消费方（HTTP 受理路径吞掉告警、文档停留
+    pending 供 retry 补发；看门狗路径上抛由任务层按周期重试）。
+    """
+
+    def dispatch_processing(self, kb_id: UUID, doc_id: UUID) -> None:
+        """补发文档摄取处理任务（幂等：claim 门闸吸收重复消息）。"""
