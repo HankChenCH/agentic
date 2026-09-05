@@ -28,9 +28,11 @@ class FakeTitleGenerator:
         self.title = title
         self.error = error
         self.calls = 0
+        self.calls_kwargs = []
 
-    def generate(self, query, turn_messages):
+    def generate(self, query, turn_messages, *, user_id=None, thread_id=None):
         self.calls += 1
+        self.calls_kwargs.append({"user_id": user_id, "thread_id": thread_id})
         if self.error is not None:
             raise self.error
         return self.title
@@ -231,6 +233,21 @@ def test_token_usage_aggregation_ignores_unknown_keys(engine, seeded):
     finalizer.run(conversation, turn, messages, "你好")
 
     assert stored_turn(engine, conversation.thread_id).token_usage == {"prompt_tokens": 15, "completion_tokens": 20, "total_tokens": 37}
+
+
+def test_token_usage_aggregation_accepts_native_usage_metadata_keys(engine, seeded):
+    """存量消息行的原生键族（LangChain usage_metadata：input/output_tokens）
+    同样计入轮次聚合——键名归一化改造前落库的历史数据不丢输入/输出维度。"""
+    repo, conversation, turn = seeded
+    finalizer, _ = make_finalizer(repo)
+    messages = [
+        make_message(conversation.thread_id, turn.turn_id, 1, {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130}),
+        make_message(conversation.thread_id, turn.turn_id, 2, {"input_tokens": 11, "output_tokens": 5, "total_tokens": 16}),
+    ]
+
+    finalizer.run(conversation, turn, messages, "你好")
+
+    assert stored_turn(engine, conversation.thread_id).token_usage == {"input_tokens": 111, "output_tokens": 35, "total_tokens": 146}
 
 
 def test_memory_failure_does_not_break_token_write(engine, seeded):

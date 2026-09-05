@@ -27,7 +27,7 @@ from app.domain.memory import MemoryAdminService
 from app.domain.memory.ports import EntitySplitSpec
 from app.domain.memory.ports import MemoryVectorHit
 
-from conftest import TEST_USER_ID
+from conftest import TEST_USER_ID, StubUsageService
 from fakes_memory import (
     CannedLLM,
     FakeMemoryVectorIndex,
@@ -291,6 +291,7 @@ def test_merge_blocklist_overrides_cosine_ranking(engine):
         ),
         model_factory=FakeModelFactory(CannedLLM()),
         app_config=make_service_config(),
+        usage=StubUsageService(),
     )
     from app.components.memory.internal.extraction import ExtractedEntity
 

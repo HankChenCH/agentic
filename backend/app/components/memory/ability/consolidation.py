@@ -25,6 +25,7 @@ from wireup import injectable
 
 from app.core.config import AppConfig
 from app.adapters.llm import ModelFactory
+from app.adapters.llm.usage_tracking import UsageTrackingChatModel
 from app.components.memory.repositories import MemoryRepository
 from app.components.memory.internal.extraction import (
     ExtractionResult,
@@ -48,6 +49,8 @@ from app.domain.memory import (
     MemoryVectorIndexPort,
     VectorEntry,
 )
+from app.domain.usage import UsageService
+from app.models.domain.usage import UsageScene
 
 from app.models.domain.memory import (
     EntityType,
@@ -82,6 +85,9 @@ class MemoryConsolidationService:
     vector_index: MemoryVectorIndexPort
     model_factory: ModelFactory
     app_config: AppConfig
+    # 用量落库门面（components→domain 合法边）：巩固管线的 LLM 调用此前完全
+    # 无计量，模型经 UsageTrackingChatModel 包装后由 sink 以 memory 场景落库
+    usage: UsageService
 
     # ==================== 写路径：巩固管线 ====================
 
@@ -107,7 +113,15 @@ class MemoryConsolidationService:
             return []
 
         now = datetime.now(timezone.utc)
-        model = self.model_factory.create(self.app_config.memory.extraction_provider)
+        # 模型经用量追踪包装：抽取/消歧裁决/陈述裁决的每次调用（含
+        # with_structured_output 链内）都以 memory 场景落库，调用点零改动
+        model = UsageTrackingChatModel(
+            inner=self.model_factory.create(self.app_config.memory.extraction_provider),
+            sink=self.usage.usage_sink(
+                user_id=user_id, thread_id=thread_id, turn_id=turn_id,
+                scene=UsageScene.MEMORY,
+            ),
+        )
         repo = self.memory_repo.for_user(user_id)
         index = self.vector_index.for_user(user_id)
 

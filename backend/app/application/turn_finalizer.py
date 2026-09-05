@@ -50,7 +50,10 @@ class TurnFinalizer:
         try:
             if conversation.conversation_title == "":
                 try:
-                    title = self.title_generator.generate(query, turn_messages)
+                    title = self.title_generator.generate(
+                        query, turn_messages,
+                        user_id=conversation.user_id, thread_id=conversation.thread_id,
+                    )
                     if title:
                         self.conversations.record_title(conversation, title)
                 except Exception:

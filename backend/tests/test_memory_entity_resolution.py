@@ -10,7 +10,7 @@ from app.models.domain.memory import EntityType, MemoryEntity
 from app.domain.memory import MemoryVectorHit
 
 from fakes_memory import FakeMemoryVectorIndex, make_service_config
-from conftest import TEST_USER_ID
+from conftest import TEST_USER_ID, StubUsageService
 
 NOW = datetime(2026, 8, 27, tzinfo=timezone.utc)
 
@@ -21,6 +21,7 @@ def _service(engine, vector=None):
         vector_index=vector or FakeMemoryVectorIndex(),
         model_factory=None,
         app_config=make_service_config(),
+        usage=StubUsageService(),
     )
 
 

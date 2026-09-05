@@ -2,8 +2,8 @@
 
 错误码分段规划（int，0 为成功，沿用 Response 信封约定）：
 1xxx 会话（conversation）、2xxx 智能体（agent）、3xxx 记忆（memory）、
-4xxx 知识库（knowledge）、5xxx 用户（user）；新增业务域时在此追加分段
-并保持全局唯一。
+4xxx 知识库（knowledge）、5xxx 用户（user）、6xxx 用量统计（stats）；
+新增业务域时在此追加分段并保持全局唯一。
 
 基类 :class:`~app.core.exceptions.business.BusinessError` 由框架提供
 （:mod:`app.core.exceptions`）：继承它即获得全局异常处理器的透传语义
@@ -40,6 +40,7 @@ from app.exceptions.memory import (
     MemoryObjectNotFoundError,
     MemoryProtectedObjectError,
 )
+from app.exceptions.stats import InvalidUsageRangeError, StatsError
 from app.exceptions.user import (
     InvalidCredentialsError,
     UserError,
@@ -79,4 +80,6 @@ __all__ = [
     "InvalidCredentialsError",
     "UserNotFoundError",
     "UserInvalidParamError",
+    "StatsError",
+    "InvalidUsageRangeError",
 ]

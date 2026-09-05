@@ -33,7 +33,7 @@ from app.api.middleware import (
     BodySizeSpec,
     RequestIDMiddleware,
 )
-from app.api.v1.endpoints import agentic, attachments, auth, knowledge, memory
+from app.api.v1.endpoints import agentic, attachments, auth, knowledge, memory, stats
 from app.adapters.vector import VectorStoreFactory
 
 # .env 由 core/config/loader.py 在首次读取配置时加载（AGENTIC_ENV_FILE 可指定路径）
@@ -113,6 +113,7 @@ def create_app():
     server.include_router(attachments.router, dependencies=[Depends(require_user)])
     server.include_router(knowledge.router, dependencies=[Depends(require_user)])
     server.include_router(memory.router, dependencies=[Depends(require_user)])
+    server.include_router(stats.router, dependencies=[Depends(require_user)])
     server.include_router(auth.router)
     server.include_router(health_router)
     # /metrics 供 Prometheus 抓取：公开（与 /health 同级），enabled=False 时不挂载

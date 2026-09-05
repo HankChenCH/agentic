@@ -16,7 +16,7 @@ from app.models.domain.memory import MemoryEntity, MemoryStatement
 from app.domain.memory import MemoryVectorHit
 
 from fakes_memory import CannedLLM, FakeMemoryVectorIndex, FakeModelFactory, make_service_config
-from conftest import TEST_USER_ID
+from conftest import TEST_USER_ID, StubUsageService
 
 
 def _service(engine, llm, vector=None) -> MemoryConsolidationService:
@@ -25,6 +25,7 @@ def _service(engine, llm, vector=None) -> MemoryConsolidationService:
         vector_index=vector or FakeMemoryVectorIndex(),
         model_factory=FakeModelFactory(llm),
         app_config=make_service_config(),
+        usage=StubUsageService(),
     )
 
 
