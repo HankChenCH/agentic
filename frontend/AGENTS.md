@@ -14,13 +14,13 @@ agentic-client/                  # this directory is its own git repo (client/ a
 ├── src/
 │   ├── App.tsx              # createBrowserRouter + RouterProvider（AgenticRuntimeProvider 挂在路由外层；
 │   │                        #   /login 公开，其余路由经 RequireAuth 守卫）+ sonner Toaster
-│   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 登出跳转）
+│   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 静默刷新重试/登出跳转）
 │   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）+ attachments 适配器
 │   │                        #   （ServerImageAttachmentAdapter：图片附件 send 阶段上传后端，成功才放行提交）
 │   ├── services/a2ui.ts     # A2UI 载荷防御性解析（parseA2uiPayload 纯函数）+
 │   │                        #   a2ui-data.tsx（useAssistantDataUI 注册的官方渲染器接线，天气卡片）
-│   ├── stores/              # auth-store.ts（首个 zustand store：token/user + localStorage 持久化，
-│   │                        #   getToken() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
+│   ├── stores/              # auth-store.ts（首个 zustand store：token/refreshToken/user +
+│   │                        #   localStorage 持久化，getToken()/getSession() 供非 React 环境读票）+ tool-catalog-store.ts（工具目录
 │   │                        #   缓存 name→中文标题，幂等拉取一次，useToolDisplay 的降级链一环）
 │   │                        #   + agent-store.ts（智能体选择：目录缓存 + 选中项 localStorage 持久化，
 │   │                        #   run 请求经 prepareRunAgentInput 覆写注入 forwardedProps.agentId）
@@ -42,7 +42,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   （知识库，含 pending/processing/deleting 状态的条件轮询）+ use-memory-graph（快照）
 │   │                        #   + use-usage-stats（用量统计：预置范围 + 汇总/序列/流水并行拉取）
 │   ├── lib/                 # utils.ts (cn())、config.ts (REST_BASE/SSE_URL)、http.ts (axios 信封封装 +
-│   │                        #   请求拦截器注 Bearer/401 登出跳转)、format.ts (文件大小/时间格式化)、
+│   │                        #   请求拦截器注 Bearer/401 刷新重试+登出跳转)、token-refresh.ts
+│   │                        #   (refresh token 单飞刷新 + 临期主动刷新调度)、format.ts (文件大小/时间格式化)、
 │   │                        #   admin-modules.ts（管理模块注册表）
 │   └── services/            # REST 服务层：auth-service（register/login/me）、conversation-service、
 │       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
@@ -131,14 +132,19 @@ use-conversation-list 的 `currentThreadId` 镜像，不是 `threads.mainThreadI
 新模块 = 注册表加一条 + 路由加一条）；`/admin/knowledge` 知识库列表、
 `/admin/knowledge/:kbId` 详情；旧 `/knowledge*` 路径重定向到 `/admin/knowledge*` 兜底。
 
-**认证数据流（token 双通道注入）**：登录/注册（`services/auth-service.ts`，
-注册即登录——后端直接签发 token）写入 auth-store 后，① axios 单例
+**认证数据流（双令牌 + token 双通道注入）**：登录/注册（`services/auth-service.ts`，
+注册即登录——后端直接签发 access/refresh 双令牌，access 默认 30 分钟、refresh
+7 天且每次刷新旋转）写入 auth-store 后，① axios 单例
 （`lib/http.ts`）的请求拦截器每次现读 `getToken()` 注入
 `Authorization: Bearer`（REST 全覆盖）；② SSE 聊天端点不走 axios——
 `agentic-runtime.tsx` 给 HttpAgent 传 `authenticatedFetch` 覆盖，请求时现读
-token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/auth/*` 自身
-的 401 是业务错误，交给表单展示不跳转）；SSE 端点在 200 流式头之后不再走
-全局异常处理器，401 只能在 fetch 层拦截。use-conversation-list 的初始拉取
+token 注头。401 双通道同口径：先经 `lib/token-refresh.ts` 的**单飞刷新通道**
+（裸 fetch 直连 `/auth/refresh`，不经 axios 拦截器——避免自递归；并发触发
+只发一次请求）用 refresh token 静默换新并重放原请求一次，刷新失败才
+清会话 + 跳 `/login?next=...`（`/auth/*` 自身的 401 是业务错误，交给表单
+展示不跳转）；SSE 端点在 200 流式头之后不再走全局异常处理器，401 只能在
+fetch 层拦截。`lib/token-refresh.ts` 同时承载**临期主动刷新**（每分钟轮询，
+access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉取
 按 `token` 门控——runtime provider 在路由外层，未登录挂载时不发必 401 的
 列表请求。
 
@@ -167,6 +173,25 @@ token 注头。401 双通道同口径：清会话 + 跳 `/login?next=...`（`/au
 
 ## Gotchas
 
+- **构建产物：react 全家 CDN 外置 + vendor 分包（vite.config.ts，仅 build
+  生效，dev 不受影响）**：react/react-dom/react-router（含 jsx-runtime、
+  client 子路径）经自定义插件 `cdnExternals` 外置——transformIndexHtml 注入
+  **importmap**（esm.sh，版本号运行时从 node_modules 读取防漂移），
+  externals 由 rolldown 内置 `esmExternalRequirePlugin` 声明（**不能**再列
+  顶层 `external`，会优先跳过 require→import 转换）。三个 rolldown 特有坑：
+  ① 产物内 CJS 模块（如 zustand 依赖 use-sync-external-store）的
+  `require("react")` 在浏览器无 require 函数，运行期抛错——上述内置插件把
+  它转成 ESM import；② esm.sh 的 react-dom/react-router 构建会把 peer 依赖
+  react 解析到 ^19 最新版而非本地 pin 版本，双 React 实例 →
+  "Cannot read properties of null (reading 'useContext')"，URL 必须带
+  `?external=react` 让 esm.sh 产物 bare import "react" 统一走 importmap；
+  ③ 现成插件 vite-plugin-cdn-import / vite-plugin-cdn2 都是 UMD globals
+  方案，React 19 起无 UMD 构建，实测无效。剩余大块 vendor 由
+  `build.rolldownOptions.output.advancedChunks` 拆三组（vendor-assistant /
+  vendor-markdown / vendor-ui，仅圈主链路静态依赖；recharts 等懒加载包不
+  入组以免被提前拉进首屏）。效果：入口 chunk 1.5MB→147KB（gzip
+  438→48KB）。**部署约束**：运行期需能访问 esm.sh——离线/内网部署需回退
+  该插件（删 `cdnExternals()` 即可整体还原为全量打包）。
 - **智能体选择（新会话先选）**：无消息的新会话视图中，composer 上方渲染
   AgentModeSwitch 分段 pills（thread.tsx 用 `AuiIf isNewChatView` 包裹）——
   ≤3 个智能体直接切换，更多收进「更多」下拉（agent-selector.tsx，数据来自

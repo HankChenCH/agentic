@@ -85,7 +85,8 @@ backend/                         # this directory is its own git repo (the works
 │                              #   如 local 后端则降级流式回源）——分域口径见
 │                              #   domain/conversation/attachments.py;
 │                              #   api 根 deps.py（非 endpoints/）-> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
-│                              #   auth.py -> POST /auth/register|login（注册即登录，签发 JWT）+ GET /auth/me;
+│                              #   auth.py -> POST /auth/register|login（注册即登录，签发 access/refresh 双 JWT）
+│                              #   + POST /auth/refresh（刷新令牌旋转换新一对）+ GET /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
 │                              #   （agentic/knowledge/memory 组，/auth、/health 公开）；
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传——端点透传 UploadFile
@@ -584,7 +585,8 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   建议 ≥32 字节；**prod 装配期 fail-fast**：检出 dev 兜底密钥或不足 32 字节即
   抛 `ConfigError` 拒绝启动，http/worker/migrate 全入口生效，校验口径在
   `core/config/auth.py`、接线在 AppConfig 的 model_validator）、
-  `jwt_algorithm`、`token_expire_minutes` 默认 7 天）、`llm`
+  `jwt_algorithm`、`access_token_expire_minutes` 默认 30 分钟（短命访问
+  令牌）与 `refresh_token_expire_minutes` 默认 7 天（长命刷新令牌））、`llm`
   (`LLMConfig`: default + providers dict; each entry declares `type` —
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
   `chat`/`embedding`（`rerank` 为配置预留、工厂尚未支持构建）; entry 级 `timeout`（秒，默认 120）落地为模型客户端
