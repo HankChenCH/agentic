@@ -1,6 +1,5 @@
 import { useState, type FC } from "react";
-import { useNavigate } from "react-router";
-import { ArrowLeftIcon, RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -22,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdminPageShell } from "@/components/shared/admin-page-shell";
 import {
   Table,
   TableBody,
@@ -64,46 +64,116 @@ const SceneBadge: FC<{ scene: string }> = ({ scene }) => (
   </Badge>
 );
 
-/** 切片表（按场景/按模型共用）：次数 + 输入/输出/总 token */
+/** 切片行数据（按场景/按模型共用，卡片与表格两形态渲染同一数据） */
+interface SliceRow {
+  key: string;
+  label: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+/** 窄屏切片卡：标签 + 总计一行，次数/输入/输出一行小字（四项并排会挤截标签） */
+const SliceCard: FC<{ row: SliceRow }> = ({ row }) => (
+  <div className="flex flex-col gap-1 rounded-lg border border-border/70 bg-card px-3 py-2.5">
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="min-w-0 truncate text-sm font-medium">{row.label}</span>
+      <span className="shrink-0 text-sm font-medium tabular-nums">
+        总计 {num(row.totalTokens)}
+      </span>
+    </div>
+    <div className="flex items-baseline gap-3 text-xs text-muted-foreground tabular-nums">
+      <span>次数 {num(row.calls)}</span>
+      <span>输入 {num(row.promptTokens)}</span>
+      <span>输出 {num(row.completionTokens)}</span>
+    </div>
+  </div>
+);
+
+/** 切片表（按场景/按模型共用）：md+ 表格，窄屏卡片列表 */
 const SliceTable: FC<{ slices: UsageSlice[]; labelHeader: string; renderKey: (key: string) => string }> = ({
   slices,
   labelHeader,
   renderKey,
-}) => (
-  <Table>
-    <TableHeader>
-      <TableRow>
-        <TableHead>{labelHeader}</TableHead>
-        <TableHead className="text-right">次数</TableHead>
-        <TableHead className="text-right">输入</TableHead>
-        <TableHead className="text-right">输出</TableHead>
-        <TableHead className="text-right">总计</TableHead>
-      </TableRow>
-    </TableHeader>
-    <TableBody>
-      {slices.length === 0 ? (
-        <TableRow>
-          <TableCell colSpan={5} className="text-center text-muted-foreground">
-            暂无数据
-          </TableCell>
-        </TableRow>
-      ) : (
-        slices.map((slice) => (
-          <TableRow key={slice.key}>
-            <TableCell>{renderKey(slice.key)}</TableCell>
-            <TableCell className="text-right tabular-nums">{num(slice.calls)}</TableCell>
-            <TableCell className="text-right tabular-nums">{num(slice.promptTokens)}</TableCell>
-            <TableCell className="text-right tabular-nums">{num(slice.completionTokens)}</TableCell>
-            <TableCell className="text-right font-medium tabular-nums">{num(slice.totalTokens)}</TableCell>
-          </TableRow>
-        ))
-      )}
-    </TableBody>
-  </Table>
+}) => {
+  const rows: SliceRow[] = slices.map((slice) => ({
+    key: slice.key,
+    label: renderKey(slice.key),
+    calls: slice.calls,
+    promptTokens: slice.promptTokens,
+    completionTokens: slice.completionTokens,
+    totalTokens: slice.totalTokens,
+  }));
+
+  if (rows.length === 0) {
+    return (
+      <p className="py-4 text-center text-sm text-muted-foreground">
+        暂无数据
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {/* 窄屏：紧凑卡片列表 */}
+      <div className="flex flex-col gap-2 md:hidden">
+        {rows.map((row) => (
+          <SliceCard key={row.key} row={row} />
+        ))}
+      </div>
+      {/* md+：完整表格 */}
+      <div className="hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{labelHeader}</TableHead>
+              <TableHead className="text-right">次数</TableHead>
+              <TableHead className="text-right">输入</TableHead>
+              <TableHead className="text-right">输出</TableHead>
+              <TableHead className="text-right">总计</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.key}>
+                <TableCell>{row.label}</TableCell>
+                <TableCell className="text-right tabular-nums">{num(row.calls)}</TableCell>
+                <TableCell className="text-right tabular-nums">{num(row.promptTokens)}</TableCell>
+                <TableCell className="text-right tabular-nums">{num(row.completionTokens)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{num(row.totalTokens)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  );
+};
+
+/** 明细表窄屏卡片：时间/场景一行、模型一行、token 三项一行 */
+const RecordCard: FC<{ row: UsageRecord }> = ({ row }) => (
+  <div className="flex flex-col gap-1.5 rounded-lg border border-border/70 bg-card px-3 py-2.5">
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-muted-foreground tabular-nums">
+        {formatDateTime(row.createdAt)}
+      </span>
+      <SceneBadge scene={row.scene} />
+    </div>
+    <div className="truncate text-sm font-medium" title={row.model}>
+      {row.model}
+    </div>
+    <div className="flex items-baseline justify-between gap-3 text-xs text-muted-foreground tabular-nums">
+      <span>输入 {num(row.promptTokens)}</span>
+      <span>输出 {num(row.completionTokens)}</span>
+      <span className="text-sm font-medium text-foreground">
+        总计 {num(row.totalTokens)}
+      </span>
+    </div>
+  </div>
 );
 
 export const UsageStatsPage: FC = () => {
-  const navigate = useNavigate();
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>("7d");
   const { summary, daily, records, setPage, isLoading, error, refresh } =
     useUsageStats(rangeKey);
@@ -114,57 +184,38 @@ export const UsageStatsPage: FC = () => {
   const isEmpty = !isLoading && (summary?.totals.calls ?? 0) === 0;
 
   return (
-    <div className="relative h-screen overflow-auto bg-background">
-      {/* 顶部暖纸光晕（.paper-glow，见 index.css），铺在内容层之下 */}
-      <div
-        aria-hidden
-        className="paper-glow pointer-events-none absolute inset-x-0 top-0 h-80"
-      />
-      <div className="relative mx-auto flex min-h-full max-w-5xl flex-col gap-6 p-6 lg:p-8">
-        <header className="flex flex-col gap-3">
+    <AdminPageShell
+      backTo="/admin"
+      backLabel="返回控制台"
+      title="我的用量"
+      description="LLM 调用与 token 消耗统计（个人视角；按 UTC 日分桶，统计自用量流水上线起）"
+      width="medium"
+      actions={
+        <>
+          {/* 预置范围切换（[start, end) 半开区间，UTC 整日对齐） */}
+          {RANGE_OPTIONS.map((option) => (
+            <Button
+              key={option.key}
+              size="sm"
+              variant={option.key === rangeKey ? "default" : "outline"}
+              onClick={() => setRangeKey(option.key)}
+            >
+              {option.label}
+            </Button>
+          ))}
           <Button
-            variant="ghost"
             size="sm"
-            className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => void navigate("/admin")}
+            variant="ghost"
+            className="text-muted-foreground"
+            onClick={refresh}
+            aria-label="刷新用量"
           >
-            <ArrowLeftIcon />
-            返回控制台
+            <RefreshCwIcon />
           </Button>
-          <div className="flex flex-wrap items-end justify-between gap-3 pt-2">
-            <div>
-              <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                我的用量
-              </h1>
-              <p className="mt-2 text-sm text-muted-foreground">
-                LLM 调用与 token 消耗统计（个人视角；按 UTC 日分桶，统计自用量流水上线起）
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* 预置范围切换（[start, end) 半开区间，UTC 整日对齐） */}
-              {RANGE_OPTIONS.map((option) => (
-                <Button
-                  key={option.key}
-                  size="sm"
-                  variant={option.key === rangeKey ? "default" : "outline"}
-                  onClick={() => setRangeKey(option.key)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-muted-foreground"
-                onClick={refresh}
-              >
-                <RefreshCwIcon />
-              </Button>
-            </div>
-          </div>
-        </header>
-
-        {error != null && (
+        </>
+      }
+    >
+      {error != null && (
           <Card className="border-destructive/40">
             <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
               <p className="text-sm text-destructive">用量数据加载失败：{error.message}</p>
@@ -280,6 +331,20 @@ export const UsageStatsPage: FC = () => {
               <Skeleton className="h-40 w-full" />
             ) : (
               <>
+                {/* 窄屏：流水卡片列表 */}
+                <div className="flex flex-col gap-2 md:hidden">
+                  {records.items.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      暂无流水记录
+                    </p>
+                  ) : (
+                    records.items.map((row: UsageRecord) => (
+                      <RecordCard key={row.id} row={row} />
+                    ))
+                  )}
+                </div>
+                {/* md+：完整表格 */}
+                <div className="hidden md:block">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -318,8 +383,9 @@ export const UsageStatsPage: FC = () => {
                     )}
                   </TableBody>
                 </Table>
+                </div>
                 {/* 服务端分页：total/page/pageSize 来自后端 */}
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
                   <span>共 {num(records.total)} 条 · 第 {records.page} / {totalPages} 页</span>
                   <div className="flex gap-2">
                     <Button
@@ -344,7 +410,6 @@ export const UsageStatsPage: FC = () => {
             )}
           </CardContent>
         </Card>
-      </div>
-    </div>
+    </AdminPageShell>
   );
 };

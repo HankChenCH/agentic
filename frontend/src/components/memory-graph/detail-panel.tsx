@@ -145,7 +145,9 @@ export const MemoryDetailPanel: FC<{
     selection.participations.length === 0;
 
   return (
-    <aside className="absolute right-4 top-4 z-10 flex max-h-[calc(100%-2rem)] w-80 flex-col overflow-hidden rounded-xl border border-border/80 bg-card shadow-card">
+    // 窄屏：画布内底部全宽浮层（ReactFlow 内部有 transform，fixed 不可靠，
+    // 仍用 absolute 相对画布定位）；md+ 恢复右上角固定宽度档案板
+    <aside className="absolute inset-x-2 bottom-2 top-auto z-10 flex max-h-[60%] w-auto flex-col overflow-hidden rounded-xl border border-border/80 bg-card shadow-card md:inset-x-auto md:bottom-auto md:right-4 md:top-4 md:max-h-[calc(100%-2rem)] md:w-80">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
         <span className="text-xs font-medium tracking-wide text-muted-foreground">
           {selection.kind === "statement" ? "事实档案" : "节点档案"}

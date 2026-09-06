@@ -2,7 +2,6 @@ import { useEffect, useState, type FC } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import {
-  ArrowLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   EyeIcon,
@@ -25,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdminPageShell } from "@/components/shared/admin-page-shell";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DocumentFormDialog } from "@/components/knowledge/document-form-dialog";
 import { SegmentFormDialog } from "@/components/knowledge/segment-form-dialog";
@@ -105,125 +105,118 @@ export const KnowledgeDocumentDetailPage: FC = () => {
   };
 
   return (
-    <div className="h-screen overflow-auto bg-background">
-      <div className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 p-6 lg:p-8">
-        <header className="flex flex-col gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => kbId && void navigate(`/admin/knowledge/${kbId}`)}
-          >
-            <ArrowLeftIcon />
-            返回知识库
-          </Button>
-
-          {doc.error ? (
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-muted-foreground">
-                文档信息加载失败：{doc.error.message}
+    <AdminPageShell
+      backTo={`/admin/knowledge/${kbId ?? ""}`}
+      backLabel="返回知识库"
+      width="wide"
+      title={
+        doc.error ? (
+          <div className="flex items-center gap-3">
+            <p className="text-sm text-muted-foreground">
+              文档信息加载失败：{doc.error.message}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void doc.refresh()}
+            >
+              <RefreshCwIcon />
+              重试
+            </Button>
+          </div>
+        ) : doc.isLoading || !docInfo ? (
+          <div className="grid gap-2">
+            <Skeleton className="h-7 w-64 max-w-full" />
+            <Skeleton className="h-4 w-96 max-w-full" />
+          </div>
+        ) : (
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h1 className="font-heading truncate text-2xl font-semibold tracking-tight sm:text-3xl">
+                {docInfo.name}
+              </h1>
+              <KnowledgeStatusBadge
+                status={docInfo.status}
+                errorMessage={docInfo.error_message}
+              />
+            </div>
+            {docInfo.description && (
+              <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                {docInfo.description}
               </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void doc.refresh()}
-              >
-                <RefreshCwIcon />
-                重试
-              </Button>
-            </div>
-          ) : doc.isLoading || !docInfo ? (
-            <div className="grid gap-2">
-              <Skeleton className="h-7 w-64" />
-              <Skeleton className="h-4 w-96" />
-            </div>
-          ) : (
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2.5">
-                  <h1 className="font-heading truncate text-2xl font-semibold tracking-tight">
-                    {docInfo.name}
-                  </h1>
-                  <KnowledgeStatusBadge
-                    status={docInfo.status}
-                    errorMessage={docInfo.error_message}
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {formatFileSize(docInfo.file_size)} · {docInfo.seg_num} 段 ·
+              更新于 {formatDateTime(docInfo.updated_at)}
+            </p>
+          </div>
+        )
+      }
+      actions={
+        doc.error || doc.isLoading || !docInfo ? null : (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() =>
+                pdfPreview.open({
+                  kbId: kbId!,
+                  docId: docId!,
+                  docName: docInfo.name,
+                  fileSize: docInfo.file_size,
+                })
+              }
+            >
+              <EyeIcon />
+              预览原文
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="文档操作"
                   />
-                </div>
-                {docInfo.description && (
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {docInfo.description}
-                  </p>
-                )}
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  {formatFileSize(docInfo.file_size)} · {docInfo.seg_num} 段 ·
-                  更新于 {formatDateTime(docInfo.updated_at)}
-                </p>
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    pdfPreview.open({
-                      kbId: kbId!,
-                      docId: docId!,
-                      docName: docInfo.name,
-                      fileSize: docInfo.file_size,
-                    })
-                  }
-                >
-                  <EyeIcon />
-                  预览原文
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label="文档操作"
-                      />
-                    }
+                }
+              >
+                <MoreVerticalIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuItem onClick={() => setDocFormOpen(true)}>
+                  编辑信息
+                </DropdownMenuItem>
+                {(docInfo.status === "enabled" ||
+                  docInfo.status === "disabled") && (
+                  <DropdownMenuItem
+                    onClick={() => void doc.setDocumentEnabled(!docEnabled)}
                   >
-                    <MoreVerticalIcon />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-36">
-                    <DropdownMenuItem onClick={() => setDocFormOpen(true)}>
-                      编辑信息
-                    </DropdownMenuItem>
-                    {(docInfo.status === "enabled" ||
-                      docInfo.status === "disabled") && (
-                      <DropdownMenuItem
-                        onClick={() => void doc.setDocumentEnabled(!docEnabled)}
-                      >
-                        {docEnabled ? "停用文档" : "启用文档"}
-                      </DropdownMenuItem>
-                    )}
-                    {docInfo.status === "failed" && (
-                      <DropdownMenuItem onClick={() => void doc.retryDocument()}>
-                        重新处理
-                      </DropdownMenuItem>
-                    )}
-                    {canManageSegments && (
-                      <DropdownMenuItem onClick={() => setRechunkOpen(true)}>
-                        重新分段
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setDeletingDoc(true)}
-                    >
-                      删除文档
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          )}
-        </header>
-
-        {docInfo && isTransitional(docInfo.status) ? (
+                    {docEnabled ? "停用文档" : "启用文档"}
+                  </DropdownMenuItem>
+                )}
+                {docInfo.status === "failed" && (
+                  <DropdownMenuItem onClick={() => void doc.retryDocument()}>
+                    重新处理
+                  </DropdownMenuItem>
+                )}
+                {canManageSegments && (
+                  <DropdownMenuItem onClick={() => setRechunkOpen(true)}>
+                    重新分段
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeletingDoc(true)}
+                >
+                  删除文档
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )
+      }
+    >
+      {docInfo && isTransitional(docInfo.status) ? (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-border/80 bg-card py-16 shadow-card">
             <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
@@ -334,7 +327,7 @@ export const KnowledgeDocumentDetailPage: FC = () => {
             )}
 
             {segments.total > SEGMENT_PAGE_SIZE && (
-              <footer className="mt-auto flex items-center justify-between text-sm text-muted-foreground">
+              <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
                 <span>共 {segments.total} 段</span>
                 <div className="flex items-center gap-2">
                   <Button
@@ -363,7 +356,6 @@ export const KnowledgeDocumentDetailPage: FC = () => {
             )}
           </>
         )}
-      </div>
 
       <DocumentFormDialog
         open={docFormOpen}
@@ -425,6 +417,6 @@ export const KnowledgeDocumentDetailPage: FC = () => {
             : Promise.resolve(false)
         }
       />
-    </div>
+    </AdminPageShell>
   );
 };

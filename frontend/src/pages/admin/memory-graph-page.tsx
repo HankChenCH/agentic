@@ -184,7 +184,7 @@ export const MemoryGraphPage: FC = () => {
       model.flowEdges.length === 0);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
       <GraphHeader
         stats={snapshot?.stats ?? null}
         kinds={kinds}
@@ -197,7 +197,7 @@ export const MemoryGraphPage: FC = () => {
       />
 
       {at && (
-        <div className="border-b border-indigo-100 bg-indigo-50/70 px-6 py-1.5 text-xs text-indigo-600">
+        <div className="border-b border-indigo-100 bg-indigo-50/70 px-4 py-1.5 text-xs text-indigo-600 sm:px-6">
           时点回放 · <span className="font-medium">{at}</span>
           （23:59:59 切片）：该日期仍在效的事实全部入图，含此后被新值取代的
           历史记录（虚线、标注“已取代”）

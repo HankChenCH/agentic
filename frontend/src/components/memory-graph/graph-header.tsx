@@ -64,7 +64,7 @@ export const GraphHeader: FC<GraphHeaderProps> = ({
   const navigate = useNavigate();
 
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b border-border/60 px-6 py-3">
+    <header className="flex flex-wrap items-center gap-3 border-b border-border/60 px-4 py-3 sm:px-6">
       <Button
         variant="ghost"
         size="sm"
@@ -74,19 +74,20 @@ export const GraphHeader: FC<GraphHeaderProps> = ({
         <ArrowLeftIcon />
         返回控制台
       </Button>
-      <div className="mr-auto">
+      <div className="mr-auto min-w-0">
         <h1 className="flex items-center gap-2 font-heading text-lg font-semibold tracking-tight">
           <BrainIcon className="size-5 text-primary" />
           记忆图谱
         </h1>
-        <p className="text-xs text-muted-foreground">
+        <p className="hidden text-xs text-muted-foreground sm:block">
           跨会话长期记忆的可视化：人/物、事件与事实关系
         </p>
       </div>
 
-      {/* 类型筛选开关：色点与图例同源；点击切换该类节点/边是否入图 */}
+      {/* 类型筛选开关：色点与图例同源；点击切换该类节点/边是否入图。
+          移动端同样可见（原先 hidden md:flex 会把筛选藏起来），只是触达略高 */}
       {stats && (
-        <div className="hidden items-center gap-1.5 md:flex">
+        <div className="flex flex-wrap items-center gap-1.5">
           {KIND_KEYS.map((kind) => {
             const active = kinds[kind];
             const meta = KIND_META[kind];
@@ -98,7 +99,7 @@ export const GraphHeader: FC<GraphHeaderProps> = ({
                 aria-pressed={active}
                 aria-label={`${active ? "隐藏" : "显示"}${meta.label}`}
                 className={[
-                  "h-7 gap-1.5 rounded-full px-2.5 text-xs font-normal",
+                  "h-8 gap-1.5 rounded-full px-3 text-xs font-normal md:h-7 md:px-2.5",
                   active ? "" : "text-muted-foreground",
                 ].join(" ")}
                 onClick={() => onToggleKind(kind)}

@@ -1,7 +1,6 @@
 import { useState, type FC } from "react";
 import { useNavigate } from "react-router";
 import {
-  ArrowLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   DatabaseIcon,
@@ -11,6 +10,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdminPageShell } from "@/components/shared/admin-page-shell";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { KnowledgeCardList } from "@/components/knowledge/knowledge-card-list";
 import { KnowledgeFormDialog } from "@/components/knowledge/knowledge-form-dialog";
@@ -58,36 +58,20 @@ export const KnowledgeListPage: FC = () => {
   };
 
   return (
-    <div className="h-screen overflow-auto bg-background">
-      <div className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 p-6 lg:p-8">
-        {/* 管理侧模块页无侧栏，返回控制台与详情页「返回知识库」同模式 */}
-        <header className="flex flex-col gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => void navigate("/admin")}
-          >
-            <ArrowLeftIcon />
-            返回控制台
-          </Button>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="font-heading text-2xl font-semibold tracking-tight">
-                知识库
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                管理知识库与文档，供对话检索引用
-              </p>
-            </div>
-            <Button onClick={openCreate}>
-              <PlusIcon />
-              新建知识库
-            </Button>
-          </div>
-        </header>
-
-        {isLoading ? (
+    <AdminPageShell
+      backTo="/admin"
+      backLabel="返回控制台"
+      title="知识库"
+      description="管理知识库与文档，供对话检索引用"
+      width="wide"
+      actions={
+        <Button onClick={openCreate}>
+          <PlusIcon />
+          新建知识库
+        </Button>
+      }
+    >
+      {isLoading ? (
           // 首屏/翻页骨架：与卡片网格同布局，避免跳动
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -130,7 +114,7 @@ export const KnowledgeListPage: FC = () => {
         )}
 
         {total > pageSize && (
-          <footer className="mt-auto flex items-center justify-between text-sm text-muted-foreground">
+          <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>共 {total} 个知识库</span>
             <div className="flex items-center gap-2">
               <Button
@@ -157,32 +141,31 @@ export const KnowledgeListPage: FC = () => {
             </div>
           </footer>
         )}
-      </div>
 
-      <KnowledgeFormDialog
-        open={formOpen}
-        onOpenChange={setFormOpen}
-        initial={editing}
-        onSubmit={(values) =>
-          editing
-            ? updateKnowledgeBase(editing.id, values)
-            : createKnowledgeBase(values)
-        }
-      />
+        <KnowledgeFormDialog
+          open={formOpen}
+          onOpenChange={setFormOpen}
+          initial={editing}
+          onSubmit={(values) =>
+            editing
+              ? updateKnowledgeBase(editing.id, values)
+              : createKnowledgeBase(values)
+          }
+        />
 
-      <ConfirmDialog
-        open={deleting != null}
-        onOpenChange={(open) => {
-          if (!open) setDeleting(null);
-        }}
-        title={`删除知识库「${deleting?.name ?? ""}」？`}
-        description="将删除库内全部文档与向量数据，操作不可恢复。"
-        confirmText="删除"
-        destructive
-        onConfirm={() =>
-          deleting ? deleteKnowledgeBase(deleting.id) : Promise.resolve(false)
-        }
-      />
-    </div>
+        <ConfirmDialog
+          open={deleting != null}
+          onOpenChange={(open) => {
+            if (!open) setDeleting(null);
+          }}
+          title={`删除知识库「${deleting?.name ?? ""}」？`}
+          description="将删除库内全部文档与向量数据，操作不可恢复。"
+          confirmText="删除"
+          destructive
+          onConfirm={() =>
+            deleting ? deleteKnowledgeBase(deleting.id) : Promise.resolve(false)
+          }
+        />
+    </AdminPageShell>
   );
 };

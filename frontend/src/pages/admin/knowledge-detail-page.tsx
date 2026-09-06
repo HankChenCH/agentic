@@ -2,7 +2,6 @@ import { useEffect, useState, type FC } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import {
-  ArrowLeftIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   FileTextIcon,
@@ -20,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdminPageShell } from "@/components/shared/admin-page-shell";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { DocumentFormDialog } from "@/components/knowledge/document-form-dialog";
 import { DocumentTable } from "@/components/knowledge/document-table";
@@ -70,102 +70,95 @@ export const KnowledgeDetailPage: FC = () => {
   const kbEnabled = kb.knowledgeBase?.status === "enabled";
 
   return (
-    <div className="h-screen overflow-auto bg-background">
-      <div className="mx-auto flex min-h-full max-w-6xl flex-col gap-6 p-6 lg:p-8">
-        <header className="flex flex-col gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 w-fit text-muted-foreground"
-            onClick={() => void navigate("/admin/knowledge")}
-          >
-            <ArrowLeftIcon />
-            返回知识库
-          </Button>
-
-          {kb.error ? (
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-muted-foreground">
-                知识库信息加载失败：{kb.error.message}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void kb.refresh()}
-              >
-                <RefreshCwIcon />
-                重试
-              </Button>
+    <AdminPageShell
+      backTo="/admin/knowledge"
+      backLabel="返回知识库"
+      width="wide"
+      title={
+        kb.error ? (
+          <div className="flex items-center gap-3">
+            <p className="text-sm text-muted-foreground">
+              知识库信息加载失败：{kb.error.message}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void kb.refresh()}
+            >
+              <RefreshCwIcon />
+              重试
+            </Button>
+          </div>
+        ) : kb.isLoading || !kb.knowledgeBase ? (
+          <div className="grid gap-2">
+            <Skeleton className="h-7 w-64" />
+            <Skeleton className="h-4 w-96 max-w-full" />
+          </div>
+        ) : (
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h1 className="font-heading truncate text-2xl font-semibold tracking-tight sm:text-3xl">
+                {kb.knowledgeBase.name}
+              </h1>
+              <KnowledgeStatusBadge status={kb.knowledgeBase.status} />
+              <KnowledgeVisibilityBadge
+                isPublic={kb.knowledgeBase.is_public}
+              />
             </div>
-          ) : kb.isLoading || !kb.knowledgeBase ? (
-            <div className="grid gap-2">
-              <Skeleton className="h-7 w-64" />
-              <Skeleton className="h-4 w-96" />
-            </div>
-          ) : (
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2.5">
-                  <h1 className="font-heading truncate text-2xl font-semibold tracking-tight">
-                    {kb.knowledgeBase.name}
-                  </h1>
-                  <KnowledgeStatusBadge status={kb.knowledgeBase.status} />
-                  <KnowledgeVisibilityBadge
-                    isPublic={kb.knowledgeBase.is_public}
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+              {kb.knowledgeBase.description || "暂无描述"}
+            </p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              嵌入模型 {kb.knowledgeBase.embedding_model} · 共{" "}
+              {kb.knowledgeBase.doc_num} 篇文档
+            </p>
+          </div>
+        )
+      }
+      actions={
+        kb.error || kb.isLoading || !kb.knowledgeBase ? null : (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button onClick={() => setUploadOpen(true)}>
+              <UploadIcon />
+              上传文档
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="知识库操作"
                   />
-                </div>
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                  {kb.knowledgeBase.description || "暂无描述"}
-                </p>
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  嵌入模型 {kb.knowledgeBase.embedding_model} · 共{" "}
-                  {kb.knowledgeBase.doc_num} 篇文档
-                </p>
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                <Button onClick={() => setUploadOpen(true)}>
-                  <UploadIcon />
-                  上传文档
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label="知识库操作"
-                      />
-                    }
-                  >
-                    <MoreVerticalIcon />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-36">
-                    <DropdownMenuItem onClick={() => setFormOpen(true)}>
-                      编辑信息
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() =>
-                        void kb.setKnowledgeEnabled(!kbEnabled)
-                      }
-                    >
-                      {kbEnabled ? "停用" : "启用"}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => setDeletingKb(true)}
-                    >
-                      删除知识库
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          )}
-        </header>
-
-        {docs.isLoading ? (
+                }
+              >
+                <MoreVerticalIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuItem onClick={() => setFormOpen(true)}>
+                  编辑信息
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    void kb.setKnowledgeEnabled(!kbEnabled)
+                  }
+                >
+                  {kbEnabled ? "停用" : "启用"}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeletingKb(true)}
+                >
+                  删除知识库
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )
+      }
+    >
+      {docs.isLoading ? (
           <div className="grid gap-2">
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-12 rounded-lg" />
@@ -224,7 +217,7 @@ export const KnowledgeDetailPage: FC = () => {
         )}
 
         {docs.total > docs.pageSize && (
-          <footer className="mt-auto flex items-center justify-between text-sm text-muted-foreground">
+          <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>共 {docs.total} 篇文档</span>
             <div className="flex items-center gap-2">
               <Button
@@ -251,7 +244,6 @@ export const KnowledgeDetailPage: FC = () => {
             </div>
           </footer>
         )}
-      </div>
 
       <KnowledgeFormDialog
         open={formOpen}
@@ -308,6 +300,6 @@ export const KnowledgeDetailPage: FC = () => {
           return ok;
         }}
       />
-    </div>
+    </AdminPageShell>
   );
 };
