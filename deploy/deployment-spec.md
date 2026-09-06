@@ -218,7 +218,11 @@ docker compose run --rm migrate  # 兜底重跑迁移（幂等，通常 up 已�
 
 前置网关（nginx/traefik 等）做 TLS 终结与限流；SSE 通道必须
 `proxy_buffering off` + 长读超时（client 镜像内置模板已是该配置，外置网关
-照抄）；限流策略在网关层实现（应用不产生 429）。默认网关即 client 镜像内置的
+照抄）；限流策略在网关层实现（应用不产生 429）。run 流内含 **SSE 心跳**：
+静默期（首 token 前/工具执行）每 15s 发一帧注释行 `: ping`（`@ag-ui/client`
+解析器不可见），喂住按「读空闲」计时的网关超时——`proxy_read_timeout`
+配置只需显著大于 15s（示例的 300s 即可），不必为超长工具执行调大。默认网关即
+client 镜像内置的
 nginx：其模板（`frontend/docker/nginx.conf.template`）已把下列 `limit_req`
 规则落成生效配置（示例阈值，按实际流量调整；外置网关部署时照抄/上调）：
 

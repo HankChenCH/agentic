@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated, AsyncIterator, Iterator
 from uuid import UUID
 
@@ -24,9 +25,25 @@ from app.models.schema.response.biz_response import Response
 # 各端点再声明 Depends(require_user) 取身份——依赖结果每请求缓存，验签只跑一次。
 router = APIRouter(prefix="/agentic", tags=["Agentic"])
 
+# SSE 心跳：流静默期（首 token 前/工具执行/ReAct 步间——token 流式期间帧实时
+# 流出，不需要心跳）定期发注释行帧，喂住链路上按「读空闲」计时的代理超时
+# （外置网关示例 300s，client 内置 nginx 3600s，见 deploy/deployment-spec.md
+# §12.3）。注释行在 SSE 规范里对客户端不可见：@ag-ui/client 的手写解析器只认
+# "data:" 行、注释块整块静默丢弃（前端零改动）；行尾必须 "\n"——解析器按
+# /\n\n/ 切事件块，不处理 CRLF。间隔取 15s：远小于最紧的网关读超时，也远大于
+# 正常帧间间隔，正常流式期间几乎不会触发。
+_HEARTBEAT_INTERVAL_SECONDS = 15.0
+_HEARTBEAT_FRAME = ": ping\n\n"
+
 
 async def _stream_and_close(events: Iterator[str]) -> AsyncIterator[str]:
-    """同步 SSE 生成器 → async 流，并在任何收尾路径确定性 close 底层生成器。
+    """同步 SSE 生成器 → async 流：静默期心跳 + 任何收尾路径确定性 close。
+
+    心跳用 anext 任务与定时器任务 FIRST_COMPLETED 竞争实现——不能用
+    asyncio.wait_for 包 __anext__：超时会取消 anext 任务，而 iterate_in_threadpool
+    已派发到线程池的 next() 不可中断，任务被取消后下一次 anext 会对同一个同步
+    生成器并发 next()（"generator already executing"）。竞争法下定时器先到只发
+    注释行帧，anext 任务保持 pending 原样续等，底层 next 永不被取消。
 
     starlette 的 iterate_in_threadpool 没有 finally：断连取消时 CancelledError
     从 __anext__ 抛出直接终结 async 生成器帧，底层同步生成器无人 close，只能
@@ -34,10 +51,33 @@ async def _stream_and_close(events: Iterator[str]) -> AsyncIterator[str]:
     CANCELED）随之延迟、进程先退出则丢失。这里包一层 finally close——close
     会吞掉生成器重抛的 GeneratorExit，收口逻辑在帧退出前同步执行完成。
     """
+    anext_task: asyncio.Task | None = None
+    beat_task: asyncio.Task | None = None
     try:
-        async for frame in iterate_in_threadpool(events):
-            yield frame
+        frames = iterate_in_threadpool(events)
+        while True:
+            if anext_task is None:
+                anext_task = asyncio.ensure_future(frames.__anext__())
+            beat_task = asyncio.ensure_future(asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS))
+            done, _ = await asyncio.wait(
+                {anext_task, beat_task}, return_when=asyncio.FIRST_COMPLETED,
+            )
+            if anext_task in done:
+                beat_task.cancel()
+                try:
+                    frame = anext_task.result()
+                except StopAsyncIteration:
+                    return
+                anext_task = None
+                yield frame
+            else:
+                # 定时器先到：底层 next 仍在跑（静默期），只补一帧注释行
+                yield _HEARTBEAT_FRAME
     finally:
+        if beat_task is not None:
+            beat_task.cancel()
+        if anext_task is not None:
+            anext_task.cancel()
         events.close()
 
 
