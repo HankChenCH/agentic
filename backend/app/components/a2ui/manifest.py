@@ -53,15 +53,22 @@ def _build_a2ui_compose_tool() -> StructuredTool:
             "生成一张声明式 UI 卡片并展示给用户（Generative UI）：用嵌套组件树描述卡片，"
             "类型为 text（文案）、row/column（横/纵布局，children 为子组件数组）、card（卡片容器，"
             "children 必须恰好一个）、divider（分隔线）、button（按钮，text 为按钮文案，"
-            "action_text 为点击后作为用户新消息发送的完整文案）。树深最多 6 层、单卡组件总数有限额。"
-            "组件树示例（转接卡片：标题 + 每位坐席一行姓名与转接按钮）："
+            "action_text 为点击后作为用户新消息发送的完整文案，button_variant 取 "
+            "default/primary/borderless——每张卡的主操作按钮用 primary）。树深最多 6 层、单卡组件总数有限额。"
+            "组件树示例（转接卡片：h3 标题 + caption 副标题 + divider，之后每位坐席一个独立块——"
+            "h4 姓名、caption「职务 · 擅长 · 状态」、primary 转接按钮，块间用 divider 分隔）："
             '[{"type":"card","children":[{"type":"column","children":['
-            '{"type":"text","text":"人工客服","variant":"h4"},'
-            '{"type":"text","text":"张三（高级客服·在线）"},'
-            '{"type":"button","text":"转接 张三","action_text":"我要转接人工客服：张三（高级客服），我的问题是……"}'
-            ']}]}]。'
+            '{"type":"text","text":"人工客服","variant":"h3"},'
+            '{"type":"text","text":"为您找到 2 位在线坐席，点击按钮即可转接","variant":"caption"},'
+            '{"type":"divider"},'
+            '{"type":"column","children":['
+            '{"type":"text","text":"张三","variant":"h4"},'
+            '{"type":"text","text":"高级客服 · 擅长账单与退款 · 在线","variant":"caption"},'
+            '{"type":"button","text":"转接 张三",'
+            '"action_text":"我要转接人工客服：张三（高级客服），我的问题是……","button_variant":"primary"}'
+            ']}]}]}]。'
             "需要向用户展示结构化信息（如坐席列表、选项菜单）且纯文本不够直观时必须使用本工具，"
-            "不要只用文字罗列；button 用于引导用户一键发起后续请求。"
+            "不要只用文字罗列；button 用于引导用户一键发起后续请求，多位坐席时每位配独立按钮。"
         ),
         args_schema=A2uiComposeArgs,
         func=a2ui_compose,

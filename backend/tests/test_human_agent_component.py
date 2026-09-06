@@ -133,6 +133,15 @@ def test_compose_wraps_multiple_top_level_nodes_in_column():
     assert len(flat[-1]["children"]) == 2
 
 
+def test_compose_passes_button_variant_through():
+    flat = compose_components([
+        A2uiNode(type="button", text="转接", action_text="转接张三", button_variant="primary"),
+        A2uiNode(type="button", text="次级", action_text="次级操作"),
+    ])
+    variants = [c.get("variant") for c in flat if c["component"] == "Button"]
+    assert variants == ["primary", None]
+
+
 def test_compose_rejects_invalid_trees():
     with pytest.raises(ComposeError, match="text 组件缺少文案"):
         compose_components([A2uiNode(type="text")])

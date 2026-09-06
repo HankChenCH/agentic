@@ -127,6 +127,53 @@
   background-color: color-mix(in oklab, var(--border) 55%, transparent) !important;
 }
 
+/* ---- Button 观感（包内 Button 的 CSS Module 类名同样丢失：React 端渲染
+   <button class="undefined…">，variant 只会附加同样丢失的类名，因此无法按
+   variant 分类着色）。本应用中 button 只承担「替用户说一句话」的 CTA 语义，
+   统一按主操作档重建：强调色实心 + 胶囊形 + 轻投影。作为 column 子项时随
+   flex stretch 铺满行宽，row 内则收缩为内容宽。升级 @a2ui/react 时需回归。 */
+.a2ui-host button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+/* 按钮 label 的 Text（markdown 路径 div > p）：去掉 UA 段落边距并继承按钮配色 */
+.a2ui-host button p,
+.a2ui-host button div {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+.a2ui-host button:hover {
+  background-color: color-mix(in oklab, var(--primary) 88%, black);
+  box-shadow: 0 2px 8px oklch(0 0 0 / 0.16);
+  transform: translateY(-1px);
+}
+.a2ui-host button:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.12);
+}
+.a2ui-host button:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+}
+
 /* 卡片本体宽度贴合 wrapper（占位与对齐由 a2ui-data.tsx 控制） */
 .a2ui-host .a2ui-card {
   width: 100%;

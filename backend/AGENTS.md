@@ -1114,6 +1114,21 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   由前端令牌接管（亮暗自动跟随）。单色线性图标走 `icon()` builder（fill 型
   单 path，24x24 视口——960 系图标库须先坐标变换，weather_surface 有现成
   的 Material Symbols 天气图标表与变换产物）。
+- **工具结果双内容（审计 / 展示）** → tools 通道契约的 ``tool-result`` 事件支持
+  可选 ``display`` 键，与 ``content`` 构成双内容：``content`` 恒为**真实结果**
+  （LLM 所见语义，不变），``display`` 是**前端展示版**（脱敏/摘要）。消费规则
+  通用且对 agent 无感：``AgUiTranslator`` 取 ``display ?? content`` 下发 SSE
+  （流式只发展示版）；``StorageTranslator`` 落库 TOOL_RESULT 行
+  ``content`` + ``display_content`` 双键（同行存储，无 display 的行形态不变、
+  向后兼容）；历史出口 ``ConversationService.list_history_messages`` 把带
+  ``display_content`` 的行在序列化视图里替换为展示版（``_frontend_turn``，
+  display_content 键不外泄）——真实结果只入库审计，不经任何前端接口外发；
+  ``replay_history`` 的 LLM 回放不受影响，仍用真实 content（与模型当时所见
+  一致）。生产者：agent 级 ``ToolsTransformer`` 子类在命中需要脱敏的工具时
+  push ``content + display`` 双键（先例 ``SupportToolsTransformer``——knowledge
+  检索的溯源元数据不得透给最终用户，``KnowledgeSearchResult`` JSON 摘成
+  「编号 + 内容」纯文本）；进模型的 ToolMessage 由图状态决定，transformer
+  改写永远不影响 LLM 侧。
 - **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
   制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
   ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/

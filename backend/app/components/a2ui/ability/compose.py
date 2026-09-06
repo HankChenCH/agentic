@@ -54,6 +54,11 @@ class A2uiNode(BaseModel):
         default=None,
         description="button 专属：点击后作为用户新消息发送的完整文案（按钮即「替用户说一句话」）",
     )
+    button_variant: Literal["default", "primary", "borderless"] | None = Field(
+        default=None,
+        description="button 专属：视觉档位——primary 为强调色实心按钮（每张卡的主操作用"
+            "它，如「转接」），default 为描边次级按钮，borderless 为文字链；其余类型忽略",
+    )
     children: list["A2uiNode"] | None = Field(
         default=None,
         description="row/column 的子组件（横向/纵向排列）；card 的唯一子组件；其余类型忽略",
@@ -99,6 +104,7 @@ def compose_components(nodes: list[A2uiNode]) -> list[dict]:
                 label_id,
                 action_name=CHAT_SEND_ACTION,
                 context={"text": _clip(node.action_text, "action_text")},
+                variant=node.button_variant,
             ))
         elif ntype in ("row", "column"):
             children = node.children or []
