@@ -28,8 +28,12 @@
   两个独立 git 仓库，发布时用各自短 SHA 打附加 tag（如
   `agentic-server:<sha>`），`latest` 只作本地开发的滚动指针。
 - 构建参数只允许经 Dockerfile 既定的 `ARG` 注入：客户端 `VITE_API_BASE` /
-  `VITE_SSE_URL`（构建期烘焙进静态产物），其余运行期事实一律走容器环境变量
-  （如 nginx 反代目标 `BACKEND_URL`），改地址不重建镜像。
+  `VITE_SSE_URL` / `CDN_BASE`（构建期烘焙进静态产物），其余运行期事实一律
+  走容器环境变量（如 nginx 反代目标 `BACKEND_URL`），改地址不重建镜像。
+  `CDN_BASE` 是 react 全家 ESM CDN 的源（importmap 指向，须 esm.sh 协议
+  兼容，缺省 `https://esm.sh`）：换源/切自建 = 改 `FRONTEND_CDN_BASE` 重建
+  前端镜像（自建服务的编排见 §12.5）。npmmirror 等原文件镜像不做 CJS→ESM
+  转换，只能当**自建 esm.sh 的 upstream 包源**，不能直接填进 `CDN_BASE`。
 - `.env` 与真实密钥**永不进镜像**（两仓库 `.dockerignore` 已排除）。
 
 ## 2. 目标拓扑
@@ -193,8 +197,8 @@ docker compose run --rm migrate  # 兜底重跑迁移（幂等，通常 up 已�
 - 回滚：切回上一版源码后 `up -d --build`；若新迁移已应用，需先
   `docker compose run --rm migrate` 所在镜像执行 `alembic downgrade <rev>`
   （用回滚版本的镜像跑），再回退代码。**降级前先备份 §5 两个事实源卷。**
-- 前端改 `VITE_API_BASE` 属构建期事实：改端口/域名 = 重新 build client，
-  不是改 env 重启。
+- 前端改 `VITE_API_BASE` / `CDN_BASE` 属构建期事实：改端口/域名/换源 =
+  重新 build client，不是改 env 重启。
 
 ## 12. 形态变体
 
@@ -281,3 +285,32 @@ client 构建参数改 `VITE_API_BASE=http://<后端地址>`（重建镜像）�
 compose 缺省 `DB_DEFAULT=postgres`；单机极简场景可去掉该变量（回落
 `db.yaml` 缺省 sqlite，`server-data` 卷接管持久化），但 http/worker/beat 多
 进程共写 SQLite 仅适合试用，不作为部署推荐形态。
+
+### 12.6 自建 ESM CDN（esm.sh 官方镜像 + 阿里云 npmmirror 包源，可选）
+
+前端产物的 react 全家（react/react-dom/react-router）默认经 importmap 从
+esm.sh 官方公网源加载（构建参数 `CDN_BASE`，见「镜像构建」一节）。内网
+隔离 / 国内加速场景启用本目录编排的自建服务（`docker-compose.yaml` 的
+`esm-sh`，profile `esm-sh`，默认不拉起、不参与默认栈）：
+
+- **启用**：`docker compose --profile esm-sh up -d esm-sh`；`.env` 设
+  `FRONTEND_CDN_BASE=http://<浏览器可达地址>:${ESM_SH_PORT:-8082}` 后
+  `build frontend && up -d frontend`（CDN_BASE 属构建期事实，见 §镜像构建；
+  操作步骤见 README「自建 ESM CDN」）。
+- **镜像与包源**：官方镜像 `ghcr.io/esm-dev/esm.sh`（变量
+  `ESM_SH_IMAGE` 可钉版本）；环境变量 `NPM_REGISTRY` 为上游 npm registry，
+  缺省即阿里云 `https://registry.npmmirror.com/`（变量
+  `ESM_SH_NPM_REGISTRY` 可改回官方源或私服）。npmmirror 是原文件镜像
+  （react 包纯 CJS），只能作 upstream 包源，**不能**直接填 `CDN_BASE`；
+  `CDN_BASE` 只接受 esm.sh 协议兼容源（CJS→ESM 转换 + `?external=react`
+  + 子路径转换，见 `frontend/vite.config.ts` 头注）。
+- **数据卷**：`esm-sh-data` 挂容器 `/home/esm/.esmd/storage`（fs 存储构建
+  缓存），按「包@版本」一次构建永久复用；删卷 = 清缓存全量重建。升级前端
+  依赖后新版本自动构建，无需干预。
+- **浏览器可达性**：importmap 在用户浏览器解析，`FRONTEND_CDN_BASE` 必须是
+  浏览器侧可达的发布口（默认 `ESM_SH_PORT=8082`；8080=weaviate、8081=前端
+  已占用），远程部署填部署机 IP/域名，勿用 127.0.0.1——口径同
+  `RUSTFS_PUBLIC_ENDPOINT`。
+- **回退**：`.env` 去掉 `FRONTEND_CDN_BASE` 重建前端即回 esm.sh 官方公网源；
+  彻底离线（不依赖任何外部 CDN）则删 `frontend/vite.config.ts` 的
+  `cdnExternals()` 全量打包（见 `frontend/AGENTS.md`「基础依赖 CDN 外置」）。

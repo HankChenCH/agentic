@@ -6,6 +6,7 @@
 #              docker compose up -d --build
 #   访问入口:  http://127.0.0.1:8081             # 前端（nginx 同源反代 /api → 后端）
 #   后端直连:  http://127.0.0.1:8000             # 调试用（/health /metrics /docs 等）
+#   可选自建CDN: docker compose --profile esm-sh up -d esm-sh   # 详见 README「自建 ESM CDN」
 #   停止:      docker compose down               # 保留数据卷
 #   清数据:    docker compose down -v            # 连同数据卷一起删
 #
@@ -14,6 +15,7 @@
 #   浏览器 ── :8080 ──► client(nginx) ──/api/ 去前缀──► server(uvicorn :8000)
 #                                                     │      ├─ migrate(一次性 Alembic)
 #   postgres  weaviate(:8080/:50051)  rustfs(:9000)  redis ──► worker(celery)
+#   [可选] esm-sh(:8082, profile esm-sh) ◄── 浏览器 importmap 直取（react 全家）
 #        └────────── 中间件四件 include 自 ../backend/docker-compose.yaml ──┴─► beat(看门狗)
 #   Ollama(embedding) 在宿主机，server/worker 经 host.docker.internal 访问
 #
@@ -150,6 +152,9 @@ services:
       args:
         # 构建期烘焙进静态产物；同源反代模式免 CORS（跨域直连模式见规范文档）
         VITE_API_BASE: /api
+        # react 全家 ESM CDN 换源（须 esm.sh 协议兼容，缺省 esm.sh 官方；
+        # 自建形态见下方 esm-sh 服务与 README「自建 ESM CDN」），空 = 用代码缺省
+        CDN_BASE: ${FRONTEND_CDN_BASE:-}
     image: agentic-frontend:latest
     restart: unless-stopped
     environment:
@@ -162,5 +167,29 @@ services:
       backend:
         condition: service_healthy
 
+  # ---------- 自建 ESM CDN（可选，profile: esm-sh；esm.sh 官方镜像 + 阿里云包源） ----------
+  # react 全家（react/react-dom/react-router）由前端产物经 importmap 从本服务
+  # 加载（构建机制见 frontend/AGENTS.md「基础依赖 CDN 外置」）。默认 profile
+  # 不拉起、前端也不指向它；启用两步：
+  #   1) docker compose --profile esm-sh up -d esm-sh
+  #   2) .env 设 FRONTEND_CDN_BASE=http://<浏览器可达地址>:8082 后重建前端：
+  #      docker compose build frontend && docker compose up -d frontend
+  # NPM_REGISTRY 指向阿里云 npmmirror：包元数据/源码走国内镜像；esm.sh 对每个
+  # 依赖做 CJS→ESM 转换并缓存到 esm-sh-data 卷（命中缓存直出，删卷=全量重建）。
+  # 注意：CDN 地址必须「浏览器可达」而非仅容器网络可达——importmap 由用户
+  # 浏览器解析；远程部署填部署机 IP/域名，勿用 127.0.0.1（本机访问才可用）。
+  esm-sh:
+    profiles: ["esm-sh"]
+    image: ${ESM_SH_IMAGE:-ghcr.io/esm-dev/esm.sh:latest}
+    restart: unless-stopped
+    environment:
+      # 上游 npm registry（esm.sh 官方缺省 registry.npmjs.org）：换阿里云镜像
+      NPM_REGISTRY: ${ESM_SH_NPM_REGISTRY:-https://registry.npmmirror.com/}
+    ports:
+      - "${ESM_SH_PORT:-8082}:80" # 浏览器直达口（importmap 从浏览器侧访问）
+    volumes:
+      - esm-sh-data:/home/esm/.esmd/storage
+
 volumes:
   server-data:
+  esm-sh-data:

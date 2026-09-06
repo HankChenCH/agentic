@@ -38,13 +38,17 @@ COPY . /app/.
 # 只写非空变量：config.ts 的兜底用 ?? 判空，空串会破坏「VITE_SSE_URL 缺省由
 # REST_BASE 派生」的语义，故未提供的变量保持不定义；末尾 unset 掉 shell 环境里
 # 的同名空串变量，避免 process env（优先级高于 .env 文件）以空串覆盖兜底逻辑。
+# CDN_BASE 同机制：react 全家 ESM CDN 换源（须 esm.sh 协议兼容；缺省 esm.sh，
+# 自建 esm.sh 可把 upstream registry 指向 npmmirror，见 vite.config.ts 注释）。
 ARG VITE_API_BASE
 ARG VITE_SSE_URL
+ARG CDN_BASE
 RUN set -eu; \
     : > .env.production; \
     if [ -n "${VITE_API_BASE:-}" ]; then echo "VITE_API_BASE=${VITE_API_BASE}" >> .env.production; fi; \
     if [ -n "${VITE_SSE_URL:-}" ]; then echo "VITE_SSE_URL=${VITE_SSE_URL}" >> .env.production; fi; \
-    unset VITE_API_BASE VITE_SSE_URL; \
+    if [ -n "${CDN_BASE:-}" ]; then echo "CDN_BASE=${CDN_BASE}" >> .env.production; fi; \
+    unset VITE_API_BASE VITE_SSE_URL CDN_BASE; \
     yarn build
 
 # ---------- 运行阶段 ----------

@@ -64,10 +64,49 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/   # 200
 | --- | --- | --- |
 | 前端 | `http://127.0.0.1:8081`（`WEB_PORT`） | 页面 + `/api` 同源反代，免 CORS |
 | 后端调试口 | `http://127.0.0.1:8000`（`SERVER_PORT`） | `/health` `/metrics` `/docs` |
+| 自建 ESM CDN（可选） | `http://127.0.0.1:8082`（`ESM_SH_PORT`） | profile `esm-sh`；react 全家 importmap 源，上游 npmmirror |
 | 中间件 | postgres 5432 / weaviate 8080 / rustfs 9000 / redis 6379 | 全部仅绑 `127.0.0.1`，排查用 |
 
 完整口径（镜像、变量、数据卷、安全基线、远程部署变体）见
 [`deployment-spec.md`](deployment-spec.md)。
+
+## 可选：自建 ESM CDN（esm.sh + 阿里云 npmmirror 包源）
+
+前端产物里的 react 全家（react/react-dom/react-router）经 importmap 从 ESM
+CDN 加载（入口 chunk 因此从 1.5MB 降到 147KB，见 `frontend/AGENTS.md`），
+**缺省指向 esm.sh 官方公网源**。内网隔离或国内加速场景，可启用本目录编排的
+自建服务：esm.sh 官方 Docker 镜像 + 阿里云 npmmirror 作上游包源。
+
+启用（两步，均在本目录执行）：
+
+```bash
+# 1) 启动自建 CDN（profile 化，不影响默认栈；首次访问各依赖时构建并缓存）
+docker compose --profile esm-sh up -d esm-sh
+curl -sf http://127.0.0.1:8082/react@19.2.7 >/dev/null && echo esm-sh ok
+
+# 2) 前端指向它并重建（CDN_BASE 是构建期事实，改 = 重建前端镜像）
+cp .env.example .env   # 或编辑既有 .env：取消 FRONTEND_CDN_BASE 注释
+vi .env                # FRONTEND_CDN_BASE=http://127.0.0.1:8082
+docker compose build frontend && docker compose up -d frontend
+```
+
+要点：
+
+- **地址必须浏览器可达**：importmap 由用户浏览器解析，`FRONTEND_CDN_BASE`
+  要填浏览器侧能访问到的地址（远程部署用部署机 IP/域名，勿用 127.0.0.1）；
+  这与 `RUSTFS_PUBLIC_ENDPOINT` 同一口径。
+- **npmmirror 的角色**：它是 npm 原文件镜像（react 包是纯 CJS，浏览器无法
+  直接当 ESM 模块加载），只能作自建 esm.sh 的上游包源
+  （`ESM_SH_NPM_REGISTRY`，缺省即 npmmirror），**不能**直接填进
+  `FRONTEND_CDN_BASE`。
+- **缓存与升级**：esm.sh 对每个「包@版本」构建一次即缓存进 `esm-sh-data`
+  卷；升级前端依赖版本后新版本会自动构建，无需干预。删卷 =
+  清空缓存全量重建。
+- **回退**：`.env` 去掉 `FRONTEND_CDN_BASE` 重建前端即回到 esm.sh 官方源；
+  彻底离线（要求不依赖任何外部 CDN）时，删 `frontend/vite.config.ts` 的
+  `cdnExternals()` 全量打包（见 `frontend/AGENTS.md`「基础依赖 CDN 外置」）。
+- 正式口径（镜像/数据卷/协议约束）见
+  [`deployment-spec.md`](deployment-spec.md) §12.5。
 
 ## 与 dev 栈的关系
 
