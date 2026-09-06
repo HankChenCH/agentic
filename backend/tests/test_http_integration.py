@@ -59,7 +59,7 @@ for _clear in (read_config.cache_clear, get_environment.cache_clear, deps._auth_
     _clear()
 
 # 鉴权 sweep 的公开路由：注册/登录是取票入口，/health /metrics 供探针与抓取
-_PUBLIC_PATHS = {"/auth/register", "/auth/login", "/health", "/metrics"}
+_PUBLIC_PATHS = {"/auth/register", "/auth/login", "/auth/refresh", "/health", "/metrics"}
 
 
 class Deltas:

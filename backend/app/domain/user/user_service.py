@@ -24,7 +24,7 @@ from app.domain.user.ports import UserRepositoryPort
 
 from .passwords import hash_password, verify_password
 from .ports import UserNodeSyncPort
-from .token import TokenBundle, encode_access_token
+from .token import TokenBundle, encode_access_token, encode_refresh_token
 
 # 用户名：字母/数字/下划线/中文；密码：可见 ASCII + 常用中文输入均放行，仅限长度
 _USERNAME_PATTERN = re.compile(r"^\w+([\u4e00-\u9fff]+\w*)*$", re.UNICODE)
@@ -35,10 +35,11 @@ _NICKNAME_MAX = 32
 
 @dataclass(frozen=True)
 class AuthSession:
-    """注册/登录的成功产物：用户 + 新签发的访问令牌。"""
+    """注册/登录的成功产物：用户 + 新签发的访问/刷新令牌对。"""
 
     user: User
     token: TokenBundle
+    refresh_token: TokenBundle
 
 
 @injectable
@@ -71,14 +72,16 @@ class UserService:
             self.memory_user_node.sync_user_node(user.id, user.username, user.nickname)
         except Exception:
             self.logger.exception("sync memory user node failed on register: %s", user.id)
-        return AuthSession(user=user, token=self._issue_token(user))
+        access, refresh = self._issue_token_pair(user)
+        return AuthSession(user=user, token=access, refresh_token=refresh)
 
     def login(self, username: str, password: str) -> AuthSession:
         user = self.user_repo.get_by_username(username)
         # 用户名不存在与密码错误同口径 401，不泄露用户存在性；空哈希（默认用户）恒失败
         if user is None or not verify_password(password, user.password_hash):
             raise InvalidCredentialsError("用户名或密码错误")
-        return AuthSession(user=user, token=self._issue_token(user))
+        access, refresh = self._issue_token_pair(user)
+        return AuthSession(user=user, token=access, refresh_token=refresh)
 
     # ---- 读路径：/auth/me ----
 
@@ -121,14 +124,21 @@ class UserService:
 
     # ---- 内部 ----
 
-    def _issue_token(self, user: User) -> TokenBundle:
+    def _issue_token_pair(self, user: User) -> tuple[TokenBundle, TokenBundle]:
         auth = self.app_config.auth
-        return encode_access_token(
+        kwargs = dict(
             user_id=user.id,
             username=user.username,
             secret=auth.jwt_secret,
             algorithm=auth.jwt_algorithm,
-            expires_minutes=auth.token_expire_minutes,
+        )
+        return (
+            encode_access_token(
+                expires_minutes=auth.access_token_expire_minutes, **kwargs
+            ),
+            encode_refresh_token(
+                expires_minutes=auth.refresh_token_expire_minutes, **kwargs
+            ),
         )
 
     @staticmethod

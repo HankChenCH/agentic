@@ -22,7 +22,11 @@ from app.exceptions import (
 from app.models.domain.user import DEFAULT_USER_ID
 from app.adapters.persistence.user_repository import UserRepository
 from app.domain.user.passwords import hash_password, verify_password
-from app.domain.user.token import decode_access_token, encode_access_token
+from app.domain.user.token import (
+    decode_access_token,
+    decode_refresh_token,
+    encode_access_token,
+)
 from app.domain.user.user_service import UserService, public_user
 
 from conftest import StubLoggerFactory
@@ -35,7 +39,9 @@ def make_service(engine, memory_user_node=None):
         app_config=type("Cfg", (), {"auth": type(
             "Auth", (),
             {"jwt_secret": "test-secret-0123456789abcdef-0123456789abcdef",
-             "jwt_algorithm": "HS256", "token_expire_minutes": 30},
+             "jwt_algorithm": "HS256",
+             "access_token_expire_minutes": 30,
+             "refresh_token_expire_minutes": 60 * 24 * 7},
         )()})(),
         logger_factory=StubLoggerFactory(),
     )
@@ -230,3 +236,66 @@ def test_password_hash_roundtrip_and_empty_stored():
 
 def datetime_utc(y, m, d):
     return datetime(y, m, d, tzinfo=timezone.utc)
+
+
+# ---------------- 双令牌：type claim 与刷新 ----------------
+
+def test_register_issues_access_and_refresh_pair(engine):
+    svc = make_service(engine)
+    session = svc.register("alice", "password123")
+
+    access = decode_access_token(
+        session.token.token,
+        secret="test-secret-0123456789abcdef-0123456789abcdef", algorithm="HS256",
+    )
+    refresh = decode_refresh_token(
+        session.refresh_token.token,
+        secret="test-secret-0123456789abcdef-0123456789abcdef", algorithm="HS256",
+    )
+    assert access.user_id == refresh.user_id == session.user.id
+    # access 短命、refresh 长命
+    assert session.refresh_token.expires_at > session.token.expires_at
+
+
+def test_token_type_claim_is_enforced(engine):
+    secret = "test-secret-0123456789abcdef-0123456789abcdef"
+    session = make_service(engine).register("alice", "password123")
+
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_refresh_token(session.token.token, secret=secret, algorithm="HS256")
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_access_token(session.refresh_token.token, secret=secret, algorithm="HS256")
+
+
+def test_legacy_token_without_type_claim_treated_as_access(engine):
+    secret = "test-secret-0123456789abcdef-0123456789abcdef"
+    legacy = jwt.encode(
+        {"sub": str(uuid4()), "username": "alice", "iat": 0, "exp": 4102444800},
+        secret, algorithm="HS256",
+    )
+    payload = decode_access_token(legacy, secret=secret, algorithm="HS256")
+    assert payload.username == "alice"
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_refresh_token(legacy, secret=secret, algorithm="HS256")
+
+
+def test_auth_app_service_refresh_rotates_pair(engine):
+    from app.application.auth_app_service import AuthAppService
+    from app.exceptions import InvalidCredentialsError
+
+    svc = make_service(engine)
+    app_service = AuthAppService(user_service=svc)
+    session = svc.register("alice", "password123")
+
+    payload = app_service.refresh(session.refresh_token.token)
+    assert payload.token and payload.refresh_token
+    assert payload.user["id"] == str(session.user.id)
+    # 旋转后的新 refresh 仍可继续刷新
+    payload2 = app_service.refresh(payload.refresh_token)
+    assert payload2.refresh_token != payload.refresh_token
+    # 无效 refresh → 401 同口径
+    with pytest.raises(InvalidCredentialsError):
+        app_service.refresh("not-a-jwt")
+    # access 顶替 refresh → 401
+    with pytest.raises(InvalidCredentialsError):
+        app_service.refresh(payload.token)

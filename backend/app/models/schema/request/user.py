@@ -21,6 +21,10 @@ class LoginRequest(BaseModel):
     password: str = Field(..., description="密码", min_length=1, max_length=64)
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., description="刷新令牌", min_length=1)
+
+
 class UpdateProfileRequest(BaseModel):
     nickname: str = Field(
         ...,

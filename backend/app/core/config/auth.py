@@ -54,8 +54,14 @@ class AuthConfig(BaseModel):
         default="HS256",
     )
 
-    token_expire_minutes: int = Field(
-        description="访问令牌有效期（分钟）",
+    access_token_expire_minutes: int = Field(
+        description="访问令牌有效期（分钟）——短命，临期由 refresh token 静默换新",
+        default=30,
+        ge=1,
+    )
+
+    refresh_token_expire_minutes: int = Field(
+        description="刷新令牌有效期（分钟）——长命，换取新一对访问/刷新令牌",
         default=60 * 24 * 7,
         ge=1,
     )

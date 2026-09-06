@@ -13,6 +13,7 @@ from app.application import AuthAppService
 from app.models.schema.request.user import (
     ChangePasswordRequest,
     LoginRequest,
+    RefreshRequest,
     RegisterRequest,
     UpdateProfileRequest,
 )
@@ -43,6 +44,15 @@ def login(
     request: LoginRequest,
 ):
     return _session_response(auth.login(request.username, request.password))
+
+
+@router.post("/refresh")
+def refresh(
+    auth: Injected[AuthAppService],
+    request: RefreshRequest,
+):
+    """刷新令牌换新一对访问/刷新令牌（旋转）；验签失败 → 401。"""
+    return _session_response(auth.refresh(request.refresh_token))
 
 
 @router.get("/me")

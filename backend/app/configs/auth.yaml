@@ -3,4 +3,5 @@
 #（HS256 要求 ≥32 字节，过短 PyJWT 会告警）。
 jwt_secret: ${AUTH_JWT_SECRET:dev-only-secret-0123456789abcdef-change-me}
 jwt_algorithm: HS256
-token_expire_minutes: 10080
+access_token_expire_minutes: 30
+refresh_token_expire_minutes: 10080

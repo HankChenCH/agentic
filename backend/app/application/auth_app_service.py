@@ -9,19 +9,29 @@ application，jwt 异常面原样透出由依赖翻译为 401。
 from dataclasses import dataclass
 from uuid import UUID
 
+import jwt
 from wireup import injectable
 
+from app.exceptions import InvalidCredentialsError
 from app.domain.user import UserService
-from app.domain.user.token import TokenPayload, decode_access_token
+from app.domain.user.token import (
+    TokenPayload,
+    decode_access_token,
+    decode_refresh_token,
+    encode_access_token,
+    encode_refresh_token,
+)
 from app.domain.user.user_service import public_user
 
 
 @dataclass(frozen=True)
 class AuthSessionPayload:
-    """注册/登录的同构输出：令牌 + 用户公开信息。"""
+    """注册/登录/刷新的同构输出：访问/刷新令牌 + 用户公开信息。"""
 
     token: str
     expires_at: str
+    refresh_token: str
+    refresh_expires_at: str
     user: dict
 
 
@@ -37,20 +47,53 @@ class AuthAppService:
 
     user_service: UserService
 
-    def register(self, username: str, password: str) -> AuthSessionPayload:
-        session = self.user_service.register(username, password)
+    def _session_payload(self, session) -> AuthSessionPayload:
         return AuthSessionPayload(
             token=session.token.token,
             expires_at=session.token.expires_at.isoformat(),
+            refresh_token=session.refresh_token.token,
+            refresh_expires_at=session.refresh_token.expires_at.isoformat(),
             user=public_user(session.user),
         )
 
+    def register(self, username: str, password: str) -> AuthSessionPayload:
+        return self._session_payload(self.user_service.register(username, password))
+
     def login(self, username: str, password: str) -> AuthSessionPayload:
-        session = self.user_service.login(username, password)
+        return self._session_payload(self.user_service.login(username, password))
+
+    def refresh(self, refresh_token: str) -> AuthSessionPayload:
+        """刷新令牌换新一对令牌（旋转 refresh）；无效/过期一律 401 同口径。"""
+        auth_config = self.user_service.app_config.auth
+        try:
+            payload = decode_refresh_token(
+                refresh_token,
+                secret=auth_config.jwt_secret,
+                algorithm=auth_config.jwt_algorithm,
+            )
+        except jwt.InvalidTokenError:
+            raise InvalidCredentialsError("刷新令牌无效或已过期") from None
+        user = self.user_service.get_user(payload.user_id)
+        access = encode_access_token(
+            user_id=user.id,
+            username=user.username,
+            secret=auth_config.jwt_secret,
+            algorithm=auth_config.jwt_algorithm,
+            expires_minutes=auth_config.access_token_expire_minutes,
+        )
+        new_refresh = encode_refresh_token(
+            user_id=user.id,
+            username=user.username,
+            secret=auth_config.jwt_secret,
+            algorithm=auth_config.jwt_algorithm,
+            expires_minutes=auth_config.refresh_token_expire_minutes,
+        )
         return AuthSessionPayload(
-            token=session.token.token,
-            expires_at=session.token.expires_at.isoformat(),
-            user=public_user(session.user),
+            token=access.token,
+            expires_at=access.expires_at.isoformat(),
+            refresh_token=new_refresh.token,
+            refresh_expires_at=new_refresh.expires_at.isoformat(),
+            user=public_user(user),
         )
 
     def me(self, user_id: UUID) -> dict:
