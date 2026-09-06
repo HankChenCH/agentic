@@ -190,8 +190,11 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   `build.rolldownOptions.output.advancedChunks` 拆三组（vendor-assistant /
   vendor-markdown / vendor-ui，仅圈主链路静态依赖；recharts 等懒加载包不
   入组以免被提前拉进首屏）。效果：入口 chunk 1.5MB→147KB（gzip
-  438→48KB）。**部署约束**：运行期需能访问 esm.sh——离线/内网部署需回退
-  该插件（删 `cdnExternals()` 即可整体还原为全量打包）。
+  438→48KB）。**换源**：`CDN_BASE` 构建期配置（`.env.local`/Docker ARG
+  `CDN_BASE`/compose 变量 `FRONTEND_CDN_BASE`，须 esm.sh 协议兼容，缺省
+  esm.sh；npmmirror 等原文件镜像只能当自建 esm.sh 的 upstream 包源），
+  改配置重建即换源。**部署约束**：运行期需能访问所选 CDN——离线/内网部署
+  回退该插件（删 `cdnExternals()` 即整体还原为全量打包）。
 - **智能体选择（新会话先选）**：无消息的新会话视图中，composer 上方渲染
   AgentModeSwitch 分段 pills（thread.tsx 用 `AuiIf isNewChatView` 包裹）——
   ≤3 个智能体直接切换，更多收进「更多」下拉（agent-selector.tsx，数据来自
