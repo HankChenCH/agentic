@@ -380,6 +380,13 @@ class ConversationService:
         不返回；失败/取消/悬挂 RUNNING 轮次保留并按状态标注（前端渲染失败
         占位）。响应携带 ``active_turn_id``（活跃叶子），前端据此确定树的
         head。offset/limit 沿用"取最新一页"语义，items 旧→新排序。
+
+        items 是轮次的**前端展示视图**（序列化后的 dict）：TOOL_RESULT 行带
+        ``display_content``（工具结果双内容契约的展示版，见 StorageTranslator）
+        时 content 被替换为展示版、display_content 键不外泄——真实结果只
+        入库审计，不经本接口外发；无 display_content 的行（其他 agent /
+        存量数据）原样。``replay_history`` 的 LLM 回放不受影响，仍用真实
+        content（与模型当时所见一致）。
         """
         conversation = self.describe_conversation(user_id=user_id, thread_id=thread_id)
         turns = self.conversation_repo.list_thread_turns(thread_id)
@@ -407,9 +414,32 @@ class ConversationService:
         newest_first = list(reversed(visible))
         page = newest_first[start:start + limit]
         return {
-            "items": list(reversed(page)),
+            "items": [self._frontend_turn(t) for t in reversed(page)],
             "total": total,
             "offset": start,
             "limit": limit,
             "active_turn_id": conversation.current_turn_id,
         }
+
+    @staticmethod
+    def _frontend_turn(turn: AgenticConversationTurn) -> dict:
+        """轮次的 UI 展示视图：预序列化 + TOOL_RESULT 行换成展示版内容。
+
+        返回 model_dump 的 dict（端点信封对其再编码，最终 JSON 形态不变），
+        替换只发生在新造的 dict 上，仓储返回的领域对象不被改动。
+        """
+        data = turn.model_dump()
+        for message in data["messages"]:
+            content = message.get("content") or []
+            part = content[0] if content else None
+            if (
+                message.get("message_type") == AgenticMessageType.TOOL_RESULT
+                and isinstance(part, dict)
+                and "display_content" in part
+            ):
+                message["content"] = [{
+                    "type": "tool_result",
+                    "tool_call_id": part.get("tool_call_id", ""),
+                    "content": part["display_content"],
+                }]
+        return data

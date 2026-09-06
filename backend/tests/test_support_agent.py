@@ -3,8 +3,8 @@
 
 覆盖：客服面工具装配（知识检索三件 + 记忆三件套，无浏览工具/演示工具）、
 system prompt 客服人设（禁出处禁角标）、脱溯源流投影（SupportToolsTransformer
-把 KnowledgeSearchResult JSON 的透传副本摘成纯文本——LLM 侧 ToolMessage 不受
-影响）、未命中/非溯源结果的透传、以及客服面端到端 ag-ui 帧契约。
+把 KnowledgeSearchResult JSON 拆成 content 真实 + display 展示双内容——LLM 侧
+ToolMessage 不受影响）、未命中/非溯源结果的透传、以及客服面端到端 ag-ui 帧契约。
 """
 
 import json
@@ -143,31 +143,34 @@ def _run_tools_channel(agent):
     return tool_items
 
 
-def test_support_transformer_strips_provenance_from_frontend_stream():
-    """透传副本脱溯源：前端只见「编号 + 内容」纯文本；LLM 侧 ToolMessage
-    仍是完整 JSON（作答质量不受影响）。"""
+def test_support_transformer_dual_content_on_provenance_results():
+    """双内容契约：content 恒为真实检索 JSON（落库审计），display 为脱溯源
+    摘要（前端展示版）；LLM 侧 ToolMessage 仍是完整 JSON（作答质量不受影响）。"""
     retrieval = StubRetrieval(result=([_hit(content="退货政策为七天无理由。")], []))
     agent = _search_stream_agent(retrieval, [AIMessage(content="七天无理由。")])
 
     tool_items = _run_tools_channel(agent)
     assert [t["event"] for t in tool_items] == ["tool-started", "tool-result", "tool-finished"]
-    content = tool_items[1]["content"]
-    assert "退货政策为七天无理由。" in content
-    # 出处元数据全部剥离
+    result = tool_items[1]
+    # content：真实结果（审计副本），出处元数据原样保留
+    assert "文档A" in result["content"] and "sources" in result["content"]
+    # display：前端展示版，出处元数据全部剥离
+    assert "退货政策为七天无理由。" in result["display"]
     for forbidden in ("文档A", "doc-1", "heading_path", "bboxes", "score", "sources", "page_start"):
-        assert forbidden not in content
+        assert forbidden not in result["display"]
     # LLM 侧不受投影影响：ToolMessage 进完整检索 JSON
     tool_messages = [m for m in agent.model.prompts[1] if m.type == "tool"]
     assert "文档A" in tool_messages[0].content
 
 
 def test_support_transformer_passthrough_non_provenance_results():
-    """未命中说明（人类可读文本，无 sources）原样透传，不改写。"""
+    """未命中说明（人类可读文本，无 sources）原样透传，不改写（无 display 键）。"""
     retrieval = StubRetrieval(result=([], []))
     agent = _search_stream_agent(retrieval, [AIMessage(content="没找到。")])
 
     tool_items = _run_tools_channel(agent)
     assert tool_items[1]["content"].startswith("知识库中未检索到相关内容")
+    assert "display" not in tool_items[1]
 
 
 def test_support_transformer_passthrough_memory_tools():

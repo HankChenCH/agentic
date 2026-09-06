@@ -14,6 +14,8 @@ from app.models.domain.agentic import (
     AgenticConversation,
     AgenticConversationMessage,
     AgenticConversationTurn,
+    AgenticMessageRole,
+    AgenticMessageType,
     AgenticTurnStatus,
 )
 from app.packages.signal.memory_signal_store import InMemorySignalStore
@@ -176,3 +178,80 @@ def test_management_envelopes_empty_state(service):
     # 归属校验前置：不存在的会话按 404 处理（与 describe/delete 同口径），而非空列表
     with pytest.raises(ConversationNotFoundError):
         service.list_history_messages(user_id=TEST_USER_ID, thread_id=uuid4())
+
+
+# ---------------------------------------------------------------- 历史出口双内容
+def _tool_rows(thread_id, turn_id, seq_start):
+    """一行带 display_content 的 TOOL_RESULT（双内容契约）+ 一行不带（存量形态）。"""
+    def row(message_id, tool_call_id, content_part, seq):
+        return AgenticConversationMessage(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message_id=message_id,
+            parent_message_id=None,
+            sequence_num=seq,
+            role=AgenticMessageRole.TOOL,
+            message_type=AgenticMessageType.TOOL_RESULT,
+            content=[content_part],
+            token_usage={},
+            latency_ms=0,
+        )
+
+    return [
+        row(uuid4(), "call-1", {
+            "type": "tool_result", "tool_call_id": "call-1",
+            "content": "真实检索JSON（含出处）", "display_content": "1. 展示摘要",
+        }, seq_start),
+        row(uuid4(), "call-2", {
+            "type": "tool_result", "tool_call_id": "call-2",
+            "content": "普通工具结果",
+        }, seq_start + 1),
+    ]
+
+
+def test_history_replaces_tool_result_with_display_content(service):
+    """历史出口：带 display_content 的 TOOL_RESULT 行换成展示版、键不外泄，
+    真实结果不经前端接口出去；无 display_content 的行原样。"""
+    thread_id = uuid4()
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-h", content=_text("问"))
+    service.conversation_repo.store_conversation_messages(_tool_rows(thread_id, turn.turn_id, 1))
+
+    items = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)["items"]
+    parts = [
+        m["content"][0]
+        for t in items for m in t["messages"]
+        if m["message_type"] == AgenticMessageType.TOOL_RESULT
+    ]
+    assert parts[0]["content"] == "1. 展示摘要"
+    assert "真实检索JSON" not in parts[0]["content"] and "display_content" not in parts[0]
+    assert parts[1] == {"type": "tool_result", "tool_call_id": "call-2", "content": "普通工具结果"}
+
+
+def test_replay_history_keeps_real_tool_result_content(service):
+    """LLM 回放不受展示视图影响：ToolMessage 仍是真实 content（与模型当时所见一致）。"""
+    from langchain.messages import AIMessage, ToolMessage
+
+    thread_id = uuid4()
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-r", content=_text("问"))
+    rows = _tool_rows(thread_id, turn.turn_id, 2)
+    rows.insert(0, AgenticConversationMessage(
+        thread_id=thread_id,
+        turn_id=turn.turn_id,
+        message_id=uuid4(),
+        parent_message_id=None,
+        sequence_num=1,
+        role=AgenticMessageRole.ASSISTANT,
+        message_type=AgenticMessageType.TOOL_CALL,
+        content=[{"type": "tool_call", "tool_call_id": "call-1", "name": "knowledge_search", "args": {}}],
+        token_usage={},
+        latency_ms=0,
+    ))
+    service.conversation_repo.store_conversation_messages(rows)
+    service.complete_turn(turn)
+
+    history = service.replay_history(thread_id=thread_id, base_turn_id=turn.turn_id)
+    tool_messages = [m for m in history if isinstance(m, ToolMessage)]
+    # call-2 无配对 TOOL_CALL，按契约跳过孤儿结果；call-1 用真实 content（非展示版）
+    assert [m.content for m in tool_messages] == ["真实检索JSON（含出处）"]
+    ai = next(m for m in history if isinstance(m, AIMessage))
+    assert ai.tool_calls[0]["id"] == "call-1"

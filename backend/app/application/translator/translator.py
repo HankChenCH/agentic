@@ -128,14 +128,15 @@ class AgUiTranslator:
                 )
             )
         elif event_type == "tool-result":
-            # ToolCallResultEvent 需要 messageId，用 run 级消息 id 作结果归属
-            # （前端实际按 toolCallId 关联 result）。
+            # 双内容契约：``content`` 是真实结果（LLM 所见，供落库审计），
+            # ``display`` 是可选的前端展示版（如客服检索脱溯源摘要）——带
+            # display 时流式只发展示版，出处不透前端；无 display 回退 content。
             tool_call_id = payload.get("tool_call_id", "")
             yield self._enc.encode(
                 ToolCallResultEvent(
                     message_id=self._assistant_msg_id,
                     tool_call_id=tool_call_id,
-                    content=payload.get("content", ""),
+                    content=payload.get("display", payload.get("content", "")),
                 )
             )
             # A2UI 通道：工具结果携带 UI 载荷（artifact 的 {"a2ui": [消息数组]}）

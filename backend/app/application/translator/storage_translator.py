@@ -39,7 +39,9 @@ class StorageTranslator:
       - reasoning 非空 → 1 条 THOUGHT（无 text 时持有注入 id）
       - text 非空      → 1 条 MESSAGE（token_usage 填这里，持有注入 id）
       - 每个 tool_call → 1 条 TOOL_CALL（parent_message_id 指向 MESSAGE）
-      - 每个 tool 结果 → 1 条 TOOL_RESULT（parent_message_id 指向对应 TOOL_CALL）
+      - 每个 tool 结果 → 1 条 TOOL_RESULT（parent_message_id 指向对应 TOOL_CALL；
+        投影事件带 ``display`` 时同行落 ``display_content`` 展示版——``content``
+        恒为真实结果供审计，展示版仅供历史出口替换，不经前端接口外发真实版）
       - tool 结果携带 UI 载荷 → 1 条 CUSTOM（A2UI 消息数组，紧跟该 TOOL_RESULT）
 
     数据来源：messages 投影的 ``ChatModelStream`` 在 ``message-finish`` 后所有
@@ -240,6 +242,17 @@ class StorageTranslator:
         content = payload.get("content", "")
         parent_id = self._tool_call_msg_ids.get(tool_call_id)
 
+        # 双内容契约：content 恒为真实结果（审计）；display 是前端展示版
+        # （如客服检索脱溯源摘要），同行落 display_content 供历史出口替换。
+        result_part: dict[str, Any] = {
+            "type": "tool_result",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        }
+        display = payload.get("display")
+        if display is not None:
+            result_part["display_content"] = display
+
         self._append(AgenticConversationMessage(
             thread_id=self.thread_id,
             turn_id=self.turn_id,
@@ -248,11 +261,7 @@ class StorageTranslator:
             sequence_num=self._next_seq(),
             role=AgenticMessageRole.TOOL,
             message_type=AgenticMessageType.TOOL_RESULT,
-            content=[{
-                "type": "tool_result",
-                "tool_call_id": tool_call_id,
-                "content": content,
-            }],
+            content=[result_part],
             token_usage={},
             latency_ms=0,
         ))

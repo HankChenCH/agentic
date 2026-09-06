@@ -414,7 +414,7 @@ def test_edit_latest_question_creates_sibling_attempt(service, engine):
 
     # 历史展示：t2（被编辑替换的旧 COMPLETED 轮次）隐藏，活跃问答保留
     items = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)["items"]
-    ids = {t.turn_id for t in items}
+    ids = {t["turn_id"] for t in items}
     assert t2.turn_id not in ids
     assert {t1.turn_id, t3.turn_id, t4.turn_id} <= ids
 
@@ -431,7 +431,7 @@ def test_history_includes_tip_fan_for_offline_comparison(service, engine):
     _answer(service, t2, "新答案")
 
     result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
-    ids = {t.turn_id for t in result["items"]}
+    ids = {t["turn_id"] for t in result["items"]}
     assert result["active_turn_id"] == t2.turn_id
     assert {t1.turn_id, t2.turn_id} <= ids  # 末梢扇形可见，可切换
 
@@ -439,7 +439,7 @@ def test_history_includes_tip_fan_for_offline_comparison(service, engine):
     _, t3 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3", content=_text("Q2"))
     _answer(service, t3, "A2")
     result2 = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
-    ids2 = {t.turn_id for t in result2["items"]}
+    ids2 = {t["turn_id"] for t in result2["items"]}
     assert result2["active_turn_id"] == t3.turn_id
     assert t1.turn_id not in ids2
     assert {t2.turn_id, t3.turn_id} <= ids2
@@ -464,18 +464,18 @@ def test_history_returns_active_path_plus_incomplete_turns(service, engine):
 
     result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
     items = result["items"]
-    ids = {t.turn_id for t in items}
+    ids = {t["turn_id"] for t in items}
     assert result["total"] == len(items) == 3
     assert result["active_turn_id"] == retry.turn_id
     assert retry.turn_id in ids          # 活跃叶子（新变体）
     assert t1.turn_id in ids             # 末梢扇形旧变体：保留可切换
     assert t2.turn_id in ids             # 失败轮次：保留并标注
-    by_id = {t.turn_id: t for t in items}
-    assert AgenticTurnStatus(by_id[t2.turn_id].status) == AgenticTurnStatus.FAILED
-    assert AgenticTurnStatus(by_id[retry.turn_id].status) == AgenticTurnStatus.COMPLETED
+    by_id = {t["turn_id"]: t for t in items}
+    assert AgenticTurnStatus(by_id[t2.turn_id]["status"]) == AgenticTurnStatus.FAILED
+    assert AgenticTurnStatus(by_id[retry.turn_id]["status"]) == AgenticTurnStatus.COMPLETED
     # 分支元数据随 model_dump 下发（前端后续可重建分支）
-    assert by_id[retry.turn_id].parent_turn_id is None
-    assert by_id[retry.turn_id].attempt_no == 2
+    assert by_id[retry.turn_id]["parent_turn_id"] is None
+    assert by_id[retry.turn_id]["attempt_no"] == 2
 
 
 def test_history_paging_keeps_latest_page_semantics(service, engine):
@@ -487,5 +487,5 @@ def test_history_paging_keeps_latest_page_semantics(service, engine):
 
     result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id, offset=0, limit=2)
     assert result["total"] == 5
-    nums = [t.turn_num for t in result["items"]]
+    nums = [t["turn_num"] for t in result["items"]]
     assert nums == [3, 4]  # 最新的 2 条，旧→新
