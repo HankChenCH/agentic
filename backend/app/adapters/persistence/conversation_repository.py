@@ -5,8 +5,10 @@ from uuid import UUID, uuid4
 from wireup import injectable
 from sqlmodel import Session, col, delete, select, update
 from sqlalchemy import Engine, func
+from sqlalchemy.exc import IntegrityError
 
 from app.domain.conversation.ports import ConversationRepositoryPort
+from app.domain.ports import RepositoryConflictError
 from app.models.domain.agentic import (
     AgenticConversation,
     AgenticConversationTurn,
@@ -86,12 +88,15 @@ class ConversationRepository:
         窗口内整体回滚，ValueError 惯例同前）。turn_num 为线程内插入序
         （max+1）；不动 current_turn_id——活跃叶子只在 complete_turn 推进。
 
-        并发边界（本事务不提供隔离，只保写集原子性）：分支定位的读在服务层
-        事务外完成；max(turn_num) 虽在本事务内但是普通快照读——无锁、
+        并发边界：run_id 幂等由 (thread_id, run_id) 唯一约束（uq_turn_thread_run）
+        在库层硬保证——同会话重复提交的 INSERT 在 commit 时触发 IntegrityError，
+        在此翻译为契约级 RepositoryConflictError（本事务写集上唯一的约束就是它，
+        裸翻译安全；驱动异常不出适配器边界）。其余不提供隔离：分支定位的读在
+        服务层事务外完成；max(turn_num) 虽在本事务内但是普通快照读——无锁，
         (thread_id, parent_turn_id, attempt_no) 与 turn_num 亦无唯一约束，
-        同一会话并发开轮可产生重复兄弟序号/turn_num。正确性由部署现实兜底
-        （uvicorn 单进程 + 客户端不同时对同一会话发 run），不是数据库保证；
-        需要硬保证时加部分唯一索引（同 parent 下 attempt 唯一）再谈。
+        同一会话用不同 run_id 并发开轮仍可产生重复兄弟序号/turn_num。正确性
+        由部署现实兜底（uvicorn 单进程 + 客户端不同时对同一会话发 run），不是
+        数据库保证；需要硬保证时加部分唯一索引（同 parent 下 attempt 唯一）再谈。
         """
         with Session(self.engine, expire_on_commit=False) as session:
             conversation = session.exec(
@@ -122,19 +127,29 @@ class ConversationRepository:
             )
             session.add(turn)
             # turn 行先落：message 的 FK 指向 turn_id，PG 实时校验约束
-            session.flush()
-            session.add(AgenticConversationMessage(
-                thread_id=thread_id,
-                turn_id=turn.turn_id,
-                message_id=uuid4(),
-                sequence_num=0,
-                role=AgenticMessageRole.USER,
-                message_type=AgenticMessageType.MESSAGE,
-                content=content,
-                token_usage={},
-                latency_ms=0,
-            ))
-            session.commit()
+            # turn 的 INSERT 在 flush 即执行，UNIQUE 约束（sqlite/PG 均非延迟）
+            # 也在此刻抛 IntegrityError 而非 commit——翻译块必须罩住整段写路径
+            try:
+                session.flush()
+                session.add(AgenticConversationMessage(
+                    thread_id=thread_id,
+                    turn_id=turn.turn_id,
+                    message_id=uuid4(),
+                    sequence_num=0,
+                    role=AgenticMessageRole.USER,
+                    message_type=AgenticMessageType.MESSAGE,
+                    content=content,
+                    token_usage={},
+                    latency_ms=0,
+                ))
+                session.commit()
+            except IntegrityError:
+                # uq_turn_thread_run 冲突（重复 run_id 提交）：整体回滚（会话
+                # get-or-create/改绑一并撤销），翻译为契约级冲突信号上抛
+                session.rollback()
+                raise RepositoryConflictError(
+                    f"duplicate run_id {run_id} for thread {thread_id}"
+                ) from None
             session.refresh(conversation)
             session.refresh(turn)
 

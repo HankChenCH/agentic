@@ -16,6 +16,7 @@ from app.exceptions.conversation import (
     AttachmentTooLargeError,
     ConversationError,
     ConversationNotFoundError,
+    DuplicateRunError,
     TurnNotAtTipError,
     UnsupportedAttachmentTypeError,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "ConversationError",
     "ConversationNotFoundError",
     "TurnNotAtTipError",
+    "DuplicateRunError",
     "UnsupportedAttachmentTypeError",
     "AttachmentTooLargeError",
     "AttachmentNotFoundError",

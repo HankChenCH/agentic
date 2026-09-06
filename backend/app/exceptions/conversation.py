@@ -45,3 +45,15 @@ class TurnNotAtTipError(ConversationError):
     """
 
     default_code = 1013
+
+
+class DuplicateRunError(ConversationError):
+    """同一会话已存在相同 run_id 的轮次，重复提交被拒绝（run_id 幂等兜底）。
+
+    典型来源是传输层重试/双击重放——同一 run 的重复请求不再开新轮次；
+    硬保证来自 (thread_id, run_id) 唯一约束，经仓储 RepositoryConflictError
+    翻译而来。message 在抛点给出（对外经 SSE RunErrorEvent 透出）。
+    """
+
+    default_code = 1014
+    default_http_status = 409

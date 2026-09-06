@@ -164,11 +164,12 @@ def client():
 
 
 def sse_events(text):
-    """完整 SSE 响应体（data: {...}\\n\\n 序列）→ ag-ui 事件 dict 列表。"""
+    """完整 SSE 响应体（data: {...}\\n\\n 序列，间或夹 ": ping" 心跳注释帧）
+    → ag-ui 事件 dict 列表。注释块与 @ag-ui/client 同口径跳过。"""
     return [
         json.loads(frame.removeprefix("data: ").strip())
         for frame in text.split("\n\n")
-        if frame.strip()
+        if frame.strip() and not frame.startswith(":")
     ]
 
 
@@ -336,6 +337,33 @@ def test_run_retry_activate_replay_keeps_only_active_chain(client):
     assert "问题一" in context_text and "旧答案" in context_text
     assert "新答案" not in context_text
     assert context.messages[-1].content == "问题二"  # 末条恒为当前轮用户消息
+
+
+def test_run_rejects_duplicate_run_id(client):
+    """run_id 幂等：同一会话重复提交同一 runId（传输层重试/双击重放场景），
+    第二次 run 以 RUN_ERROR 拒绝且不产生新轮次——硬保证来自
+    uq_turn_thread_run 唯一约束，领域层翻译为 DuplicateRunError。"""
+    headers, token = register_and_login(client, f"it_{uuid4().hex[:8]}")
+    thread_id = uuid4()
+
+    _agent.answer = "第一次回答"
+    post_run(client, headers, thread_id, "run-dup", "问题")
+    assert history_of(client, token, thread_id)["total"] == 1
+
+    _agent.answer = "不应出现的重复回答"
+    resp = client.post(
+        "/agentic/run",
+        headers=headers,
+        json=run_request(thread_id, "run-dup", "问题"),
+    )
+    assert resp.status_code == 200
+    events = sse_events(resp.text)
+    assert [e["type"] for e in events] == ["RUN_STARTED", "RUN_ERROR"]
+    assert events[1]["message"] == "请勿重复提交：相同请求已在本会话中提交过"
+    # 轮次与回答都不变：重复请求既没开新轮次，也没触发 agent 二次执行
+    history = history_of(client, token, thread_id)
+    assert history["total"] == 1
+    assert _agent.contexts[-1].messages[-1].content == "问题"
 
 
 def _api_routes(routes):

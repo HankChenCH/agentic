@@ -9,9 +9,10 @@ from langchain_core.messages import BaseMessage
 
 from app.core.config import AppConfig
 from app.core.logging import LoggerFactory
-from app.exceptions import ConversationNotFoundError, TurnNotAtTipError
+from app.exceptions import ConversationNotFoundError, DuplicateRunError, TurnNotAtTipError
 from app.packages.signal.signal_store import SignalStore
 from app.domain.conversation.ports import ConversationRepositoryPort
+from app.domain.ports import RepositoryConflictError
 from app.domain.conversation.branching import (
     ancestor_chain,
     detect_retry_of_latest,
@@ -130,17 +131,22 @@ class ConversationService:
                 attempt_no = 1
             rebind = agent_id is not None and conversation.agentic_id != agent_id
 
-        return self.conversation_repo.open_turn(
-            user_id=user_id,
-            thread_id=thread_id,
-            agentic_id=agent_id or self.app_config.default_agentic_id,
-            rebind=rebind,
-            run_id=run_id,
-            turn_id=uuid4(),
-            parent_turn_id=parent_turn_id,
-            attempt_no=attempt_no,
-            content=content,
-        )
+        # run_id 幂等的并发窗口兜底：uq_turn_thread_run 唯一约束冲突（同一 run
+        # 的重复提交，如传输层重试/双击重放）按业务错误拒绝，不产生重复轮次
+        try:
+            return self.conversation_repo.open_turn(
+                user_id=user_id,
+                thread_id=thread_id,
+                agentic_id=agent_id or self.app_config.default_agentic_id,
+                rebind=rebind,
+                run_id=run_id,
+                turn_id=uuid4(),
+                parent_turn_id=parent_turn_id,
+                attempt_no=attempt_no,
+                content=content,
+            )
+        except RepositoryConflictError:
+            raise DuplicateRunError("请勿重复提交：相同请求已在本会话中提交过") from None
 
     def _ensure_base_at_tip(self, conversation: AgenticConversation, base, by_id: dict) -> None:
         """末梢守卫：分支只允许发生在最新问答（"主干 + 末梢一层扇形"）。

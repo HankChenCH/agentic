@@ -3,7 +3,7 @@ from enum import Enum
 
 from uuid import UUID
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Column, JSON, Enum as SAEnum
+from sqlalchemy import Column, JSON, Enum as SAEnum, UniqueConstraint
 
 from app.models.domain.mixin import TimeFieldMixin
 
@@ -75,6 +75,12 @@ class AgenticConversation(TimeFieldMixin, SQLModel, table=True):
 
 class AgenticConversationTurn(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "agentic_conversation_turn" # type: ignore
+
+    # 同一会话内 run_id 唯一：重复提交（传输层重试/双击重放）在库层硬拒绝，
+    # 仓储把约束冲突翻译为 RepositoryConflictError、领域层转 DuplicateRunError
+    __table_args__ = (
+        UniqueConstraint("thread_id", "run_id", name="uq_turn_thread_run"),
+    )
 
     id: int | None = Field(
         title="会话轮次id",
