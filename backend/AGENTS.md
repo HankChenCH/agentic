@@ -188,7 +188,10 @@ backend/                         # this directory is its own git repo (the works
 │                            #   (builtin/{demo,rag}/ 一 agent 一包：均与 create_agent ReAct
 │                            #   循环直接组合、按组件装配工具面，见 Gotchas「builtin 智能体
 │                            #   工具面」) + middleware.py（动态 system
-│                            #   prompt：PromptTemplate 模板槽位 + 片段渲染中间件）
+│                            #   prompt：PromptTemplate 模板槽位 + 片段渲染中间件；
+│                            #   上下文压缩：ContextSummarizationMiddleware——langchain
+│                            #   SummarizationMiddleware 封装，摘要模型调用回调隔离 +
+│                            #   摘要消息 id 盖章，防泄漏契约见模块注释）
 │                            #   + cancel.py（CancelGuardMiddleware 取消守卫）
 ├── components/              # 自内聚能力组件，统一范式（解剖学详见下方「components」条目）：
 │                            #   base.py = 范式核心（ToolSpec/ComponentSpec/COMPONENT_REGISTRY/
@@ -228,7 +231,10 @@ backend/                         # this directory is its own git repo (the works
 │   │                        #   归属过滤在仓储查询条件内强制；current_turn_id 为分支树活跃叶子——
 │   │                        #   仅 COMPLETED 推进，turn 带 parent_turn_id 自引用 FK（兄弟=同一问答的
 │   │                        #   重试/编辑变体）+ attempt_no，活跃路径沿 parent 链回溯，见
-│   │                        #   domain/conversation/branching.py）
+│   │                        #   domain/conversation/branching.py；turn 另有 (thread_id, run_id)
+│   │                        #   唯一约束 uq_turn_thread_run——重复提交 runId 经
+│   │                        #   RepositoryConflictError 翻译为 DuplicateRunError(1014/409)，
+│   │                        #   以 RunErrorEvent 拒绝，不开新轮次）
 │   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
 │   │                        #   迁移回填存量数据的不可登录占位用户）
 │   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
@@ -583,7 +589,11 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
   `chat`/`embedding`（`rerank` 为配置预留、工厂尚未支持构建）; entry 级 `timeout`（秒，默认 120）落地为模型客户端
   请求超时——deepseek/openai 走 `request_timeout`，ollama 走
-  `client_kwargs={"timeout": ...}`；entry 级 `capabilities`（`thinkable` +
+  `client_kwargs={"timeout": ...}`；entry 级 `context_window`（可选，token
+  数，正整数，仅 chat entry 可配否则加载期 fail-fast）——模型上下文窗口的
+  部署事实声明，builder 透传为模型 profile `max_input_tokens`（缺省沿用
+  模型类内置表，走网关/私有部署时可能失真），agent 侧上下文压缩的
+  fraction 触发阈值据其判定；entry 级 `capabilities`（`thinkable` +
   `features`——支持的 `with_structured_output` method 白名单，Literal 未知值
   加载期 fail-fast，声明顺序即自发现优先级；`multimodal`——多模态输入模态
   白名单 `text`/`vision`，含 `vision` 即可接收图片输入，经模型实例上的
@@ -775,7 +785,13 @@ core.logging), or you create a cycle.
 
 LLM stack: **LangChain `create_agent`**（预置 ReAct 循环，经 `BaseAgent.build_graph()`
 扩展点，自建图智能体覆写之）+ `agent.stream_events(version="v3")`
-with `stream.interleave("messages")`. The default chat model is **DeepSeek**
+with `stream.interleave("messages")`. 上下文压缩随窗口声明自动挂载
+（`build_middleware`：模型 profile 声明 `max_input_tokens`——llm entry 的
+`context_window` 透传——即挂 `ContextSummarizationMiddleware`，token 越阈值
+把旧消息折叠成摘要；摘要内部产物经 id 前缀在编排消费循环滤除——
+`AgenticService` 的 `is_internal_stream_item` 守卫，不进流/不落库/摘要调用
+不计入用量；历史全量回放故摘要在 run 内生效、每轮重算——有状态持久化摘要
+是后续演进项）. The default chat model is **DeepSeek**
 via `ChatDeepSeek` (`langchain-deepseek`), built by `app/adapters/llm/`
 from `AppConfig.llm` (named provider entries like `deepseek-flash` /
 `deepseek-pro`; `openai-chat` / `openai-embedding` entries target an
@@ -875,6 +891,18 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   abandoned sync generator would otherwise wait for a cyclic-GC pass
   (minutes in practice, or never if the process exits first). The wrapper's
   `finally` closes the sync generator as soon as the response cycle unwinds.
+  The wrapper also owns the **SSE heartbeat**: during silent windows (pre-first-
+  token, tool execution, ReAct step gaps — token streaming emits frames in real
+  time) it emits an SSE comment frame `": ping\n\n"` every 15s to feed
+  read-idle proxy timeouts (`deploy/deployment-spec.md` §12.3). Comment lines
+  are invisible to `@ag-ui/client`'s hand-written parser (it only collects
+  `data:` lines, so the frontend needs nothing; line endings must stay `\n` —
+  the parser splits blocks on `/\n\n/` and does not handle CRLF). The heartbeat
+  is implemented as a FIRST_COMPLETED race between the `__anext__` task and a
+  timer task, **not** `asyncio.wait_for` on `__anext__`: a wait_for timeout
+  cancels the anext task while its threadpool `next()` keeps running, and the
+  next anext would call `next()` on the same sync generator concurrently
+  ("generator already executing"); the race keeps the pending anext awaiting.
   Cancel latency is bounded by the in-flight `next()`: sub-second while
   token deltas stream, but a disconnect during a tool call lands only when
   the tool returns (no yield boundary inside). The frontend
