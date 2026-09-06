@@ -24,6 +24,7 @@ class OllamaModelBuilder(ModelBuilder):
         return {"timeout": entry.timeout} if entry.timeout is not None else {}
 
     def build_chat(self, entry: LLMProviderEntry, **overrides: Any) -> BaseChatModel:
+        self.apply_context_window(entry, overrides)
         return ChatOllama(
             model=entry.model,
             base_url=entry.api_url,

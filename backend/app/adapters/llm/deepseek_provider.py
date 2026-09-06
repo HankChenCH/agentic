@@ -94,6 +94,7 @@ class DeepSeekModelBuilder(ModelBuilder):
     provider: ClassVar[ModelProvider] = ModelProvider.DEEPSEEK
 
     def build_chat(self, entry: LLMProviderEntry, **overrides: Any) -> BaseChatModel:
+        self.apply_context_window(entry, overrides)
         return ThinkingAwareChatDeepSeek(
             api_key=entry.api_key,
             model=entry.model,

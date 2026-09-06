@@ -12,6 +12,7 @@ from app.core.config import get_environment
 from app.core.exceptions import BusinessError
 from app.core.logging import LoggerFactory
 from app.agents import AgentFactory, AgentRunContext
+from app.agents.middleware import is_internal_stream_item
 
 from .translator import AgUiTranslator, StorageTranslator, UsageContext
 from .turn_finalizer import TurnFinalizer
@@ -226,6 +227,11 @@ class AgenticService:
         last_cancel_check = 0.0  # 置 0：首帧必查，兜住"流刚开始就收到取消"
         try:
             for name, item in run.interleave("messages", "tools"):
+                # 上下文压缩的内部产物（摘要模型调用/摘要消息，见 agents/middleware
+                # 模块注释）不进用户流也不落库——否则摘要文案会流成前端文本并污染
+                # 历史；tools 投影条目（dict）无 message_id，判据恒 False 零副作用
+                if is_internal_stream_item(item):
+                    continue
                 message_id = uuid4()
                 # 取消检查必须在帧级：interleave 的 item 是整条 assistant 消息，
                 # 单消息轮次整个流式阶段只有一次 item 边界——item 级检查会把

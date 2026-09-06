@@ -18,6 +18,7 @@ class OpenAIModelBuilder(ModelBuilder):
     provider: ClassVar[ModelProvider] = ModelProvider.OPENAI
 
     def build_chat(self, entry: LLMProviderEntry, **overrides: Any) -> BaseChatModel:
+        self.apply_context_window(entry, overrides)
         return ChatOpenAI(
             api_key=entry.api_key,
             model=entry.model,

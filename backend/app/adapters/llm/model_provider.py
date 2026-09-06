@@ -35,6 +35,18 @@ class ModelBuilder(ABC):
         """按 entry 创建 embedding 模型实例，供应商不提供该能力时抛错。"""
         raise NotImplementedError(f"provider '{self.provider.value}' 不提供 embedding 模型")
 
+    @staticmethod
+    def apply_context_window(entry: LLMProviderEntry, overrides: dict[str, Any]) -> None:
+        """把 entry 的上下文窗口声明合入 chat 构建参数（显式传入优先）。
+
+        窗口以模型 profile 的 ``max_input_tokens`` 表达——langchain 机制
+        （如 agent 的 SummarizationMiddleware fraction 触发阈值）经
+        ``model.profile`` 消费。缺省不动：沿用模型类内置 profile 表
+        （deepseek/openai 自带供应商数据；ollama 无内置则 profile 为空）。
+        """
+        if entry.context_window is not None:
+            overrides.setdefault("profile", {"max_input_tokens": entry.context_window})
+
 
 # 供应商注册表：@register 自动登记，新增供应商不改工厂
 MODEL_BUILDERS: dict[ModelProvider, type[ModelBuilder]] = {}

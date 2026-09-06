@@ -1,3 +1,7 @@
+# context_window：模型上下文窗口（token 数），部署事实声明——透传为模型
+# profile 的 max_input_tokens，agent 的上下文压缩（SummarizationMiddleware，
+# 触发阈值 = fraction × 窗口）据此判定；走网关/私有部署时内置 profile 表
+# 可能与实际部署不符，chat entry 建议显式声明（值按供应商规格调整）
 default: deepseek-flash-vision
 providers:
   deepseek-flash-vision:
@@ -5,6 +9,7 @@ providers:
     task_type: chat
     api_key: ${DEEPSEEK_API_KEY}
     model: deepseek-v4-flash-vision-exp
+    context_window: 1000000
     capabilities:
       thinkable: true
       # 多模态输入模态声明：含 vision 表示可接收图片输入（chat 消息带图）
@@ -19,6 +24,7 @@ providers:
     task_type: chat
     api_key: ${DEEPSEEK_API_KEY}
     model: deepseek-v4-flash
+    context_window: 1000000
     # 能力声明（描述事实，不携带调用策略）：features = 该模型支持的
     # with_structured_output method 白名单（声明顺序即自发现优先级）。
     # DeepSeek 思考模式拒绝强制 tool_choice，function_calling/json_schema
@@ -33,6 +39,7 @@ providers:
     task_type: chat
     api_key: ${DEEPSEEK_API_KEY}
     model: deepseek-v4-pro
+    context_window: 1000000
     capabilities:
       thinkable: true
       features:
@@ -44,6 +51,7 @@ providers:
   #   api_url: ${OPENAI_API_URL}
   #   api_key: ${OPENAI_API_KEY}
   #   model: gpt-4o-mini
+  #   context_window: 128000
   #   capabilities:
   #     thinkable: true
   #     features:

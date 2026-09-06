@@ -223,3 +223,78 @@ def test_no_declaration_keeps_parent_behavior():
     assert json_mode.kwargs.get("response_format") == {"type": "json_object"}
     with pytest.raises(ValueError, match="Unrecognized method"):
         model.with_structured_output(_Payload, method="nope")  # langchain 自身校验 method 值
+
+
+# ==================== context_window（上下文窗口声明 → 模型 profile） ====================
+
+
+def test_context_window_wired_into_model_profile():
+    # 部署事实声明透传为模型 profile 的 max_input_tokens（压缩中间件的阈值来源）
+    entry = LLMProviderEntry(
+        type="deepseek", task_type=ModelTaskType.CHAT,
+        model="test-chat", api_key="test-key", context_window=131072,
+    )
+    config = LLMConfig(default="main", providers={"main": entry})
+    model = ModelFactory(app_config=_StubAppConfig(llm=config)).create()
+    assert model.profile["max_input_tokens"] == 131072
+
+
+def test_context_window_overrides_builtin_profile():
+    # deepseek 模型类自带内置 profile 表（走网关/私有部署可能失真）：
+    # 显式声明必须压过内置值
+    entry = LLMProviderEntry(
+        type="deepseek", task_type=ModelTaskType.CHAT,
+        model="deepseek-chat", api_key="test-key", context_window=4096,
+    )
+    config = LLMConfig(default="main", providers={"main": entry})
+    assert ModelFactory(app_config=_StubAppConfig(llm=config)).create().profile["max_input_tokens"] == 4096
+
+
+def test_context_window_explicit_overrides_win():
+    # 调用方 overrides 显式传 profile 优先于 entry 声明（setdefault 语义）
+    entry = LLMProviderEntry(
+        type="deepseek", task_type=ModelTaskType.CHAT,
+        model="test-chat", api_key="test-key", context_window=4096,
+    )
+    config = LLMConfig(default="main", providers={"main": entry})
+    model = ModelFactory(app_config=_StubAppConfig(llm=config)).create(profile={"max_input_tokens": 42})
+    assert model.profile["max_input_tokens"] == 42
+
+
+def test_context_window_rejected_for_non_chat_entry():
+    with pytest.raises(ValidationError, match="context_window"):
+        LLMProviderEntry(
+            type="openai", task_type=ModelTaskType.EMBEDDING,
+            model="test-embedding", api_key="test-key", context_window=1000,
+        )
+
+
+@pytest.mark.parametrize("window", [0, -1])
+def test_context_window_must_be_positive(window):
+    with pytest.raises(ValidationError):
+        LLMProviderEntry(
+            type="deepseek", task_type=ModelTaskType.CHAT,
+            model="test-chat", api_key="test-key", context_window=window,
+        )
+
+
+def test_context_window_wired_for_openai_and_ollama():
+    # openai（自带内置表，声明覆盖）/ ollama（无内置表，缺省 profile 为空，声明落位）
+    openai_entry = LLMProviderEntry(
+        type="openai", task_type=ModelTaskType.CHAT,
+        model="gpt-4o-mini", api_key="test-key", context_window=128000,
+    )
+    ollama_default = LLMProviderEntry(
+        type="ollama", task_type=ModelTaskType.CHAT, model="qwen3:8b",
+    )
+    ollama_declared = LLMProviderEntry(
+        type="ollama", task_type=ModelTaskType.CHAT,
+        model="qwen3:8b", context_window=32768,
+    )
+    config = LLMConfig(default="openai", providers={
+        "openai": openai_entry, "ollama_default": ollama_default, "ollama_declared": ollama_declared,
+    })
+    factory = ModelFactory(app_config=_StubAppConfig(llm=config))
+    assert factory.create("openai").profile["max_input_tokens"] == 128000
+    assert factory.create("ollama_default").profile is None
+    assert factory.create("ollama_declared").profile["max_input_tokens"] == 32768

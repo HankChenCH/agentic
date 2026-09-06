@@ -13,9 +13,12 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.cancel import CancelGuardMiddleware
 from app.agents.context import AgentRunContext
 from app.agents.middleware import (
+    CallbackIsolatedChatModel,
+    ContextSummarizationMiddleware,
     DynamicSystemPromptMiddleware,
     PromptContext,
     PromptFragment,
+    model_max_input_tokens,
     render_system_prompt,
 )
 from app.agents.toolbox import AgentToolbox
@@ -148,13 +151,21 @@ class BaseAgent(ABC):
     def build_middleware(self, template: PromptTemplate, static_values: dict, fragments: dict) -> list:
         """中间件装配（扩展点）。模板存在动态槽时默认挂动态 system prompt
         中间件；无动态槽（或片段全部失配模板）则不挂——每轮重渲静态串纯属
-        浪费。需要叠加其他中间件的子类覆写并以 ``super()`` 起始。
+        浪费。需要叠加其他中间件的子类覆写本方法并以 ``super()`` 起始。
+
+        模型 profile 声明了 max_input_tokens（llm entry 的 context_window 透传，
+        见 ``ModelBuilder.apply_context_window``）时挂上下文压缩中间件——
+        摘要模型经 ``CallbackIsolatedChatModel`` 包装，内部摘要调用不进投影。
+        模型无窗口声明（桩/未配置 entry）则不挂，行为与既往一致。
 
         取消守卫不在此装配：``build_graph`` 已强制前置 ``CancelGuardMiddleware``
         （列表首位 = wrap_tool_call 链最外层），覆写本方法不影响取消语义。"""
-        if not any(slot in template.input_variables for slot in fragments):
-            return []
-        return [DynamicSystemPromptMiddleware(template, static_values, fragments)]
+        middleware: list = []
+        if any(slot in template.input_variables for slot in fragments):
+            middleware.append(DynamicSystemPromptMiddleware(template, static_values, fragments))
+        if model_max_input_tokens(self.model) is not None:
+            middleware.append(ContextSummarizationMiddleware(model=CallbackIsolatedChatModel(self.model)))
+        return middleware
 
     def prompt_fragments(self) -> dict[str, PromptFragment]:
         """动态槽片段字典（扩展点）：占位符名 → 渲染函数。默认提供 memory 快注、

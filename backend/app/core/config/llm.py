@@ -72,10 +72,29 @@ class LLMProviderEntry(BaseModel):
         default=120.0,
         description="单次请求超时（秒），防止上游模型/网关无响应时调用方无限挂起",
     )
+    context_window: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "模型上下文窗口（token 数）：部署事实声明，透传为模型 profile 的 "
+            "max_input_tokens，供上下文压缩机制消费（如 agent 的 SummarizationMiddleware "
+            "按 fraction 阈值触发）；缺省不覆盖，沿用模型类内置 profile（走网关/私有部署时"
+            "内置数据可能失真，chat entry 建议显式声明）"
+        ),
+    )
     capabilities: LLMCapabilities = Field(
         default_factory=LLMCapabilities,
         description="模型/部署能力声明，由供应商模型类消费（如 ThinkingAwareChatDeepSeek）",
     )
+
+    @model_validator(mode="after")
+    def _context_window_only_for_chat(self):
+        if self.context_window is not None and self.task_type is not ModelTaskType.CHAT:
+            raise ValueError(
+                f"context_window is only meaningful for chat entries, "
+                f"but task_type is '{self.task_type.value}'"
+            )
+        return self
 
 
 class LLMConfig(BaseModel):
