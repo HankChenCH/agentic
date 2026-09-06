@@ -1,8 +1,12 @@
 import axios from "axios";
-import type { AxiosRequestConfig } from "axios";
+import type { AxiosRequestConfig, InternalAxiosRequestConfig } from "axios";
 
 import { REST_BASE } from "@/lib/config";
+import { refreshSession, startProactiveRefresh } from "@/lib/token-refresh";
 import { getToken, useAuthStore } from "@/stores/auth-store";
+
+// 临期主动刷新调度随模块加载启动（内部对非浏览器环境 no-op）
+startProactiveRefresh();
 
 /**
  * 后端 REST 响应统一信封（见 server Response.success）。
@@ -114,8 +118,27 @@ http.interceptors.response.use(
     const body =
       (decodeBinaryEnvelope(error?.response?.data) as ApiResponse | undefined) ??
       (error?.response?.data as ApiResponse | undefined);
-    // 令牌缺失/过期：除 /auth/* 外统一登出并回登录页（SSE 流式端点不走
-    // 这里的 axios 实例，其 401 在 agentic-runtime 的 fetch 覆盖里处理）
+    // 令牌过期（非 /auth/* 请求）：先用 refresh token 静默换新并重放原请求
+    // 一次（单飞去并发，__retried 防二次循环）；刷新失败才登出回登录页。
+    // /auth/* 自身的 401（用户名或密码错误）属于业务错误，交给调用方在
+    // 表单上展示。SSE 流式端点不走这里的 axios 实例，其 401 在
+    // agentic-runtime 的 fetch 覆盖里做同样的刷新重试。
+    const config = error?.config as (InternalAxiosRequestConfig & { __retried?: boolean }) | undefined;
+    if (
+      error?.response?.status === 401 &&
+      config &&
+      !config.__retried &&
+      !config.url?.startsWith("/auth/")
+    ) {
+      return refreshSession().then((refreshed) => {
+        if (!refreshed) {
+          handleUnauthorized(config.url as string | undefined);
+          return Promise.reject(error);
+        }
+        config.__retried = true;
+        return http.request(config);
+      });
+    }
     if (error?.response?.status === 401) {
       handleUnauthorized(error?.config?.url as string | undefined);
     }

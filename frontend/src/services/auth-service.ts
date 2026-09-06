@@ -4,7 +4,9 @@ import type { AuthUser } from "@/stores/auth-store";
 /**
  * 认证相关 REST 服务（后端 /auth 端点）。
  *
- * register / login 同构返回 { token, expires_at, user }（注册即登录）；
+ * register / login / refresh 同构返回 { token, expires_at, refresh_token,
+ * refresh_expires_at, user }（注册即登录；refresh 由 lib/token-refresh.ts
+ * 的裸 fetch 通道调用，不经本服务——避免 axios 拦截器自递归）；
  * me / updateProfile 读写当前用户资料；changePassword 验原密码后改密
  * （成功不换发 token，当前会话保持有效）。401 业务语义（凭证错误 /
  * 原密码错误）走信封 error_code=5002，经 BizError 抛给调用方展示。
@@ -12,6 +14,8 @@ import type { AuthUser } from "@/stores/auth-store";
 export interface AuthSession {
   token: string;
   expires_at: string;
+  refresh_token: string;
+  refresh_expires_at: string;
   user: AuthUser;
 }
 

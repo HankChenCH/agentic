@@ -81,7 +81,7 @@ export const LoginPage = () => {
         mode === "login"
           ? await authService.login(username, password)
           : await authService.register(username, password);
-      setSession(session.token, session.user);
+      setSession(session);
       toast.success(mode === "login" ? "登录成功" : "注册成功");
       // next 由 401 跳转 / RequireAuth 带上，回跳来源页
       const next = searchParams.get("next");
