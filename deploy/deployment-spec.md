@@ -89,7 +89,7 @@
 | --- | --- | --- |
 | **必填** | `DEEPSEEK_API_KEY` | llm.yaml 无默认值；compose 用 `:?` 在解析期拦截（早于容器启动） |
 | **必填** | `AUTH_JWT_SECRET` | JWT 签名密钥（HS256，≥32 字节强随机串）；compose 用 `:?` 在解析期拦截，且应用在 `APP_ENV=prod` 装配期二次校验——检出 dev 兜底密钥或长度不足 32 字节即拒绝启动（http/worker/migrate 全入口生效）；`python3 -c "import secrets; print(secrets.token_urlsafe(48))"` 生成 |
-| 可选 | `MINERU_API_KEY`（知识库 PDF 解析；xlsx/docx 为本地库解析不需要密钥）、`APP_ENV`（缺省 `prod`）、`WEB_PORT`/`SERVER_PORT`、`RUSTFS_PUBLIC_ENDPOINT`、`OLLAMA_API_URL`、中间件凭据组（`POSTGRES_*`/`RUSTFS_*`） | 缺省值与注释见 compose 与 `.env.example` |
+| 可选 | `MINERU_API_KEY`（知识库 PDF 解析必需；xlsx/docx 默认本地解析为主、失败兜底走 MinerU 时也需要）、`APP_ENV`（缺省 `prod`）、`WEB_PORT`/`SERVER_PORT`、`RUSTFS_PUBLIC_ENDPOINT`、`OLLAMA_API_URL`、中间件凭据组（`POSTGRES_*`/`RUSTFS_*`） | 缺省值与注释见 compose 与 `.env.example` |
 
 规则：
 

@@ -262,8 +262,8 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   去掉（本项目已改为 `theme="system"`）。
 - 知识库/文档状态机：`pending/processing/deleting` 是过渡态，hooks 会在存在
   过渡态时每 3s 静默轮询；`failed` 的 `error_message` 通过状态徽章 tooltip
-  展示。文档上传支持 **PDF / xlsx / docx**（后端按后缀白名单强校验并路由解析器；
-  dropzone `accept` 与白名单同步——`upload-document-dialog.tsx`）。
+  展示。文档上传支持 **PDF / xlsx / docx / Markdown**（后端按后缀白名单强校验并
+  路由解析器回退链；dropzone `accept` 与白名单同步——`upload-document-dialog.tsx`）。
 - **聊天图片附件（多模态输入）**：上传语义收口在附件适配器的 `send()` 阶段
   （`agentic-runtime.tsx` 的 `ServerImageAttachmentAdapter`）——assistant-ui 在
   用户点发送时逐附件调 `send()`，此处 `attachmentService.upload` 成功才返回

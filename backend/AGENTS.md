@@ -643,14 +643,18 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   端点与中间件在 `api/metrics.py`，worker 侧装配在
   `cmd/task_executor/metrics.py`), `document_parser` (`DocumentParserConfig`:
   default + providers dict with `type`-discriminated entries + `routing`
-  后缀路由表（文件类型 → provider entry key，key 归一小写带点、value 必须
-  在 providers 里——装配期 fail-fast；解析默认实例按文件后缀路由，未命中
-  回退 default）。entries：`mineru_cloud`
+  后缀路由表（文件类型 → entry key **或有序回退链**，key 归一小写带点、
+  链内每个 key 必须在 providers 里——装配期 fail-fast；解析默认实例按文件
+  后缀取链依次尝试，前序 `DocumentParseError`/产出为空时升级下一个，如
+  本地失败兜底 MinerU；`InfrastructureError` 等瞬态故障不降级如实上抛交
+  Celery autoretry，未命中链回退 default）。entries：`mineru_cloud`
   （MinerU 云端 PDF 解析，`MINERU_API_KEY` 必填——留空时首次解析 fail-fast；
-  `poll_interval`/`poll_timeout` 轮询参数）、`local_xlsx` / `local_docx`
+  `poll_interval`/`poll_timeout` 轮询参数）、`local_xlsx` / `local_docx` /
+  `local_markdown`
   （进程内轻量库解析，无外部服务：LangChain loader 范式组装——openpyxl /
-  python-docx 读原语产元素级 Document 再映射 `Parsed*`；xlsx 超大表按
-  `rows_per_block` 行窗口切块、`max_rows_per_sheet`/`max_cols` 截断守卫）；
+  python-docx / 行级 markdown 扫描读原语产元素级 Document 再映射 `Parsed*`；
+  xlsx 超大表按 `rows_per_block` 行窗口切块、`max_rows_per_sheet`/`max_cols`
+  截断守卫；markdown 块级粒度标题/列表/代码/管道表，`md_content` 透传原文）；
   实现见 `app/adapters/document_parser/`。上传白名单
   `ALLOWED_UPLOAD_SUFFIXES`（domain/knowledge/support.py）与 routing 段
   对应，新增可解析格式 = 加 provider entry + 一行路由 + 放开白名单.
@@ -764,10 +768,10 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   inject the factory only when a specific entry is needed. Adding a
   provider = one `FilesystemBuilder` subclass + `@register` (side-effect
   import in `filesystem_factory.py`). Lazy like vector.
-  `document_parser/` — mineru_cloud（云端 PDF）+ local_office（xlsx/docx
-  本地解析，LangChain loader 组装）实现（契约/模型在 `domain/ports/parsing.py`，
+  `document_parser/` — mineru_cloud（云端 PDF/office）+ local_office（xlsx/docx）
+  + local_markdown（行级解析）实现（契约/模型在 `domain/ports/parsing.py`，
   永久性解析失败契约 `DocumentParseError` 同住）；`DocumentParserFactory` +
-  `FileTypeRoutingParser`（按文件后缀路由，默认实例注入点
+  `FileTypeRoutingParser`（按文件后缀取解析器链回退，默认实例注入点
   `create_default_document_parser`）。
   `tasking/` — celery_app 实例 + 队列 conf（见 Layout 注）。
 
