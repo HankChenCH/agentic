@@ -115,8 +115,10 @@ backend/                         # this directory is its own git repo (the works
 ├── application/             # 用例层（原 orchestration 上提）：入口侧唯一消费面。行程面——
 │                            #   agentic_service.py（AgenticService：run SSE 行程 + cancel_run +
 │                            #   begin_shutdown 优雅关闭）+ turn_finalizer.py（轮次收尾：标题/记忆/
-│                            #   用户节点，后台线程执行）+ translator/（AgUiTranslator LangChain→
-│                            #   ag-ui 唯一映射点 + StorageTranslator 落库翻译）+ agent_catalog.py
+│                            #   用户节点，后台线程执行）+ translator/（matrix.py 消息转换边
+│                            #   总览——四条边统一表达：模块级转换函数 + 流式薄驱动器；
+│                            #   AgUiTranslator LangChain→ag-ui 唯一映射点 + StorageTranslator
+│                            #   落库翻译，纯内核均可脱离类直测）+ agent_catalog.py
 │                            #   （智能体目录）+ tool_catalog.py（工具能力目录——api 禁触
 │                            #   components，由本层中转 describe_capabilities()）；管理面
 │                            #   一域一门面 *AppService：auth（含 verify_access_token 验签通道）、
@@ -439,8 +441,14 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
 - **application（用例层）** → 入口侧（api/tasks/commands）的唯一消费面：行程面
   `AgenticService`（run SSE 行程 + 显式取消 + 优雅关闭注册）、`TurnFinalizer`
   （轮次收尾：标题/记忆/用户节点，流闭后 daemon 线程执行）、`translator/`
-  （`AgUiTranslator` 把 LangChain 流块翻成 ag-ui 事件——**ag-ui 映射的唯一
-  归属地**；`StorageTranslator` 落库翻译）、`AgentCatalogService`/
+  （`matrix.py` = 消息转换边总览：ag2ui/ag2store/store2ui/store2ag/ui2store
+  五条边的实现位置、形态与受众差异，含 ag2ui/ag2store 共享的 A2UI 载荷识别
+  规则；`AgUiTranslator` 把 LangChain 流块翻成 ag-ui 事件——**ag-ui 映射的唯一
+  归属地**；`StorageTranslator` 落库翻译。两条流式边统一为「模块级纯转换内核
+  （`message_frame_events`/`tool_frame_events`/`fold_messages_frame`/
+  `fold_tools_frame`，可脱离类直测）+ 薄驱动器（每 run 一实例，状态显式为
+  `StorageState`，无隐藏状态）」；批量边 store2ui/store2ag 是领域服务里的
+  纯函数，形态差异来自数据到达方式——帧流 vs 完整批次——不强行拉齐）、`AgentCatalogService`/
   `ToolCatalogService`（目录中转——api 禁入 components）；管理面一域一门面
   `*AppService`（auth/conversation+附件/knowledge+派发/memory+维护/usage/
   human_agent/ingestion）——领域服务不直接进端点/任务体/命令体，事故级编排

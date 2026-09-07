@@ -249,6 +249,19 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   断链取消路径）。缺一不可：只留 abort 则断链事件可能被传输层吞掉；只留
   REST 则前端没有即时取消态。react-ag-ui 0.0.44 自身的 cancel 只 abort
   运行时内部 controller，signal 传不到 `HttpAgent` 的 fetch。
+  **切换/删除会话时若在流式，同样先取消**（`use-conversation-list.ts` 的
+  `cancelActiveRun` → `runtime.threads.main.cancelRun()`，与「停止生成」
+  同链路，REST 标志按切换前的旧 threadId 发出）：全局只有一份共享消息仓库，
+  旧 run 的事件继续到达会串台进目标会话视图、isRunning 卡死；裸
+  `agent.abortRun()` 绕过 core 的 abortController 会被归类为 RUN_ERROR，
+  不可用。删除当前会话经 `runtime.threads.switchToNewThread()` 清空会话
+  视图（该路径才会 `applyExternalMessages([])` + `resetState()` 清仓库，
+  只换 threadId 不清仓库，聊天面板仍显示被删会话内容）；runtime 经
+  `runtimeRef` 桥注入 hook（hook 先于 runtime 创建）。
+- **新会话进侧栏的时机 = RUN_STARTED 即刷列表**（`use-conversation-list.ts`
+  的 `onRunStartedEvent`：threadId 不在列表中才刷）：RUN_STARTED 到达时后端
+  open_turn 已提交、会话行必已存在；标题轮询（RunFinished 后）只负责标题
+  回填，不是插入触发器——run 失败/标题慢时列表也能正确显示新会话。
 - 后端地址统一在 `src/lib/config.ts`（`REST_BASE`/`SSE_URL`，来自
   `import.meta.env.VITE_API_BASE`/`VITE_SSE_URL`，兜底 `http://127.0.0.1:8000`
   —— API 根）。REST 端点按领域挂顶级前缀：会话 `/agentic/conversation...`、
