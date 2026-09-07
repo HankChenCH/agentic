@@ -26,6 +26,8 @@ class DocumentParserProvider(str, Enum):
     """文档解析供应商标识，与 ``DocumentParserProviderEntry.type`` 对应。"""
 
     MINERU_CLOUD = "mineru_cloud"
+    LOCAL_XLSX = "local_xlsx"
+    LOCAL_DOCX = "local_docx"
 
 
 class DocumentParserBuilder(ABC):

@@ -12,6 +12,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from app.core.exceptions import BusinessError
+
 
 class ParsedBlockType(str, Enum):
     """归一化后的内容块类型（对齐 MinerU content_list 的常用类型）。"""
@@ -54,6 +56,16 @@ class ParsedDocument(BaseModel):
     blocks: list[ParsedBlock] = Field(description="按阅读顺序平铺的内容块")
     assets: dict[str, bytes] = Field(default={}, description="图片资产（名 → 字节），含表格截图/插图")
     md_content: str | None = Field(default=None, description="全文 Markdown（供应商提供时用于预览）")
+
+
+class DocumentParseError(BusinessError):
+    """文档解析的永久性失败：文件损坏、字节与后缀不符、非目标格式等。
+
+    归入业务错误（而非 InfrastructureError）是刻意的：换一份文件重试也一样
+    失败，Celery 的 autoretry 不该烧在确定性失败上（dont_autoretry_for=
+    (BusinessError,)），文档落 failed + error_message 供人工修复后重试。
+    机制性故障（网络/对象存储/云端 API）仍由供应商实现抛 InfrastructureError。
+    """
 
 
 class DocumentParser(ABC):

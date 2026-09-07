@@ -7,7 +7,13 @@ components 只依赖本包，不感知实现差异。聚合私有端口（仓储
 """
 
 from .filesystem import Filesystem
-from .parsing import DocumentParser, ParsedBlock, ParsedBlockType, ParsedDocument
+from .parsing import (
+    DocumentParseError,
+    DocumentParser,
+    ParsedBlock,
+    ParsedBlockType,
+    ParsedDocument,
+)
 
 class RepositoryConflictError(Exception):
     """仓储契约级冲突信号：唯一约束等并发窗口的驱动无关翻译。
@@ -21,6 +27,7 @@ class RepositoryConflictError(Exception):
 __all__ = [
     "Filesystem",
     "RepositoryConflictError",
+    "DocumentParseError",
     "DocumentParser",
     "ParsedBlock",
     "ParsedBlockType",

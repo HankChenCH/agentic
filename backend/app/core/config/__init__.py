@@ -6,7 +6,13 @@ from wireup import injectable
 from .llm import LLMConfig, LLMProviderEntry, ModelTaskType
 from .auth import AuthConfig, assert_jwt_secret_ok_for
 from .db import DBConfig, DBProviderEntry, PostgresDBProviderEntry, SQLiteDBProviderEntry
-from .document_parser import DocumentParserConfig, DocumentParserProviderEntry, MineruCloudEntry
+from .document_parser import (
+    DocumentParserConfig,
+    DocumentParserProviderEntry,
+    LocalDocxEntry,
+    LocalXlsxEntry,
+    MineruCloudEntry,
+)
 from .vector_db import VectorDBConfig, VectorDBProviderEntry, WeaviateDBProviderEntry
 from .filesystem import (
     FilesystemConfig,
@@ -39,6 +45,8 @@ __all__ = [
     "WeaviateDBProviderEntry",
     "DocumentParserConfig",
     "DocumentParserProviderEntry",
+    "LocalDocxEntry",
+    "LocalXlsxEntry",
     "MineruCloudEntry",
     "FilesystemConfig",
     "FilesystemProviderEntry",

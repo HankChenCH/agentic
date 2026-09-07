@@ -10,6 +10,7 @@ Depends(require_user) 取 UserPrincipal（依赖结果每请求缓存，验签�
 一次），服务层按属主做可见性（读：属主或公开库）与归属（写：仅属主）校验。
 """
 
+import posixpath
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
@@ -33,6 +34,13 @@ from app.models.schema.response.biz_response import Response
 # 顶级领域前缀（API 根为 /，各领域独立挂载）：知识库挂 /knowledge。
 # 前端 REST_BASE 指向根（http://host/），service 侧相对路径 /knowledge... 直接命中。
 router = APIRouter(prefix="/knowledge", tags=["Knowledge"])
+
+# 原始文件下载的 mime 兜底：mime_type 缺失（历史行/客户端未报）时按后缀补
+_DOWNLOAD_MIME_BY_SUFFIX = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 
 @router.post("")
@@ -119,7 +127,7 @@ def create_knowledge_document(
     app_service: Injected[KnowledgeAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     kb_id: UUID,
-    file: UploadFile = File(..., description="文档文件（当前仅支持 PDF）"),
+    file: UploadFile = File(..., description="文档文件（支持 PDF / xlsx / docx）"),
     name: str | None = Form(default=None, min_length=1, max_length=250, description="文档名称，缺省用上传文件名"),
     description: str = Form(default="", max_length=500, description="文档描述"),
 ):
@@ -182,13 +190,16 @@ def get_knowledge_document_file(
     kb_id: UUID,
     doc_id: UUID,
 ):
-    """原始文件字节流（inline，前端 PDF 预览用）——二进制响应不走信封。"""
+    """原始文件字节流（inline，前端预览用）——二进制响应不走信封。"""
     doc, data = app_service.read_document_file(kb_id, principal.user_id, doc_id)
-    # RFC 5987：中文名走 filename*=UTF-8''，兜底补 .pdf 后缀
-    filename = quote(doc.name if doc.name.lower().endswith(".pdf") else f"{doc.name}.pdf")
+    # RFC 5987：中文名走 filename*=UTF-8''
+    filename = quote(doc.name)
+    # mime 兜底按后缀映射（历史行可能缺失 mime_type），未知后缀落 octet-stream
+    suffix = posixpath.splitext(doc.name.lower())[1]
+    media_type = doc.mime_type or _DOWNLOAD_MIME_BY_SUFFIX.get(suffix, "application/octet-stream")
     return RawResponse(
         content=data,
-        media_type=doc.mime_type or "application/pdf",
+        media_type=media_type,
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"},
     )
 

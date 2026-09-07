@@ -218,3 +218,25 @@ def test_counting_reader_accepted_by_obstore_put(label, payload):
     assert bytes(store.get(f"{label}.pdf").bytes()) == payload
     assert reader.size == len(payload)
     assert reader.hexdigest() == hashlib.sha256(payload).hexdigest()
+
+
+# ---------- 上传白名单 ----------
+
+
+@pytest.mark.parametrize("filename", ["报表.xlsx", "方案.DOCX", "doc.pdf"])
+def test_create_document_accepts_allowlisted_suffixes(engine, service, filesystem, filename):
+    """白名单内后缀（大小写不敏感）受理；解析路由由摄取期完成。"""
+    kb_id = make_kb(engine)
+    doc = service.create_document(
+        kb_id, TEST_USER_ID, filename=filename, content_type="application/octet-stream", stream=io.BytesIO(PDF_BYTES)
+    )
+    assert filesystem.objects[doc.doc_path] == PDF_BYTES
+
+
+def test_create_document_rejects_unrouted_suffix(engine, service, filesystem):
+    kb_id = make_kb(engine)
+    with pytest.raises(KnowledgeDocumentInvalidError, match="unsupported file type"):
+        service.create_document(
+            kb_id, TEST_USER_ID, filename="malware.exe", content_type=None, stream=io.BytesIO(PDF_BYTES)
+        )
+    assert not filesystem.objects

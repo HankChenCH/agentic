@@ -42,21 +42,67 @@ class MineruCloudEntry(BaseModel):
     )
 
 
+# 本地 Office 文档解析 entry：跑在进程内的轻量库解析（openpyxl / python-docx，
+# 经 LangChain loader 范式组装），无需外部服务与密钥；路由表（routing）把
+# 文件后缀指到具体 entry。
+class LocalXlsxEntry(BaseModel):
+    """xlsx 本地解析 entry：每个工作表一个标题块 + 表格按行窗口切块。
+
+    表格行数超 ``rows_per_block`` 时按行窗口切成多个 TABLE 块（表头每块
+    重复），保证单块体量可嵌入；超 ``max_rows_per_sheet`` / ``max_cols``
+    截断并注记。合并单元格按锚点值渲染（read_only 流式读取不带合并信息）。
+    """
+
+    type: Literal["local_xlsx"] = Field(default="local_xlsx", description="文档解析供应商类型标识")
+    rows_per_block: int = Field(default=20, ge=1, description="单个 TABLE 块携带的数据行窗口大小（不含表头）")
+    max_rows_per_sheet: int = Field(default=1000, ge=1, description="单表最大读取数据行数，超出截断")
+    max_cols: int = Field(default=64, ge=1, description="单表最大读取列数，超出截断")
+
+
+class LocalDocxEntry(BaseModel):
+    """docx 本地解析 entry：按阅读序产出标题/正文/列表/表格块。"""
+
+    type: Literal["local_docx"] = Field(default="local_docx", description="文档解析供应商类型标识")
+
+
 # 按 type 判别的 Union；未来新增供应商（如自部署 mineru-api）在此扩展
 DocumentParserProviderEntry = Annotated[
-    Union[MineruCloudEntry],
+    Union[MineruCloudEntry, LocalXlsxEntry, LocalDocxEntry],
     Field(discriminator="type"),
 ]
 
 
 class DocumentParserConfig(BaseModel):
-    """文档解析配置：default 引用 providers 里的一个 entry key。"""
+    """文档解析配置：default 引用 providers 里的一个 entry key。
+
+    ``routing`` 是文件后缀 → entry key 的路由表（以文件类型为 key 选择解析
+    器的机制面）：命中即按对应 entry 构建解析器；未命中回退 default entry。
+    key 归一为小写带点后缀（``PDF``/``pdf`` 均入 ``.pdf``），value 必须引用
+    providers 里存在的 entry——装配期 fail-fast。
+    """
 
     default: str = Field(default="mineru-cloud", description="默认 entry key")
     providers: dict[str, DocumentParserProviderEntry] = Field(description="具名文档解析实例表")
+    routing: dict[str, str] = Field(
+        default_factory=dict,
+        description="文件后缀 → provider entry key 路由表（如 .pdf → mineru-cloud）",
+    )
 
     @model_validator(mode="after")
-    def _default_must_exist(self):
+    def _validate(self):
         if self.default not in self.providers:
             raise ValueError(f"default provider '{self.default}' not in providers: {list(self.providers)}")
+        normalized: dict[str, str] = {}
+        for raw_suffix, key in self.routing.items():
+            suffix = raw_suffix.strip().lower()
+            if not suffix.startswith("."):
+                suffix = f".{suffix}"
+            if not self.providers.get(key):
+                raise ValueError(
+                    f"routing '{raw_suffix}' references unknown provider '{key}': {list(self.providers)}"
+                )
+            if suffix in normalized:
+                raise ValueError(f"duplicate routing entry for suffix '{suffix}'")
+            normalized[suffix] = key
+        self.routing = normalized
         return self

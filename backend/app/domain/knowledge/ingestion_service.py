@@ -135,7 +135,8 @@ class DocumentIngestionService:
 
     def _ingest(self, doc: KnowledgeDocument) -> None:
         data = self.object_store.read(doc.doc_path)
-        # 解析侧按文件名识别格式：doc_path 尾段即上传时的安全文件名（必带 .pdf 后缀）
+        # 解析侧按文件名后缀路由格式：doc_path 尾段即上传时的安全文件名（必带白名单后缀），
+        # 路由细节收在 DocumentParser 默认实例（FileTypeRoutingParser）内
         parsed = self.document_parser.parse(data, posixpath.basename(doc.doc_path))
         self._store_assets(doc, parsed)
         drafts = chunk_document(parsed)

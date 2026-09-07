@@ -123,7 +123,7 @@ class KnowledgeDocumentService:
         require_owned_kb(self.kb_repo, kb_id, user_id)
         doc_id = uuid4()
         safe_name = sanitize_filename(filename, doc_id)
-        # 解析流水线仅支持 PDF：文件名后缀强校验（解析侧也依赖后缀识别格式）
+        # 上传格式白名单（与解析路由表对应）：文件名后缀强校验（解析侧也按后缀路由格式）
         if posixpath.splitext(safe_name)[1].lower() not in ALLOWED_UPLOAD_SUFFIXES:
             raise KnowledgeDocumentInvalidError(
                 f"unsupported file type: '{safe_name}', allowed suffixes: {sorted(ALLOWED_UPLOAD_SUFFIXES)}"

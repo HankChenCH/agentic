@@ -9,8 +9,11 @@ from app.adapters.document_parser.document_parser_provider import (
     DocumentParserBuilder,
     DocumentParserProvider,
 )
+from app.adapters.document_parser.routing_parser import FileTypeRoutingParser
+from app.core.logging import LoggerFactory
 
 import app.adapters.document_parser.mineru_cloud_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.document_parser.local_office_provider  # noqa: F401  触发 @register 供应商注册
 
 
 @injectable
@@ -57,11 +60,16 @@ class DocumentParserFactory:
 
 
 @injectable(lifetime="singleton")
-def create_default_document_parser(factory: DocumentParserFactory) -> DocumentParser:
+def create_default_document_parser(
+    factory: DocumentParserFactory, logger_factory: LoggerFactory
+) -> DocumentParser:
     """默认文档解析实例（``DocumentParserConfig.default``）的注入入口。
 
-    仿 ``filesystem_factory.create_default_filesystem`` 的惯例：消费方直接
-    注入 ``DocumentParser`` 契约使用，无需感知工厂；需要指定其他 entry 时
-    注入 ``DocumentParserFactory`` 自行 ``create(name=...)``。
+    返回按文件类型路由的解析器：``routing`` 段把文件后缀映射到 provider
+    entry（如 ``.pdf → mineru-cloud``），未命中回退 default entry——消费方
+    （知识库入库流水线）仍只注入 ``DocumentParser`` 契约，不感知路由与
+    云端 / 本地的差异。需要指定其他 entry 时注入 ``DocumentParserFactory``
+    自行 ``create(name=...)``。
     """
-    return factory.create()
+    routing = factory.app_config.document_parser.routing
+    return FileTypeRoutingParser(factory=factory, routing=dict(routing), logger_factory=logger_factory)
