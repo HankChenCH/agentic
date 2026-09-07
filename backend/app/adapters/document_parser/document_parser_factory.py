@@ -14,6 +14,7 @@ from app.core.logging import LoggerFactory
 
 import app.adapters.document_parser.mineru_cloud_provider  # noqa: F401  触发 @register 供应商注册
 import app.adapters.document_parser.local_office_provider  # noqa: F401  触发 @register 供应商注册
+import app.adapters.document_parser.local_markdown_provider  # noqa: F401  触发 @register 供应商注册
 
 
 @injectable

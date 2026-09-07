@@ -28,6 +28,7 @@ class DocumentParserProvider(str, Enum):
     MINERU_CLOUD = "mineru_cloud"
     LOCAL_XLSX = "local_xlsx"
     LOCAL_DOCX = "local_docx"
+    LOCAL_MARKDOWN = "local_markdown"
 
 
 class DocumentParserBuilder(ABC):

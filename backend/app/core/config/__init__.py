@@ -10,6 +10,7 @@ from .document_parser import (
     DocumentParserConfig,
     DocumentParserProviderEntry,
     LocalDocxEntry,
+    LocalMarkdownEntry,
     LocalXlsxEntry,
     MineruCloudEntry,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "DocumentParserConfig",
     "DocumentParserProviderEntry",
     "LocalDocxEntry",
+    "LocalMarkdownEntry",
     "LocalXlsxEntry",
     "MineruCloudEntry",
     "FilesystemConfig",

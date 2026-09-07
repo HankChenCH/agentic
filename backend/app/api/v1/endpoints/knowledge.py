@@ -40,6 +40,7 @@ _DOWNLOAD_MIME_BY_SUFFIX = {
     ".pdf": "application/pdf",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".md": "text/markdown",
 }
 
 
@@ -127,7 +128,7 @@ def create_knowledge_document(
     app_service: Injected[KnowledgeAppService],
     principal: Annotated[UserPrincipal, Depends(require_user)],
     kb_id: UUID,
-    file: UploadFile = File(..., description="文档文件（支持 PDF / xlsx / docx）"),
+    file: UploadFile = File(..., description="文档文件（支持 PDF / xlsx / docx / md）"),
     name: str | None = Form(default=None, min_length=1, max_length=250, description="文档名称，缺省用上传文件名"),
     description: str = Form(default="", max_length=500, description="文档描述"),
 ):

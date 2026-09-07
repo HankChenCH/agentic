@@ -23,8 +23,9 @@ from app.domain.knowledge.ports import KnowledgeDocumentRepositoryPort
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 # 上传格式白名单：与 document_parser.yaml 的 routing 段对应（.pdf→MinerU 云端、
-# .xlsx/.docx→本地解析）；新增可解析格式 = 加 provider entry + 一行路由 + 放开此处
-ALLOWED_UPLOAD_SUFFIXES = frozenset({".pdf", ".xlsx", ".docx"})
+# .xlsx/.docx→本地解析+MinerU 兜底、.md→纯本地解析）；新增可解析格式 =
+# 加 provider entry + 一行路由 + 放开此处
+ALLOWED_UPLOAD_SUFFIXES = frozenset({".pdf", ".xlsx", ".docx", ".md"})
 
 # 落库的失败原因截断长度
 ERROR_MESSAGE_MAX = 2000

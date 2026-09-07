@@ -65,9 +65,15 @@ class LocalDocxEntry(BaseModel):
     type: Literal["local_docx"] = Field(default="local_docx", description="文档解析供应商类型标识")
 
 
+class LocalMarkdownEntry(BaseModel):
+    """markdown 本地解析 entry：行级块解析（标题/列表/代码/管道表），零参数。"""
+
+    type: Literal["local_markdown"] = Field(default="local_markdown", description="文档解析供应商类型标识")
+
+
 # 按 type 判别的 Union；未来新增供应商（如自部署 mineru-api）在此扩展
 DocumentParserProviderEntry = Annotated[
-    Union[MineruCloudEntry, LocalXlsxEntry, LocalDocxEntry],
+    Union[MineruCloudEntry, LocalXlsxEntry, LocalDocxEntry, LocalMarkdownEntry],
     Field(discriminator="type"),
 ]
 
@@ -75,34 +81,41 @@ DocumentParserProviderEntry = Annotated[
 class DocumentParserConfig(BaseModel):
     """文档解析配置：default 引用 providers 里的一个 entry key。
 
-    ``routing`` 是文件后缀 → entry key 的路由表（以文件类型为 key 选择解析
-    器的机制面）：命中即按对应 entry 构建解析器；未命中回退 default entry。
-    key 归一为小写带点后缀（``PDF``/``pdf`` 均入 ``.pdf``），value 必须引用
-    providers 里存在的 entry——装配期 fail-fast。
+    ``routing`` 是文件后缀 → 解析器链的路由表（以文件类型为 key 选择解析
+    器的机制面）：值为 entry key 或有序 entry key 列表（回退链——前序解析
+    器永久性失败/产出为空时依次升级，见 FileTypeRoutingParser）；未命中
+    回退 default entry。key 归一为小写带点后缀（``PDF``/``pdf`` 均入
+    ``.pdf``），链内每个 key 必须引用 providers 里存在的 entry——装配期
+    fail-fast。
     """
 
     default: str = Field(default="mineru-cloud", description="默认 entry key")
     providers: dict[str, DocumentParserProviderEntry] = Field(description="具名文档解析实例表")
-    routing: dict[str, str] = Field(
+    routing: dict[str, str | list[str]] = Field(
         default_factory=dict,
-        description="文件后缀 → provider entry key 路由表（如 .pdf → mineru-cloud）",
+        description="文件后缀 → entry key（或有序回退链）路由表，如 .xlsx: [local-xlsx, mineru-cloud]",
     )
 
     @model_validator(mode="after")
     def _validate(self):
         if self.default not in self.providers:
             raise ValueError(f"default provider '{self.default}' not in providers: {list(self.providers)}")
-        normalized: dict[str, str] = {}
-        for raw_suffix, key in self.routing.items():
+        normalized: dict[str, list[str]] = {}
+        for raw_suffix, raw_chain in self.routing.items():
             suffix = raw_suffix.strip().lower()
             if not suffix.startswith("."):
                 suffix = f".{suffix}"
-            if not self.providers.get(key):
-                raise ValueError(
-                    f"routing '{raw_suffix}' references unknown provider '{key}': {list(self.providers)}"
-                )
+            # str 视为单元素链；归一后统一为 list，消费方无需再分支
+            chain = [raw_chain] if isinstance(raw_chain, str) else list(raw_chain)
+            if not chain:
+                raise ValueError(f"routing '{raw_suffix}' has an empty parser chain")
+            for key in chain:
+                if not self.providers.get(key):
+                    raise ValueError(
+                        f"routing '{raw_suffix}' references unknown provider '{key}': {list(self.providers)}"
+                    )
             if suffix in normalized:
                 raise ValueError(f"duplicate routing entry for suffix '{suffix}'")
-            normalized[suffix] = key
+            normalized[suffix] = chain
         self.routing = normalized
         return self

@@ -39,11 +39,14 @@ from app.adapters.document_parser.document_parser_provider import (
 from app.core.config import LocalDocxEntry, LocalXlsxEntry
 from app.domain.ports import DocumentParseError, ParsedBlock, ParsedBlockType, ParsedDocument
 
-# docx 元素 category（loader 产出、元素映射消费的中间契约）
-_TITLE = "Title"
-_LIST_ITEM = "ListItem"
-_TABLE = "Table"
-_NARRATIVE = "NarrativeText"
+# docx/xlsx/markdown 本地解析器共用的元素 category 契约（loader 产出、
+# blocks_from_elements 消费的中间表示）
+CATEGORY_TITLE = "Title"
+CATEGORY_LIST_ITEM = "ListItem"
+CATEGORY_TABLE = "Table"
+CATEGORY_NARRATIVE = "NarrativeText"
+CATEGORY_CODE = "Code"
+CATEGORY_IMAGE = "Image"
 
 # 内建标题样式的稳定标识（display name 随文档语言变化，style_id 不变）
 _HEADING_STYLE_RE = re.compile(r"^Heading(\d+)$", re.IGNORECASE)
@@ -94,7 +97,7 @@ class _XlsxElementLoader(BaseLoader):
 
         sheet_title = Document(
             page_content=sheet_name,
-            metadata={"category": _TITLE, "depth": 1, "page_idx": sheet_index},
+            metadata={"category": CATEGORY_TITLE, "depth": 1, "page_idx": sheet_index},
         )
         header = rows[0]
         body_rows = rows[1 : self._max_rows + 1]
@@ -118,8 +121,8 @@ class _XlsxElementLoader(BaseLoader):
                 Document(
                     page_content="",
                     metadata={
-                        "category": _TABLE,
-                        "html": _xlsx_table_html(header, window, width),
+                        "category": CATEGORY_TABLE,
+                        "html": html_table_from_rows(header, window, width),
                         "caption": caption,
                         "page_idx": sheet_index,
                     },
@@ -141,7 +144,9 @@ def _cell_text(value) -> str:
     return str(value)
 
 
-def _xlsx_table_html(header: list, body_rows: list[list], width: int) -> str:
+def html_table_from_rows(header: list, body_rows: list[list], width: int) -> str:
+    """行矩阵 → 完整 HTML 表格（xlsx sheet 窗口与 markdown 管道表共用）。"""
+
     def row_html(cells: list, tag: str) -> str:
         padded = list(cells[:width]) + [""] * (width - len(cells))
         inner = "".join(f"<{tag}>{html.escape(_cell_text(cell))}</{tag}>" for cell in padded)
@@ -172,7 +177,7 @@ class _DocxElementLoader(BaseLoader):
             elif child.tag == qn("w:tbl"):
                 table_html = _docx_table_html(DocxTable(child, document))
                 if table_html:
-                    yield Document(page_content="", metadata={"category": _TABLE, "html": table_html, "page_idx": 0})
+                    yield Document(page_content="", metadata={"category": CATEGORY_TABLE, "html": table_html, "page_idx": 0})
             # 其余 body 子元素（sectPr/bookmark 等）不产块
 
     def _paragraph_documents(self, paragraph: Paragraph) -> list[Document]:
@@ -194,14 +199,14 @@ class _DocxElementLoader(BaseLoader):
             style_id = ""
         heading = _HEADING_STYLE_RE.match(style_id)
         if heading:
-            return _TITLE, int(heading.group(1))
+            return CATEGORY_TITLE, int(heading.group(1))
         if style_id == "Title":
-            return _TITLE, 1
+            return CATEGORY_TITLE, 1
         if style_id.startswith("List") or (
             paragraph._p.pPr is not None and paragraph._p.pPr.numPr is not None
         ):
-            return _LIST_ITEM, None
-        return _NARRATIVE, None
+            return CATEGORY_LIST_ITEM, None
+        return CATEGORY_NARRATIVE, None
 
 
 def _docx_table_html(table: DocxTable) -> str:
@@ -231,15 +236,15 @@ def _docx_table_html(table: DocxTable) -> str:
     return f"<table><tbody>{body}</tbody></table>"
 
 
-# ---------- 元素 → ParsedBlock 映射与 md 合成（两个解析器共用） ----------
+# ---------- 元素 → ParsedBlock 映射与 md 合成（office/markdown 本地解析器共用） ----------
 
 
-def _blocks_from_elements(elements: Iterable[Document]) -> list[ParsedBlock]:
+def blocks_from_elements(elements: Iterable[Document]) -> list[ParsedBlock]:
     blocks: list[ParsedBlock] = []
     for element in elements:
-        category = element.metadata.get("category", _NARRATIVE)
+        category = element.metadata.get("category", CATEGORY_NARRATIVE)
         page_idx = int(element.metadata.get("page_idx") or 0)
-        if category == _TABLE:
+        if category == CATEGORY_TABLE:
             blocks.append(
                 ParsedBlock(
                     type=ParsedBlockType.TABLE,
@@ -248,7 +253,7 @@ def _blocks_from_elements(elements: Iterable[Document]) -> list[ParsedBlock]:
                     page_idx=page_idx,
                 )
             )
-        elif category == _TITLE:
+        elif category == CATEGORY_TITLE:
             blocks.append(
                 ParsedBlock(
                     type=ParsedBlockType.TEXT,
@@ -257,8 +262,28 @@ def _blocks_from_elements(elements: Iterable[Document]) -> list[ParsedBlock]:
                     page_idx=page_idx,
                 )
             )
-        elif category == _LIST_ITEM:
+        elif category == CATEGORY_LIST_ITEM:
             blocks.append(ParsedBlock(type=ParsedBlockType.LIST, text=element.page_content, page_idx=page_idx))
+        elif category == CATEGORY_CODE:
+            blocks.append(
+                ParsedBlock(
+                    type=ParsedBlockType.CODE,
+                    text=element.page_content,
+                    captions=[element.metadata["caption"]] if element.metadata.get("caption") else [],
+                    sub_type=element.metadata.get("sub_type"),
+                    page_idx=page_idx,
+                )
+            )
+        elif category == CATEGORY_IMAGE:
+            # markdown 的独立图片行：仅 alt 文本可嵌入，无字节资产（外链不转存）
+            blocks.append(
+                ParsedBlock(
+                    type=ParsedBlockType.IMAGE,
+                    text="",
+                    captions=[element.metadata["caption"]] if element.metadata.get("caption") else [],
+                    page_idx=page_idx,
+                )
+            )
         else:
             blocks.append(ParsedBlock(type=ParsedBlockType.TEXT, text=element.page_content, page_idx=page_idx))
     return blocks
@@ -298,7 +323,7 @@ class LocalXlsxParser(DocumentParser):
             raise
         except Exception as exc:  # 迭代途中的脏值（怪异单元格类型等）同归永久性失败
             raise DocumentParseError(f"failed to parse xlsx file {filename!r}: {exc}") from exc
-        blocks = _blocks_from_elements(elements)
+        blocks = blocks_from_elements(elements)
         return ParsedDocument(blocks=blocks, md_content=_markdown(blocks))
 
 
@@ -315,7 +340,7 @@ class LocalDocxParser(DocumentParser):
             raise
         except Exception as exc:
             raise DocumentParseError(f"failed to parse docx file {filename!r}: {exc}") from exc
-        blocks = _blocks_from_elements(elements)
+        blocks = blocks_from_elements(elements)
         return ParsedDocument(blocks=blocks, md_content=_markdown(blocks))
 
 
