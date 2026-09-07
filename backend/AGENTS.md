@@ -183,7 +183,8 @@ backend/                         # this directory is its own git repo (the works
 │                            #   standalone via REDIS_URL）
 │                            #   filesystem/（local pathlib / S3 via obstore 实现 + 工厂——
 │                            #   Filesystem 契约住 domain/ports，本包只留实现）
-│                            #   document_parser/（mineru_cloud 实现 + 工厂——DocumentParser 契约
+│                            #   document_parser/（mineru_cloud + local_office
+│                            #   实现 + 按后缀路由的默认实例——DocumentParser 契约
 │                            #   与 Parsed* 模型住 domain/ports/parsing.py，本包只留实现）
 ├── agents/                  # BaseAgent + @register_agent registry, AgentFactory, builtin agents
 │                            #   (builtin/{demo,rag}/ 一 agent 一包：均与 create_agent ReAct
@@ -641,10 +642,18 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   `worker_metrics_port`（Celery worker 指标端口，`METRICS_WORKER_PORT`）——
   端点与中间件在 `api/metrics.py`，worker 侧装配在
   `cmd/task_executor/metrics.py`), `document_parser` (`DocumentParserConfig`:
-  default + providers dict with `type`-discriminated entries — `mineru_cloud`
+  default + providers dict with `type`-discriminated entries + `routing`
+  后缀路由表（文件类型 → provider entry key，key 归一小写带点、value 必须
+  在 providers 里——装配期 fail-fast；解析默认实例按文件后缀路由，未命中
+  回退 default）。entries：`mineru_cloud`
   （MinerU 云端 PDF 解析，`MINERU_API_KEY` 必填——留空时首次解析 fail-fast；
-  `poll_interval`/`poll_timeout` 轮询参数）；实现见
-  `app/adapters/document_parser/`).
+  `poll_interval`/`poll_timeout` 轮询参数）、`local_xlsx` / `local_docx`
+  （进程内轻量库解析，无外部服务：LangChain loader 范式组装——openpyxl /
+  python-docx 读原语产元素级 Document 再映射 `Parsed*`；xlsx 超大表按
+  `rows_per_block` 行窗口切块、`max_rows_per_sheet`/`max_cols` 截断守卫）；
+  实现见 `app/adapters/document_parser/`。上传白名单
+  `ALLOWED_UPLOAD_SUFFIXES`（domain/knowledge/support.py）与 routing 段
+  对应，新增可解析格式 = 加 provider entry + 一行路由 + 放开白名单.
   Connection-info modeling rule (pick ONE form per provider): write a full
   connection string (`url`/`dsn`) when the driver consumes a URL natively and
   deployment hands the connection over as one unit (`standalone` redis via
@@ -755,8 +764,11 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   inject the factory only when a specific entry is needed. Adding a
   provider = one `FilesystemBuilder` subclass + `@register` (side-effect
   import in `filesystem_factory.py`). Lazy like vector.
-  `document_parser/` — mineru_cloud 实现（契约/模型在 `domain/ports/parsing.py`）；
-  `DocumentParserFactory` + `create_default_document_parser` singleton。
+  `document_parser/` — mineru_cloud（云端 PDF）+ local_office（xlsx/docx
+  本地解析，LangChain loader 组装）实现（契约/模型在 `domain/ports/parsing.py`，
+  永久性解析失败契约 `DocumentParseError` 同住）；`DocumentParserFactory` +
+  `FileTypeRoutingParser`（按文件后缀路由，默认实例注入点
+  `create_default_document_parser`）。
   `tasking/` — celery_app 实例 + 队列 conf（见 Layout 注）。
 
 Server DI uses **wireup**. The shared registration lives in

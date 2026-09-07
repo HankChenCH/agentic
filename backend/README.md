@@ -18,7 +18,8 @@
   （汇总/按天序列/流水分页，前端管理侧「我的用量」页消费）。
 - **长期记忆**：记忆 v2 双层图谱（实体/双时间轴事实/事件），轮末巩固落库，
   聊天中快注注入 + 深召回三工具。
-- **知识库（RAG）**：PDF 上传 → MinerU 云端解析 → 分块 → bge-m3 嵌入 → Weaviate
+- **知识库（RAG）**：文档上传（PDF / xlsx / docx，按后缀路由解析器）→ MinerU 云端 /
+  本地库解析 → 分块 → bge-m3 嵌入 → Weaviate
   混合检索（双通道召回 + RRF 融合）；`knowledge_list` / `knowledge_search` 检索双工具
   与 `knowledge_context` / `document_read` / `document_list` 定位读取三工具装配给 LLM。
 - **内置智能体**：`builtin:demo` 演示助手（天气查询 + 长期记忆）、`builtin:rag`
@@ -65,7 +66,8 @@ app/
 │   │                         #   （knowledge_index/memory_index + 各自 collection schema）
 │   ├── db/  redis/           #   引擎/客户端工厂（sqlite/postgresql、standalone redis）
 │   ├── filesystem/           #   local/s3 实现（Filesystem 契约归 domain/ports）
-│   └── document_parser/      #   mineru_cloud 实现（解析契约归 domain/ports）
+│   └── document_parser/      #   mineru_cloud（云端 PDF）+ local_office（xlsx/docx）
+│                             #   实现 + 按后缀路由（解析契约归 domain/ports）
 ├── components/               # 能力组件（manifest/ability/internal/admin 范式；
 │   │                         #   不自持存储——数据访问经 domain 端口由 persistence 实现）
 │   ├── knowledge/            #   retrieval（RRF 双通道检索编排）+ navigation
