@@ -46,7 +46,7 @@ server {
     # 认证端点从严：login/register 是爆破面，burst 小且无排队
     location /api/auth/ {
         limit_req zone=api_auth burst=5 nodelay;
-        proxy_pass ${BACKEND_URL}/;
+        proxy_pass ${BACKEND_URL}/auth/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
