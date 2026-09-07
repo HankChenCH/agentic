@@ -43,6 +43,14 @@ server {
         add_header Cache-Control "no-cache";
     }
 
+    # 模块脚本 .mjs（pdf.js worker 等）：官方 mime.types 未登记该扩展名，
+    # 缺省按 application/octet-stream 下发会被浏览器的 module worker MIME
+    # 强校验拒载，故显式映射；命中本正则 location 后仍由继承的 root 静态伺服
+    location ~* \.mjs$ {
+        default_type text/javascript;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
     # 认证端点从严：login/register 是爆破面，burst 小且无排队
     location /api/auth/ {
         limit_req zone=api_auth burst=5 nodelay;
