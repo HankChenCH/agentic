@@ -55,11 +55,12 @@ export const UploadDocumentDialog: FC<UploadDocumentDialogProps> = ({
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     disabled: uploading,
-    // 与后端上传白名单（.pdf/.xlsx/.docx）同步限制选择范围
+    // 与后端上传白名单（.pdf/.xlsx/.docx/.md）同步限制选择范围
     accept: {
       "application/pdf": [".pdf"],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+      "text/markdown": [".md"],
     },
   });
 
@@ -103,7 +104,7 @@ export const UploadDocumentDialog: FC<UploadDocumentDialogProps> = ({
         <DialogHeader>
           <DialogTitle>上传文档</DialogTitle>
           <DialogDescription>
-            拖拽或点选 PDF / Word / Excel 文件，支持多选；上传后自动解析、分段并向量化。
+            拖拽或点选 PDF / Word / Excel / Markdown 文件，支持多选；上传后自动解析、分段并向量化。
           </DialogDescription>
         </DialogHeader>
 
@@ -123,7 +124,7 @@ export const UploadDocumentDialog: FC<UploadDocumentDialogProps> = ({
             <p className="text-sm text-muted-foreground">
               {isDragActive
                 ? "松开鼠标开始上传"
-                : "点击选择文件（PDF / xlsx / docx），或拖拽到此处"}
+                : "点击选择文件（PDF / xlsx / docx / md），或拖拽到此处"}
             </p>
           </div>
 
