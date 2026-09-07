@@ -19,12 +19,15 @@ import type {
  * 拆成 [THOUGHT, MESSAGE, TOOL_CALL, TOOL_RESULT, CUSTOM] 多条
  * AgenticConversationMessage；这里把它们重新组装回 assistant-ui 的 parts 模型。
  *
- * 合并粒度对齐实时路径：服务端流式侧整个 run 复用一个 run 级 messageId
- * （AgUiTranslator 的消息 id 契约；react-ag-ui ≥0.0.58 把 TEXT_MESSAGE_* 里
- * messageId 的变化当作消息边界），前端一个 run 只呈现一条 assistant 消息；
- * 而落库时每次 LLM 调用（ChatModelStream）是独立的 parent 链根 —— 所以不能按
- * parent 根分组（那会把一个多步 turn 拆成 N 条独立 assistant 消息），必须整
- * turn 合并。
+ * 合并粒度（与实时路径的已知差异）：服务端流式侧按「每次 LLM 调用一个
+ * messageId」下发（AgUiTranslator 的消息 id 契约；react-ag-ui ≥0.0.58 把
+ * TEXT_MESSAGE_* 里 messageId 的变化当作消息边界），多步 run 在实时流中会
+ * 裂成多条 assistant 消息；而落库/历史侧始终把一个 turn 合并成一条 assistant
+ * 消息——每次 LLM 调用（ChatModelStream）是独立的 parent 链根，不能按 parent
+ * 根分组（那会把一个多步 turn 拆成 N 条独立 assistant 消息），必须整 turn
+ * 合并。即刷新/切换会话后实时流的多区块会收敛回一条；曾试过流式侧复用 run 级
+ * id 对齐历史形态，但过程回复与最终回复会粘连成一条，已回退（多区块问题待
+ * react-ag-ui 升级后重评）。
  *
  * 规则：
  *   - user MESSAGE          → 1 条 user ThreadMessage（content: [text]）

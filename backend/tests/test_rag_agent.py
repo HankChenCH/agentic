@@ -244,7 +244,7 @@ def test_system_prompt_renders_tools_index_and_memory_block():
 def test_stream_emits_tool_events_and_agui_frames():
     """全链路契约：真实工具调用经 ToolsTransformer 出标准 tools 通道事件，
     AgUiTranslator 产出合法 ag-ui 帧（TOOL_CALL 三事件 + 单条文本消息流）。"""
-    from backend.app.application.translator.agui_translator import AgUiTranslator
+    from app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit()], ["知识库「X」未启用，已跳过"]))
     agent = RagAgent(model=ScriptedChatModel(answers=[
@@ -263,7 +263,7 @@ def test_stream_emits_tool_events_and_agui_frames():
     for name, item in run.interleave("messages", "tools"):
         if name == "tools":
             tool_items.append(item)
-        frames.extend(translator.translate(name, item))
+        frames.extend(translator.translate(uuid4(), name, item))
     frames.append(translator.finish())
 
     kinds = [json.loads(f.removeprefix("data: ").strip())["type"] for f in frames]
@@ -285,11 +285,15 @@ def test_stream_emits_tool_events_and_agui_frames():
     assert payload["notes"] == ["知识库「X」未启用，已跳过"]
 
 
-def test_agui_single_message_id_across_tool_rounds():
-    """消息 id 契约：ReAct 多步 run（工具前引导语 + 工具后回答 = 两次 LLM 调用）
-    的 TEXT_MESSAGE_* 事件必须共享同一 messageId——前端 react-ag-ui ≥0.0.58
-    把 messageId 变化当作消息边界，逐条换 id 会把一次 run 裂成多条消息。"""
-    from backend.app.application.translator.agui_translator import AgUiTranslator
+def test_agui_message_id_injected_per_llm_call():
+    """消息 id 契约：messageId 由调用方按条注入（此处与服务编排循环同构：每条
+    interleave 条目一个 uuid），AgUiTranslator 原样落到事件归属字段——与
+    StorageTranslator 接收同批 id，流式与落库可对账。前端 react-ag-ui ≥0.0.58
+    把 messageId 变化当作消息边界，两次 LLM 调用（工具前引导语 + 工具后回答）
+    故呈两条文本消息流：多步 run 裂成多区块是已知现状（曾试过流式侧恒用 run 级
+    id 让一次 run 只出一条消息，但过程回复与最终回复粘连，已回退，待
+    react-ag-ui 升级后重评）。"""
+    from app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit()], ["知识库「X」未启用，已跳过"]))
     agent = RagAgent(model=ScriptedChatModel(answers=[
@@ -303,16 +307,22 @@ def test_agui_single_message_id_across_tool_rounds():
 
     translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
     frames = [translator.start()]
+    msg_ids: list[UUID] = []
+    tool_ids: list[UUID] = []
     for name, item in agent.stream(_ctx("什么是RAG")).interleave("messages", "tools"):
-        frames.extend(translator.translate(name, item))
+        message_id = uuid4()
+        (msg_ids if name == "messages" else tool_ids).append(message_id)
+        frames.extend(translator.translate(message_id, name, item))
     frames.append(translator.finish())
 
     events = [json.loads(f.removeprefix("data: ").strip()) for f in frames]
+    # 每次 LLM 调用一条文本消息流，messageId（hex 串）= 该条注入 id（两条 → 前端两区块）
     text_ids = {e["messageId"] for e in events if e["type"].startswith("TEXT_MESSAGE")}
-    assert len(text_ids) == 1
-    # 工具归属（parent/messageId）与文本同一条消息
-    assert {e["parentMessageId"] for e in events if e["type"] == "TOOL_CALL_START"} == text_ids
-    assert {e["messageId"] for e in events if e["type"] == "TOOL_CALL_RESULT"} == text_ids
+    assert text_ids == {m.hex for m in msg_ids} and len(text_ids) == 2
+    # 工具归属（parent/messageId）用 tools 条目各自的注入 id
+    tool_hex = {t.hex for t in tool_ids}
+    assert {e["parentMessageId"] for e in events if e["type"] == "TOOL_CALL_START"} <= tool_hex
+    assert {e["messageId"] for e in events if e["type"] == "TOOL_CALL_RESULT"} <= tool_hex
     # 两次调用的文本都流出（前段引导语不被吞）
     text_delta = "".join(e["delta"] for e in events if e["type"] == "TEXT_MESSAGE_CONTENT")
     assert text_delta == "我来查一下资料。RAG 是检索增强生成 [1]。"
@@ -347,11 +357,11 @@ def test_system_prompt_renders_knowledge_base_fragment():
 
 def test_storage_persists_node_tool_call_from_tool_started():
     st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
-    st.translate("tools", {
+    st.translate(uuid4(), "tools", {
         "event": "tool-started", "tool_call_id": "c1",
         "tool_name": "knowledge_search", "args": {"query": "q", "top_k": 6},
-    }, uuid4())
-    st.translate("tools", {"event": "tool-result", "tool_call_id": "c1", "content": "结果"}, uuid4())
+    })
+    st.translate(uuid4(), "tools", {"event": "tool-result", "tool_call_id": "c1", "content": "结果"})
     rows = st.messages
     assert [r.message_type for r in rows] == [AgenticMessageType.TOOL_CALL, AgenticMessageType.TOOL_RESULT]
     assert rows[0].content[0]["name"] == "knowledge_search"
@@ -366,8 +376,8 @@ def test_storage_dedupes_model_issued_tool_calls():
         tool_calls=SimpleNamespace(get=lambda: [{"id": "c1", "name": "some_tool", "args": {}}]),
         output_message=None,
     )
-    st.translate("messages", stream, uuid4())
-    st.translate("tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "some_tool"}, uuid4())
+    st.translate(uuid4(), "messages", stream)
+    st.translate(uuid4(), "tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "some_tool"})
     # 模型发起的调用已由 messages 路径落库，tool-started 去重不重复落行
     assert [r.message_type for r in st.messages] == [AgenticMessageType.TOOL_CALL]
 
@@ -378,7 +388,7 @@ def test_stream_emits_a2ui_custom_event_for_weather_card():
     天气 JSON 给 LLM，artifact={"a2ui": 消息数组} 走 UI 通道），经 langgraph
     ToolMessage.artifact → ToolsTransformer 的 ui 字段 → AgUiTranslator 在
     TOOL_CALL_RESULT 之后追加 CUSTOM 事件（name="a2ui"，value=消息数组）。"""
-    from backend.app.application.translator.agui_translator import AgUiTranslator
+    from app.application.translator.agui_translator import AgUiTranslator
     from app.components.demo.ability.weather import DemoWeatherService
 
     agent = DemoAgent(model=ScriptedChatModel(answers=[
@@ -402,7 +412,7 @@ def test_stream_emits_a2ui_custom_event_for_weather_card():
     for name, item in agent.stream(_ctx("中山明天天气怎么样")).interleave("messages", "tools"):
         if name == "tools":
             tool_items.append(item)
-        frames.extend(translator.translate(name, item))
+        frames.extend(translator.translate(uuid4(), name, item))
     frames.append(translator.finish())
 
     events = [json.loads(f.removeprefix("data: ").strip()) for f in frames]
@@ -435,11 +445,11 @@ def test_storage_persists_a2ui_custom_row_after_tool_result():
 
     a2ui = render_surface("weather-x", [text("root", "卡片")])
     st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
-    st.translate("tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "get_weather"}, uuid4())
-    st.translate("tools", {
+    st.translate(uuid4(), "tools", {"event": "tool-started", "tool_call_id": "c1", "tool_name": "get_weather"})
+    st.translate(uuid4(), "tools", {
         "event": "tool-result", "tool_call_id": "c1", "content": '{"city": "中山"}',
         "ui": {"a2ui": a2ui},
-    }, uuid4())
+    })
 
     rows = st.messages
     assert [r.message_type for r in rows] == [
@@ -454,5 +464,5 @@ def test_storage_persists_a2ui_custom_row_after_tool_result():
 
 def test_storage_ignores_tool_result_without_ui_payload():
     st = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
-    st.translate("tools", {"event": "tool-result", "tool_call_id": "c1", "content": "结果"}, uuid4())
+    st.translate(uuid4(), "tools", {"event": "tool-result", "tool_call_id": "c1", "content": "结果"})
     assert [r.message_type for r in st.messages] == [AgenticMessageType.TOOL_RESULT]

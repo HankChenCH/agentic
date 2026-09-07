@@ -214,12 +214,13 @@ class AgenticService:
             yield ag_ui_translator.error(self._run_error_message(e))
             return
 
-        # 流式与落库的消息 id 粒度刻意不同：
-        # - ag_ui_translator 的流式事件用其 __init__ 自生成的 run 级 id——一次 run
-        #   在前端只呈现一条 assistant 消息（react-ag-ui ≥0.0.58 把 TEXT_MESSAGE_*
-        #   里 messageId 的变化当作消息边界，逐条换 id 会把多步 ReAct run 裂成多条）；
-        # - storage_translator 按每次 LLM 调用（ChatModelStream）一行落库，此处逐条
-        #   生成 uuid 注入。
+        # 流式与落库共用同一消息 id 粒度：每条 interleave 条目生成一个 uuid 同时
+        # 注入两侧——ag_ui_translator 的 Text/Reasoning/ToolCall 归属事件与
+        # storage_translator 的落库行（text 行优先持有）按 id 可对账。注意前端
+        # react-ag-ui ≥0.0.58 把 TEXT_MESSAGE_* 里 messageId 的变化当作消息边界，
+        # 多步 ReAct run（工具前引导语 + 工具后回答）在前端会呈现为多条 assistant
+        # 消息——已知取舍：流式侧改回 run 级恒定 id 曾让过程回复与最终回复粘连，
+        # 已回退为按条注入，多区块问题待 react-ag-ui 升级后重评。
         # 深度回忆三件套的会话身份走 langgraph config 注入（BaseAgent._config 的
         # configurable.thread_id），不在此绑定——本生成器由 Starlette 逐次在不同
         # context 副本里恢复，ContextVar 的 set/reset 跨不过去（工具读不到值，

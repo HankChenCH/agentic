@@ -40,9 +40,9 @@ def _context():
 def test_message_token_usage_keys_normalized():
     """写入侧归一：usage_metadata 的 input/output_tokens → prompt/completion 族。"""
     translator = StorageTranslator(thread_id=uuid4(), turn_id=uuid4(), usage=_context())
-    translator.translate("messages", _stream(
+    translator.translate(uuid4(), "messages", _stream(
         usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-    ), uuid4())
+    ))
 
     rows = [m for m in translator.messages if m.message_type.value == "message"]
     assert rows[0].token_usage["prompt_tokens"] == 10
@@ -56,9 +56,9 @@ def test_chat_usage_rows_collected_per_llm_call():
     thread_id, turn_id = uuid4(), uuid4()
     translator = StorageTranslator(thread_id=thread_id, turn_id=turn_id, usage=_context())
 
-    translator.translate("messages", _stream(usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}), uuid4())
-    translator.translate("messages", _stream("无用量"), uuid4())   # 无 usage：不产生零值行
-    translator.translate("messages", _stream(usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}), uuid4())
+    translator.translate(uuid4(), "messages", _stream(usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}))
+    translator.translate(uuid4(), "messages", _stream("无用量"))   # 无 usage：不产生零值行
+    translator.translate(uuid4(), "messages", _stream(usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}))
 
     rows = translator.usage_records
     assert len(rows) == 2
@@ -76,7 +76,7 @@ def test_chat_usage_rows_collected_per_llm_call():
 def test_no_usage_context_no_rows():
     """未注入用量上下文（旧构造形态）：不收集流水，消息 token_usage 照常落。"""
     translator = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
-    translator.translate("messages", _stream(usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}), uuid4())
+    translator.translate(uuid4(), "messages", _stream(usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}))
 
     assert translator.usage_records == []
     rows = [m for m in translator.messages if m.message_type.value == "message"]

@@ -13,7 +13,7 @@ import json
 from uuid import uuid4
 
 from app.application.translator.storage_translator import StorageTranslator
-from backend.app.application.translator.agui_translator import AgUiTranslator
+from app.application.translator.agui_translator import AgUiTranslator
 
 
 def _events(frames):
@@ -30,7 +30,7 @@ def _tool_payload(display=None):
 # ---------------------------------------------------------------- AgUiTranslator
 def test_agui_tool_result_prefers_display():
     translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
-    events = _events(translator.translate("tools", _tool_payload(display="展示摘要")))
+    events = _events(translator.translate(uuid4(), "tools", _tool_payload(display="展示摘要")))
 
     result = next(e for e in events if e["type"] == "TOOL_CALL_RESULT")
     assert result["content"] == "展示摘要"
@@ -40,7 +40,7 @@ def test_agui_tool_result_prefers_display():
 def test_agui_tool_result_falls_back_to_content():
     """无 display（其他 agent / 未脱敏工具）回退 content，行为与既往一致。"""
     translator = AgUiTranslator(thread_id=uuid4(), run_id="run-1")
-    events = _events(translator.translate("tools", _tool_payload()))
+    events = _events(translator.translate(uuid4(), "tools", _tool_payload()))
 
     result = next(e for e in events if e["type"] == "TOOL_CALL_RESULT")
     assert result["content"] == "真实结果"
@@ -49,8 +49,8 @@ def test_agui_tool_result_falls_back_to_content():
 # ---------------------------------------------------------------- StorageTranslator
 def _storage_with_result(display=None):
     translator = StorageTranslator(thread_id=uuid4(), turn_id=uuid4())
-    translator.translate("tools", {"event": "tool-started", "tool_call_id": "call-1", "tool_name": "knowledge_search"}, uuid4())
-    translator.translate("tools", _tool_payload(display), uuid4())
+    translator.translate(uuid4(), "tools", {"event": "tool-started", "tool_call_id": "call-1", "tool_name": "knowledge_search"})
+    translator.translate(uuid4(), "tools", _tool_payload(display))
     return translator
 
 

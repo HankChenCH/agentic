@@ -1,5 +1,5 @@
 from typing import Any, Iterator
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from ag_ui.core import (
     CustomEvent,
@@ -37,21 +37,21 @@ class AgUiTranslator:
     所有 text delta 后出（投影各自驱动 pump 至 message-finish）。对 DeepSeek
     这类「先 reasoning 后 text」的推理模型恰好正确。
 
-    消息 id 契约：整个 run 的全部内容事件（Text/Reasoning/ToolCall 归属）共用
-    __init__ 时生成的一个 run 级 messageId。前端 react-ag-ui ≥0.0.58 把
-    TEXT_MESSAGE_* 里 messageId 的变化当作消息边界（新 id = 新开一条 assistant
-    消息），ReAct 多步 run（工具前引导语 + 工具后回答是两次独立 LLM 调用）若
-    逐条换 id 会被前端裂成多条消息——与落库侧「每次 LLM 调用一行」的粒度解耦：
-    落库行 id 由 StorageTranslator 自行接收（service 按条生成），流式侧恒用本 id。
+    消息 id 契约：messageId 由消费方（service 的流式循环）随 translate() 逐条
+    注入——messages 条目（= 一次 LLM 调用的 ChatModelStream）的 Text/Reasoning
+    事件以它为 messageId，tools 条目事件以它为 ToolCall 归属；StorageTranslator
+    在同一循环里接收同批 id 落库，流式与落库同粒度、可对账。前端 react-ag-ui
+    ≥0.0.58 把 TEXT_MESSAGE_* 里 messageId 的变化当作消息边界（新 id = 新开一条
+    assistant 消息），ReAct 多步 run（工具前引导语 + 工具后回答是两次独立 LLM
+    调用）因此在前端裂成多条消息——已知取舍：曾试过流式侧恒用 run 级 id 保持
+    「一次 run 一条消息」，但过程回复与最终回复随之粘连、更难分辨答案，已回退为
+    按条注入（多区块问题待 react-ag-ui 升级后重评）。
     """
 
     def __init__(self, thread_id: UUID, run_id: str):
         self.thread_id = str(thread_id)
         self.run_id = run_id
         self._enc = EventEncoder()
-        # run 级 assistant 消息 id：一次 run 在前端只呈现一条 assistant 消息，
-        # 亦用作 ToolCallStart.parent_message_id 与 ToolCallResult.message_id 的归属关联。
-        self._assistant_msg_id: str = uuid4().hex
 
     # ------------------------------------------------------------------
     # 生命周期（由 service 显式调用）
@@ -75,9 +75,9 @@ class AgUiTranslator:
     def translate(self, message_id: UUID, name: str, item: Any) -> Iterator[str]:
         """消费 interleave 产出的 (name, item)。
 
-        流式事件一律使用 run 级 ``_assistant_msg_id``（见类注释的消息 id 契约）；
-        落库行的逐条 id 由 StorageTranslator 在 service 循环里独立接收，两侧
-        粒度刻意不同（流式=一 run 一条消息，落库=一次 LLM 调用一行）。
+        全部产出事件的归属 id 都用调用方注入的 ``message_id``（见类注释的消息
+        id 契约）；StorageTranslator 在同一循环里接收同批 id 落库，两侧同粒度
+        可对账。
         """
         if name == "messages":
             yield from self._translate_messages(message_id, item)
@@ -89,8 +89,9 @@ class AgUiTranslator:
 
         投影在 buffer 空且未 done 时会驱动共享 graph pump，因此这里就是实时流式。
         reasoning 先、text 后；任一投影若空（该消息无对应内容）则 Start/End 也不发。
-        多步 ReAct run 会多次进入本方法（每次 LLM 调用一次），id 恒定使前端把
-        前后文本累积进同一条消息。
+        多步 ReAct run 会多次进入本方法（每次 LLM 调用一次），每次携带调用方新
+        注入的 message_id——前端按 messageId 变化把各次调用的文本拆成多条
+        assistant 消息（见类注释的已知取舍）。
         """
         msg_id = message_id.hex
 
