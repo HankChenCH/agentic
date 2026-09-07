@@ -69,7 +69,7 @@ class StorageTranslator:
         """chat 场景用量流水（每次模型调用一行；调用方在流收尾统一 flush）。"""
         return self._usage_records
 
-    def translate(self, name: str, item: Any, message_id: UUID) -> None:
+    def translate(self, message_id: UUID, name: str, item: Any) -> None:
         """消费 interleave 产出的 (name, item)，累积进内部列表。
 
         ``message_id`` 由消费方（service 遍历循环）按「每条 assistant 消息一次」
@@ -77,14 +77,14 @@ class StorageTranslator:
         无 text 时由 thought 行兜底；tools 事件收到的 id 被忽略。
         """
         if name == "messages":
-            self._translate_messages(item, message_id)
+            self._translate_messages(message_id, item)
         elif name == "tools":
-            self._translate_tools(item)
+            self._translate_tools(message_id, item)
 
     # ------------------------------------------------------------------
     # messages
     # ------------------------------------------------------------------
-    def _translate_messages(self, stream: Any, message_id: UUID) -> None:
+    def _translate_messages(self, message_id: UUID, stream: Any) -> None:
         """一条 ChatModelStream 拆成一组 AgenticMessage。
 
         ChatModelStream 在 message-finish 后所有投影都是非阻塞读，无需边遍历
@@ -198,7 +198,7 @@ class StorageTranslator:
     # ------------------------------------------------------------------
     # tools
     # ------------------------------------------------------------------
-    def _translate_tools(self, payload: dict[str, Any]) -> None:
+    def _translate_tools(self, message_id: UUID, payload: dict[str, Any]) -> None:
         """tools 投影给出 tool 的执行情况（归一化后的 tools 通道契约）。
 
         TOOL_CALL 行的落库来源有二：模型发起的调用由 messages 路径按

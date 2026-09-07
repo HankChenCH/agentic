@@ -200,7 +200,7 @@ def test_support_stream_agui_frames_have_no_provenance_payload():
     """客服面全链路：TOOL_CALL_RESULT 的 content 为脱溯源纯文本——前端
     knowledge-search-tool 的 parseResult 解析不出 sources，自然降级为纯文本
     展示，无 SourceCard/PDF 抽屉。"""
-    from app.application.translator.translator import AgUiTranslator
+    from backend.app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit(content="退货政策为七天无理由。")], []))
     agent = _search_stream_agent(retrieval, [AIMessage(content="七天无理由。")])

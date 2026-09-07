@@ -72,7 +72,7 @@ class AgUiTranslator:
     # ------------------------------------------------------------------
     # 内容 / 工具翻译
     # ------------------------------------------------------------------
-    def translate(self, name: str, item: Any) -> Iterator[str]:
+    def translate(self, message_id: UUID, name: str, item: Any) -> Iterator[str]:
         """消费 interleave 产出的 (name, item)。
 
         流式事件一律使用 run 级 ``_assistant_msg_id``（见类注释的消息 id 契约）；
@@ -80,11 +80,11 @@ class AgUiTranslator:
         粒度刻意不同（流式=一 run 一条消息，落库=一次 LLM 调用一行）。
         """
         if name == "messages":
-            yield from self._translate_messages(item)
+            yield from self._translate_messages(message_id, item)
         elif name == "tools":
-            yield from self._translate_tools(item)
+            yield from self._translate_tools(message_id, item)
 
-    def _translate_messages(self, stream: Any) -> Iterator[str]:
+    def _translate_messages(self, message_id: UUID, stream: Any) -> Iterator[str]:
         """遍历 ChatModelStream 的 reasoning / text 公开投影。
 
         投影在 buffer 空且未 done 时会驱动共享 graph pump，因此这里就是实时流式。
@@ -92,7 +92,7 @@ class AgUiTranslator:
         多步 ReAct run 会多次进入本方法（每次 LLM 调用一次），id 恒定使前端把
         前后文本累积进同一条消息。
         """
-        msg_id = self._assistant_msg_id
+        msg_id = message_id.hex
 
         has_reasoning = False
         for delta in stream.reasoning:
@@ -116,13 +116,13 @@ class AgUiTranslator:
         if has_text:
             yield self._enc.encode(TextMessageEndEvent(message_id=msg_id))
 
-    def _translate_tools(self, payload: dict[str, Any]) -> Iterator[str]:
+    def _translate_tools(self, message_id: UUID, payload: dict[str, Any]) -> Iterator[str]:
         """tools 投影产出的是 ToolsTransformer 归一化后的中间契约。"""
         event_type = payload.get("event")
         if event_type == "tool-started":
             yield self._enc.encode(
                 ToolCallStartEvent(
-                    parent_message_id=self._assistant_msg_id,
+                    parent_message_id=message_id.hex,
                     tool_call_id=payload.get("tool_call_id", ""),
                     tool_call_name=payload.get("tool_name", ""),
                 )
@@ -134,7 +134,7 @@ class AgUiTranslator:
             tool_call_id = payload.get("tool_call_id", "")
             yield self._enc.encode(
                 ToolCallResultEvent(
-                    message_id=self._assistant_msg_id,
+                    message_id=message_id.hex,
                     tool_call_id=tool_call_id,
                     content=payload.get("display", payload.get("content", "")),
                 )

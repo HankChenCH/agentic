@@ -238,7 +238,7 @@ class AgenticService:
                 # 取标志的感知推迟到消息全部生成完。帧级 + 0.5s 节流（每帧一查
                 # 是每秒几十次无谓 RTT）
                 canceled = False
-                for frame in ag_ui_translator.translate(name, item):
+                for frame in ag_ui_translator.translate(message_id, name, item):
                     now_mono = monotonic()
                     if now_mono - last_cancel_check >= CANCEL_CHECK_INTERVAL_SECONDS:
                         last_cancel_check = now_mono
@@ -256,7 +256,7 @@ class AgenticService:
                     self._cancel_turn_safely(turn)
                     self._flush_usage(storage_translator)
                     return
-                storage_translator.translate(name, item, message_id)
+                storage_translator.translate(message_id, name, item)
 
             yield ag_ui_translator.finish()
             self.conversations.complete_turn(turn)

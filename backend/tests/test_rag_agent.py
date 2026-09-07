@@ -244,7 +244,7 @@ def test_system_prompt_renders_tools_index_and_memory_block():
 def test_stream_emits_tool_events_and_agui_frames():
     """全链路契约：真实工具调用经 ToolsTransformer 出标准 tools 通道事件，
     AgUiTranslator 产出合法 ag-ui 帧（TOOL_CALL 三事件 + 单条文本消息流）。"""
-    from app.application.translator.translator import AgUiTranslator
+    from backend.app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit()], ["知识库「X」未启用，已跳过"]))
     agent = RagAgent(model=ScriptedChatModel(answers=[
@@ -289,7 +289,7 @@ def test_agui_single_message_id_across_tool_rounds():
     """消息 id 契约：ReAct 多步 run（工具前引导语 + 工具后回答 = 两次 LLM 调用）
     的 TEXT_MESSAGE_* 事件必须共享同一 messageId——前端 react-ag-ui ≥0.0.58
     把 messageId 变化当作消息边界，逐条换 id 会把一次 run 裂成多条消息。"""
-    from app.application.translator.translator import AgUiTranslator
+    from backend.app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit()], ["知识库「X」未启用，已跳过"]))
     agent = RagAgent(model=ScriptedChatModel(answers=[
@@ -378,7 +378,7 @@ def test_stream_emits_a2ui_custom_event_for_weather_card():
     天气 JSON 给 LLM，artifact={"a2ui": 消息数组} 走 UI 通道），经 langgraph
     ToolMessage.artifact → ToolsTransformer 的 ui 字段 → AgUiTranslator 在
     TOOL_CALL_RESULT 之后追加 CUSTOM 事件（name="a2ui"，value=消息数组）。"""
-    from app.application.translator.translator import AgUiTranslator
+    from backend.app.application.translator.agui_translator import AgUiTranslator
     from app.components.demo.ability.weather import DemoWeatherService
 
     agent = DemoAgent(model=ScriptedChatModel(answers=[

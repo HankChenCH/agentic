@@ -13,7 +13,7 @@ import json
 from uuid import uuid4
 
 from app.application.translator.storage_translator import StorageTranslator
-from app.application.translator.translator import AgUiTranslator
+from backend.app.application.translator.agui_translator import AgUiTranslator
 
 
 def _events(frames):
