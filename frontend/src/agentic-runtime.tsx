@@ -1,10 +1,11 @@
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
 import {
   AssistantRuntimeProvider,
+  type AssistantRuntime,
   type AttachmentAdapter,
   type CompleteAttachment,
   type PendingAttachment,
@@ -212,6 +213,12 @@ export const AgenticRuntimeProvider = ({
     };
   }, [agent]);
 
+  // runtime 桥：useConversationList 在 runtime 创建之前执行（threadList adapter
+  // 依赖其返回值），而切换/删除会话时需要 runtime 的取消与清空能力（取消进行
+  // 中轮次、清空共享消息仓库），经 ref 延后取用——用户交互一定发生在挂载
+  // effect 之后，届时 ref 已就绪。
+  const runtimeRef = useRef<AssistantRuntime | null>(null);
+
   // 会话列表的加载 / 切换 / 历史回放都封装在 hook 里（agent 传入用于
   // 订阅 RunFinished：轮次结束后轮询标题并刷新列表）。
   // 返回的 adapter 是 threadList adapter，引用随列表/回调变化 → 驱动 runtime 刷新。
@@ -227,7 +234,7 @@ export const AgenticRuntimeProvider = ({
     refreshConversations,
     updatedMessageIds,
     turnByMessageId,
-  } = useConversationList(agent);
+  } = useConversationList(agent, { runtimeRef });
 
   const runtime = useAgUiRuntime({
     agent,
@@ -256,6 +263,11 @@ export const AgenticRuntimeProvider = ({
       agent.abortRun();
     },
   });
+
+  // 填充 runtime 桥（见上方 runtimeRef 注释）
+  useEffect(() => {
+    runtimeRef.current = runtime;
+  }, [runtime]);
 
   // 删除、加载更多等会话操作与分页状态经 context 下发给侧栏等
   // runtime 之外的组件（确认弹窗 / 加载更多按钮入口）；currentThreadId

@@ -7,10 +7,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import { toast } from "sonner";
 
-import type { ThreadMessage } from "@assistant-ui/core";
+import type { AssistantRuntime, ThreadMessage } from "@assistant-ui/core";
 import { fromThreadMessageLike } from "@assistant-ui/core";
 import type { UseAgUiThreadListAdapter } from "@assistant-ui/react-ag-ui";
 import type { HttpAgent } from "@ag-ui/client";
@@ -52,10 +53,15 @@ const delay = (ms: number) =>
  *
  * - `pageSize?`: 列表分页大小，默认 20
  * - `historyLimit?`: 切换会话时拉取的历史消息上限，默认 100
+ * - `runtimeRef?`: AgenticRuntimeProvider 注入的 runtime 桥（useAgUiRuntime
+ *   返回值）。hook 在 runtime 创建之前执行（adapter 依赖其返回值），经 ref
+ *   延后取用：切换/删除会话时用它取消进行中的轮次（threads.main.cancelRun）
+ *   与清空会话视图（threads.switchToNewThread）。
  */
 export interface UseConversationListOptions {
   pageSize?: number;
   historyLimit?: number;
+  runtimeRef?: RefObject<AssistantRuntime | null>;
 }
 
 /**
@@ -158,7 +164,7 @@ export function useConversationList(
   agent: HttpAgent,
   options: UseConversationListOptions = {},
 ): UseConversationListResult {
-  const { pageSize = 20, historyLimit = 100 } = options;
+  const { pageSize = 20, historyLimit = 100, runtimeRef } = options;
 
   // ── 会话列表 state ──────────────────────────────────────────────
   const [conversations, setConversations] = useState<BackendConversation[]>([]);
@@ -206,13 +212,6 @@ export function useConversationList(
       }
     },
     [applyBranchMeta, historyLimit],
-  );
-
-  // runtime 主线程 id 的镜像（喂给 adapter.threadId）。平时保持 undefined，
-  // 不干预既有切换路径；仅在删除当前激活会话后指向一个全新 id —— runtime
-  // 检测到 adapter.threadId 变化会重建全新空主线程，聊天面板随之清空。
-  const [activeThreadId, setActiveThreadId] = useState<string | undefined>(
-    undefined,
   );
 
   // 会话身份镜像（见 ConversationActions.currentThreadId 注释）。agent 是
@@ -345,6 +344,15 @@ export function useConversationList(
         setCurrentThreadId((prev) =>
           prev === agent.threadId ? prev : agent.threadId,
         );
+        // 新会话落库即可见：RUN_STARTED 到达时后端 open_turn 事务已提交，
+        // 会话行必已存在。threadId 不在列表中就刷一次把它插进侧栏（标题
+        // 暂缺显 "New Chat"，由下方标题轮询回填）；既有会话零开销跳过，
+        // 本轮失败的会话（标题轮询只在成功时启动）也能正确显示。
+        if (
+          !conversationsRef.current.some((c) => c.thread_id === agent.threadId)
+        ) {
+          void refreshConversations();
+        }
       },
       onRunFinishedEvent: ({ outcome, input }) => {
         if (outcome !== "success") return; // interrupt 不是完整轮次
@@ -361,7 +369,7 @@ export function useConversationList(
       stopped.current = true;
       unsubscribe();
     };
-  }, [agent, pollConversationTitle, refreshBranchMeta]);
+  }, [agent, pollConversationTitle, refreshBranchMeta, refreshConversations]);
 
   // 后端 snake_case → adapter.threads 要的形状
   const threads = useMemo(
@@ -375,7 +383,27 @@ export function useConversationList(
   );
 
   // ── 回调 ─────────────────────────────────────────────────────────
+  // 进行中轮次的取消（切换/删除会话前调用）。全局只有一份共享消息仓库，旧
+  // run 的 SSE 事件若继续到达会写进切换后的会话视图（内容串台），isRunning
+  // 也卡在 true（后续发送报 "run already in progress"）。走 runtime 的
+  // cancelRun 才是干净取消：core.cancel() → RUN_CANCELLED + finishRun，并
+  // 回调 provider 的 onCancel（双通道 REST 取消标志 + 本地断链；此刻
+  // agent.threadId 尚未切换，标志发往旧会话）。裸 agent.abortRun() 绕过
+  // core 的 abortController，会被归类为 RUN_ERROR 弹错误框，不可用。
+  // 空闲时（含点击当前正在流式的会话——runtime 同 id 早退不进切换回调）是
+  // 安全空操作。
+  const cancelActiveRun = useCallback(() => {
+    const runtime = runtimeRef?.current;
+    if (!runtime) return;
+    if (runtime.threads.main.getState().isRunning) {
+      runtime.threads.main.cancelRun();
+    }
+  }, [runtimeRef]);
+
   const onSwitchToNewThread = useCallback(async () => {
+    // 流式切换先取消进行中的轮次（见 cancelActiveRun 注释），必须先于
+    // agent.threadId 变更——取消链路里的 REST 标志按当前 threadId 发往旧会话。
+    cancelActiveRun();
     // ag-ui runtime 发消息时用 agent.threadId 组装 RunAgentInput，且库不会在
     // 切换时更新它 —— 新建会话必须换一个新 threadId，否则第一条消息仍会
     // get-or-create 到旧会话（后端无显式建会话接口，id 由前端决定）。
@@ -388,12 +416,15 @@ export function useConversationList(
     // 新会话在第一次发消息时才落库；切回列表时 refresh 即可看到它。
     // TODO(可选): 若后端将来支持 POST /conversation 显式建空会话，在此调用
     //   conversationService.xxx() 并 refreshConversations()。
-  }, [agent]);
+  }, [agent, cancelActiveRun]);
 
   const onSwitchToThread = useCallback(
     async (
       threadId: string,
     ): Promise<{ messages: readonly ThreadMessage[] }> => {
+      // 流式切换先取消进行中的轮次（见 cancelActiveRun 注释），必须先于
+      // agent.threadId 变更——取消链路里的 REST 标志按当前 threadId 发往旧会话。
+      cancelActiveRun();
       // 同上：把选中会话的 thread_id 同步给 agent，后续消息才会发往该会话。
       agent.threadId = threadId;
       // 镜像在 await 之前同步推进：连续快速切换时最后点击者胜出，
@@ -427,7 +458,7 @@ export function useConversationList(
         return { messages: [] };
       }
     },
-    [agent, applyBranchMeta, historyLimit],
+    [agent, applyBranchMeta, cancelActiveRun, historyLimit],
   );
 
   // ── 删除会话 ─────────────────────────────────────────────────────
@@ -441,28 +472,38 @@ export function useConversationList(
         );
         return false;
       }
-      // 删的是当前会话：换一个全新 threadId（后端按 threadId get-or-create，
-      // 复用旧 id 会让下一条消息把已删会话"复活"），并镜像到 adapter.threadId
-      // 触发 runtime 重建空主线程（面板清空，见 activeThreadId 注释）。
+      // 删的是当前会话：走 runtime 的 switchToNewThread 清空会话视图 ——
+      // react-ag-ui 包装层会 applyExternalMessages([]) + resetState() 清掉
+      // 共享消息仓库；只换 threadId 身份的话仓库不清，聊天面板仍显示被删
+      // 会话的内容。app 侧 onSwitchToNewThread 顺带换全新 threadId（后端按
+      // threadId get-or-create，复用旧 id 会让下一条消息把已删会话"复活"）、
+      // 镜像置 null 让路由回到 /（见 thread-route-sync）。
       if (agent.threadId === threadId) {
-        agent.threadId = randomUUID();
-        setActiveThreadId(agent.threadId);
-        // 路由镜像回到"新会话"语义，thread-route-sync 会把地址栏送回 /
-        setCurrentThreadId(null);
+        // 若该会话正在流式，先取消（REST 标志按旧 threadId 发往被删会话）
+        cancelActiveRun();
+        const runtime = runtimeRef?.current;
+        if (runtime) {
+          await runtime.threads.switchToNewThread();
+        } else {
+          // runtime 桥未就绪的兜底：手动换身份 + 镜像回新会话语义
+          agent.threadId = randomUUID();
+          setCurrentThreadId(null);
+        }
       }
       await refreshConversations();
       toast.success("会话已删除");
       return true;
     },
-    [agent, refreshConversations],
+    [agent, cancelActiveRun, refreshConversations, runtimeRef],
   );
 
   // ── 组装 adapter。依赖列表/回调，任一变化都重建 → runtime 刷新 ──
+  // 不设 threadId：external-store 的主线程身份恒定，会话切换全靠
+  // applyExternalMessages 换仓库内容（共享仓库架构，见文件头注释）。
   const adapter = useMemo<UseAgUiThreadListAdapter>(
     () => ({
       threads,
       isLoading,
-      threadId: activeThreadId,
       onSwitchToNewThread,
       onSwitchToThread,
       // runtime 侧删除入口（如 ThreadListItemPrimitive.Delete）会调 onDelete；
@@ -474,14 +515,7 @@ export function useConversationList(
       // onRename: async (threadId, newTitle) => { ... refreshConversations(); },
       // onArchive: async (threadId) => { ... },
     }),
-    [
-      threads,
-      isLoading,
-      activeThreadId,
-      onSwitchToNewThread,
-      onSwitchToThread,
-      deleteConversation,
-    ],
+    [threads, isLoading, onSwitchToNewThread, onSwitchToThread, deleteConversation],
   );
 
   return {
