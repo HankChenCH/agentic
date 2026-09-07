@@ -288,6 +288,36 @@ def test_replay_pairs_tool_chain_and_skips_a2ui_custom_rows(service, engine):
     assert not any("createSurface" in str(m.content) for m in history)
 
 
+def test_replay_skips_thought_rows(service, engine):
+    """THOUGHT（reasoning）行不回放：思考文本不进 LLM 上下文（docstring 契约，
+    厂商 API 不接受历史 reasoning 注入），仅 MESSAGE 行照常回放。"""
+    thread_id = uuid4()
+    _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    service.conversation_repo.store_conversation_messages([
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=1, role=AgenticMessageRole.ASSISTANT,
+            message_type=AgenticMessageType.THOUGHT,
+            content=[{"type": "text", "text": "让我想想这个问题的思路…"}],
+            token_usage={}, latency_ms=0,
+        ),
+        AgenticConversationMessage(
+            thread_id=thread_id, turn_id=turn.turn_id, message_id=uuid4(),
+            sequence_num=2, role=AgenticMessageRole.ASSISTANT,
+            message_type=AgenticMessageType.MESSAGE,
+            content=[{"type": "text", "text": "答案是 42。"}],
+            token_usage={}, latency_ms=0,
+        ),
+    ])
+    service.complete_turn(turn)
+    _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
+
+    history = service.replay_history(thread_id=thread_id, base_turn_id=t2.turn_id)
+    ai_texts = [m.content for m in history if m.type == "ai" and isinstance(m.content, str)]
+    assert "答案是 42。" in ai_texts
+    assert not any("让我想想" in t for t in ai_texts)
+
+
 def test_explicit_branch_signal_locates_base_by_message_id(service, engine):
     """显式信号：baseMessageId 定位兄弟基点；仅末梢可分支（中段已定型拒绝）。"""
     thread_id = uuid4()

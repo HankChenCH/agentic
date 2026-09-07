@@ -1,9 +1,10 @@
-from .conversation import AgenticTurnStatus, AgenticMessageRole, AgenticMessageType, AgenticConversation, AgenticConversationTurn, AgenticConversationMessage
+from .conversation import AgenticTurnStatus, AgenticMessageRole, AgenticMessageType, ContentPartType, AgenticConversation, AgenticConversationTurn, AgenticConversationMessage
 
 __all__ = [
     "AgenticTurnStatus",
     "AgenticMessageRole",
     "AgenticMessageType",
+    "ContentPartType",
     "AgenticConversation",
     "AgenticConversationTurn",
     "AgenticConversationMessage",

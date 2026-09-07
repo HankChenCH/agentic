@@ -31,6 +31,19 @@ class AgenticMessageType(Enum):
     CUSTOM = 'custom'
 
 
+class ContentPartType(str, Enum):
+    """消息 content 数组部件的 type 词汇表——存储面 JSON 的序列化键，也是
+    四条转换边（ag2ui/ag2store/store2ui/store2ag）分派部件的共同键（总览见
+    app/application/translator/matrix.py）。str Enum：成员即存储字符串，可
+    直接与裸字面量比较。行级类型见 AgenticMessageType——THOUGHT/MESSAGE 行
+    都持有 TEXT part，用户行可持 IMAGE part，二者是行/部件两层词汇。"""
+    TEXT = 'text'
+    TOOL_CALL = 'tool_call'
+    TOOL_RESULT = 'tool_result'
+    CUSTOM = 'custom'
+    IMAGE = 'image'
+
+
 class AgenticConversation(TimeFieldMixin, SQLModel, table=True):
     __tablename__ = "agentic_conversation" # type: ignore
 

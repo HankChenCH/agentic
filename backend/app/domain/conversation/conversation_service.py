@@ -29,11 +29,12 @@ from app.models.domain.agentic import (
     AgenticMessageRole,
     AgenticMessageType,
     AgenticTurnStatus,
+    ContentPartType,
 )
 
 # 计入轮次聚合的标准用量键（其余如 cached_tokens 不计）。
 # input/output_tokens 是存量消息行的原生键族（归一化改造前的历史数据），保留
-# 以兼容；新写入行在 StorageTranslator._read_usage 已统一为 prompt/completion 族
+# 以兼容；新写入行在 StorageTranslator.read_usage 已统一为 prompt/completion 族
 USAGE_KEYS = (
     "prompt_tokens", "completion_tokens", "total_tokens",
     "input_tokens", "output_tokens",
@@ -232,6 +233,11 @@ class ConversationService:
         history: List[BaseMessage] = []
         pending_calls: dict[str, AIMessage] = {}
         for row in rows:
+            # THOUGHT（reasoning）行不回放（见上）：思考文本以普通 assistant
+            # content 回灌会污染上下文
+            if row.message_type == AgenticMessageType.THOUGHT:
+                continue
+
             part = row.content[0] if row.content else {}
             part_type = part.get("type")
 
@@ -246,12 +252,12 @@ class ConversationService:
                 ))
                 continue
 
-            if part_type == "text":
+            if part_type == ContentPartType.TEXT:
                 text = part.get("text", "")
                 if not text:
                     continue
                 history.append(AIMessage(content=text))
-            elif part_type == "tool_call":
+            elif part_type == ContentPartType.TOOL_CALL:
                 tool_call_id = part.get("tool_call_id", "")
                 if not tool_call_id:
                     continue
@@ -262,14 +268,14 @@ class ConversationService:
                     "id": tool_call_id,
                     "type": "tool_call",
                 }])
-            elif part_type == "tool_result":
+            elif part_type == ContentPartType.TOOL_RESULT:
                 tool_call_id = part.get("tool_call_id", "")
                 call = pending_calls.pop(tool_call_id, None)
                 if call is None:
                     continue
                 history.append(call)
                 history.append(ToolMessage(content=part.get("content", ""), tool_call_id=tool_call_id))
-            elif part_type == "custom":
+            elif part_type == ContentPartType.CUSTOM:
                 # A2UI 卡片载荷（message_type=CUSTOM）：UI 表现层，不回灌模型上下文
                 continue
 
