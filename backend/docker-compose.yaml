@@ -80,8 +80,8 @@ services:
     restart: unless-stopped
     command: ["/data"] # 数据目录作为启动参数（官方 docker run 用法）
     ports:
-      - "127.0.0.1:9000:9000" # S3 API
-      - "127.0.0.1:9001:9001" # Web 控制台端口保留；rustfs 1.0.0-beta.12 的 console 未随容器启动（9001 当前也由 S3 API 应答），待上游修复
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web 控制台端口保留；rustfs 1.0.0-beta.12 的 console 未随容器启动（9001 当前也由 S3 API 应答），待上游修复
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-agentic}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-agentic-secret}
