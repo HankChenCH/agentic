@@ -18,6 +18,9 @@ import type {
  * 与 server 的 StorageTranslator 对称：后端把一条 assistant ChatModelStream
  * 拆成 [THOUGHT, MESSAGE, TOOL_CALL, TOOL_RESULT, CUSTOM] 多条
  * AgenticConversationMessage；这里把它们重新组装回 assistant-ui 的 parts 模型。
+ * 本模块是 store2ui 边的前端半程——后端五条转换边的矩阵总览
+ * （ag2ui/ag2store/store2ui/store2ag/ui2store）见
+ * backend/app/application/translator/matrix.py。
  *
  * 合并粒度（与实时路径的已知差异）：服务端流式侧按「每次 LLM 调用一个
  * messageId」下发（AgUiTranslator 的消息 id 契约；react-ag-ui ≥0.0.58 把
