@@ -142,12 +142,21 @@ class ServerImageAttachmentAdapter implements AttachmentAdapter {
 
   async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
     const uploaded = await attachmentService.upload(attachment.file);
+    // 引用必须是绝对 http(s) URL，且 path 以 /agentic/attachments/ 开头：
+    // - react-ag-ui 的 resolveFilePartSource 只把 http(s):// 开头的值当 url
+    //   source，相对路径（同源反代形态 REST_BASE=/api）会被整段误包成 data
+    //   source，后端按 base64 解析必然 400（Invalid base64 data）；
+    // - 后端按 urlsplit(path).startswith("/agentic/attachments/") 识别本域
+    //   引用，故 base 不能带 /api 前缀——REST_BASE 为相对形态时用页面 origin。
+    const apiRoot = REST_BASE.startsWith("http")
+      ? REST_BASE
+      : window.location.origin;
     return {
       ...attachment,
       id: uploaded.id,
       status: { type: "complete" },
       content: [
-        { type: "image", image: `${REST_BASE}${uploaded.url}` },
+        { type: "image", image: new URL(uploaded.url, apiRoot).toString() },
       ],
     };
   }
