@@ -1150,9 +1150,9 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   ``replay_history`` 的 LLM 回放不受影响，仍用真实 content（与模型当时所见
   一致）。生产者：agent 级 ``ToolsTransformer`` 子类在命中需要脱敏的工具时
   push ``content + display`` 双键（先例 ``SupportToolsTransformer``——knowledge
-  检索的溯源元数据不得透给最终用户，``KnowledgeSearchResult`` JSON 摘成
-  「编号 + 内容」纯文本）；进模型的 ToolMessage 由图状态决定，transformer
-  改写永远不影响 LLM 侧。
+  检索的命中正文与溯源元数据都不得透给最终用户，``KnowledgeSearchResult``
+  JSON 压成「调用成功」状态文案，前端只见调用成败）；进模型的 ToolMessage
+  由图状态决定，transformer 改写永远不影响 LLM 侧。
 - **Celery 可靠性（acks_late + autoretry_for + 幂等重投 + 卡死恢复）** → 四层机
   制互为补位，配置全在 `task.yaml`/`TaskConfig`（数值口径见 config 分节）：
   ① **broker 层重投**：`task_acks_late=True`——任务执行完才 ack，worker 崩溃/

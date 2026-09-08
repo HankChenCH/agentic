@@ -16,7 +16,8 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │   │                        #   /login 公开，其余路由经 RequireAuth 守卫）+ sonner Toaster
 │   ├── agentic-runtime.tsx  # HttpAgent（authenticatedFetch 包装注入 Bearer + SSE 401 静默刷新重试/登出跳转）
 │   │                        #   + useAgUiRuntime（SSE 地址来自 @/lib/config）+ attachments 适配器
-│   │                        #   （ServerImageAttachmentAdapter：图片附件 send 阶段上传后端，成功才放行提交）
+│   │                        #   注册（ServerImageAttachmentAdapter，实现见
+│   │                        #   services/image-attachment-adapter.ts：选中即上传，发送零等待）
 │   ├── services/a2ui.ts     # A2UI 载荷防御性解析（parseA2uiPayload 纯函数）+
 │   │                        #   a2ui-data.tsx（useAssistantDataUI 注册的官方渲染器接线，天气卡片）
 │   ├── stores/              # auth-store.ts（首个 zustand store：token/refreshToken/user +
@@ -49,7 +50,9 @@ agentic-client/                  # this directory is its own git repo (client/ a
 │       │                    #   knowledge-service、memory-service（图快照契约是 camelCase 特例）、
 │       │                    #   tool-catalog-service（GET /agentic/tool-catalog 展示元数据）、
 │       │                    #   agent-service（GET /agentic/agents 智能体目录，agent-store/选择器消费）、
-│       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）、
+│       │                    #   attachment-service（POST /agentic/attachments 会话图片附件上传）
+│       │                    #   + image-attachment-adapter（图片附件适配器：选中即上传，
+│       │                    #   send 复用结果零等待，失败重试一次；纯逻辑可单测）、
 │       │                    #   stats-service（GET /stats/usage/*，契约也是 camelCase 特例）
 │       │                    #   + types.ts（后端 snake_case 镜像类型）+ translators/（后端历史→
 │       │                    #   ThreadMessageLike 翻译器；user 消息 image part 还原为附件卡片）
@@ -277,10 +280,18 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   过渡态时每 3s 静默轮询；`failed` 的 `error_message` 通过状态徽章 tooltip
   展示。文档上传支持 **PDF / xlsx / docx / Markdown**（后端按后缀白名单强校验并
   路由解析器回退链；dropzone `accept` 与白名单同步——`upload-document-dialog.tsx`）。
-- **聊天图片附件（多模态输入）**：上传语义收口在附件适配器的 `send()` 阶段
-  （`agentic-runtime.tsx` 的 `ServerImageAttachmentAdapter`）——assistant-ui 在
-  用户点发送时逐附件调 `send()`，此处 `attachmentService.upload` 成功才返回
-  `CompleteAttachment`，失败抛错即中止本次提交（= 上传成功才能发消息）。
+- **聊天图片附件（多模态输入）**：**选中即上传（eager upload），发送零等待**，
+  实现在 `services/image-attachment-adapter.ts` 的 `ServerImageAttachmentAdapter`
+  （agentic-runtime 注册即激活）——适配器 `add()` 以 AsyncGenerator 两段产出
+  同一附件（runtime 按 id 原位替换）：选中文件立即发起 `attachmentService.upload`，
+  先 yield「上传中」态（缩略图转圈），完成后再 yield「待发送」态，上传与打字
+  并行；`send()` 复用挂到附件对象上的上传结果（promise 随行，无实例级缓存），
+  点发送不再等待上传。失败语义仍是「上传成功才能发消息」：add 阶段失败生成器
+  抛错 → runtime 原位标记附件错误态 + 发 `composer.attachmentAddError` 事件
+  （chat-page 以 `useAuiEvent({ scope: "*" })` 订阅转 toast，文件类型被拒的
+  not-accepted 也走这里，此前是静默失败）；发送时对失败附件重试一次，再失败
+  才中止提交（runtime 自动还原文本）。选了又移除的图片会留下服务端孤儿对象
+  （与旧口径一致，孤儿清理是后续项）。
   适配器 send 时把后端返回的稳定相对 url 拼成「REST_BASE + 相对路径」的
   绝对 URL 上送（浏览器 `<img>` 渲染需要绝对地址，Vite 无 dev 代理），
   消息/历史里存的就是这个绝对引用（永不过期）。
