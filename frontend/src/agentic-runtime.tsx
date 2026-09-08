@@ -6,9 +6,6 @@ import { toast } from "sonner";
 import {
   AssistantRuntimeProvider,
   type AssistantRuntime,
-  type AttachmentAdapter,
-  type CompleteAttachment,
-  type PendingAttachment,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import { HttpAgent } from "@ag-ui/client";
@@ -17,10 +14,10 @@ import {
   ConversationActionsContext,
   useConversationList,
 } from "@/hooks/use-conversation-list";
-import { REST_BASE, SSE_URL } from "@/lib/config";
+import { SSE_URL } from "@/lib/config";
 import { refreshSession } from "@/lib/token-refresh";
-import { attachmentService } from "@/services/attachment-service";
 import { conversationService } from "@/services/conversation-service";
+import { ServerImageAttachmentAdapter } from "@/services/image-attachment-adapter";
 import { applyRunInputInjections, type RunAgentInputLike } from "@/services/run-input";
 import { getToken, useAuthStore } from "@/stores/auth-store";
 import { getSelectedAgentId, isKnownThread } from "@/stores/agent-store";
@@ -116,59 +113,6 @@ const authenticatedFetch: typeof fetch = async (input, init) => {
 };
 
 /**
- * 图片附件适配器：上传语义收口在 send 阶段（composer-send）。
- *
- * 流程：选中文件 → add() 进 composer 待发区（本地预览，File 对象直读）→
- * 用户点发送 → assistant-ui 逐附件调 send() → 此处上传后端，成功才返回
- * CompleteAttachment（含稳定引用 URL）——失败抛错会中止本次提交并把附件
- * 标记为错误，即「附件上传成功后才能提交消息」。
- *
- * 引用 URL 为稳定相对路径拼 API 根；消息发出后 react-ag-ui 自动转成
- * ag-ui 的 image url source（绝对 http URL → url source），后端落库该
- * 引用并在渲染时 302 重定向到预签名地址（浏览器直拉对象存储）。
- */
-class ServerImageAttachmentAdapter implements AttachmentAdapter {
-  accept = "image/png,image/jpeg,image/webp,image/gif";
-
-  async add({ file }: { file: File }): Promise<PendingAttachment> {
-    return {
-      id: crypto.randomUUID(),
-      type: "image",
-      name: file.name,
-      contentType: file.type || "image/png",
-      file,
-      status: { type: "requires-action", reason: "composer-send" },
-    };
-  }
-
-  async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
-    const uploaded = await attachmentService.upload(attachment.file);
-    // 引用必须是绝对 http(s) URL，且 path 以 /agentic/attachments/ 开头：
-    // - react-ag-ui 的 resolveFilePartSource 只把 http(s):// 开头的值当 url
-    //   source，相对路径（同源反代形态 REST_BASE=/api）会被整段误包成 data
-    //   source，后端按 base64 解析必然 400（Invalid base64 data）；
-    // - 后端按 urlsplit(path).startswith("/agentic/attachments/") 识别本域
-    //   引用，故 base 不能带 /api 前缀——REST_BASE 为相对形态时用页面 origin。
-    const apiRoot = REST_BASE.startsWith("http")
-      ? REST_BASE
-      : window.location.origin;
-    return {
-      ...attachment,
-      id: uploaded.id,
-      status: { type: "complete" },
-      content: [
-        { type: "image", image: new URL(uploaded.url, apiRoot).toString() },
-      ],
-    };
-  }
-
-  async remove(): Promise<void> {
-    // 无需清理：对象删除不做（会话附件孤儿清理是后续项），本地预览
-    // 的 File 由 runtime 自行释放
-  }
-}
-
-/**
  * 分支展示策略（历史 vs 会话中）：
  *   - 历史查看：不种分支树，按服务端激活叶子线性展示，无 1/2 切换入口；
  *   - 会话中：重新生成/编辑产生的兄弟变体由 runtime 仓库原生维护，
@@ -240,7 +184,8 @@ export const AgenticRuntimeProvider = ({
     agent,
     adapters: {
       threadList: threadListAdapter,
-      // 图片附件适配器：thread.tsx 的附件 UI（加号/拖拽区/预览）已就绪，
+      // 图片附件适配器（services/image-attachment-adapter.ts）：选中即上传、
+      // 发送复用结果零等待；thread.tsx 的附件 UI（加号/拖拽区/预览）已就绪，
       // 注册即激活
       attachments: new ServerImageAttachmentAdapter(),
     },
