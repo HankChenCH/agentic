@@ -2,9 +2,10 @@
 不碰 Weaviate/DeepSeek。
 
 覆盖：客服面工具装配（知识检索三件 + 记忆三件套，无浏览工具/演示工具）、
-system prompt 客服人设（禁出处禁角标）、脱溯源流投影（SupportToolsTransformer
-把 KnowledgeSearchResult JSON 拆成 content 真实 + display 展示双内容——LLM 侧
-ToolMessage 不受影响）、未命中/非溯源结果的透传、以及客服面端到端 ag-ui 帧契约。
+system prompt 客服人设（禁出处禁角标）、脱敏流投影（SupportToolsTransformer
+把 KnowledgeSearchResult JSON 拆成 content 真实 + display 状态文案——前端
+只见调用成败，LLM 侧 ToolMessage 不受影响）、未命中/非溯源结果的透传、
+以及客服面端到端 ag-ui 帧契约。
 """
 
 import json
@@ -144,8 +145,8 @@ def _run_tools_channel(agent):
 
 
 def test_support_transformer_dual_content_on_provenance_results():
-    """双内容契约：content 恒为真实检索 JSON（落库审计），display 为脱溯源
-    摘要（前端展示版）；LLM 侧 ToolMessage 仍是完整 JSON（作答质量不受影响）。"""
+    """双内容契约：content 恒为真实检索 JSON（落库审计），display 为纯状态
+    文案（前端只看调用成败）；LLM 侧 ToolMessage 仍是完整 JSON（作答质量不受影响）。"""
     retrieval = StubRetrieval(result=([_hit(content="退货政策为七天无理由。")], []))
     agent = _search_stream_agent(retrieval, [AIMessage(content="七天无理由。")])
 
@@ -154,9 +155,9 @@ def test_support_transformer_dual_content_on_provenance_results():
     result = tool_items[1]
     # content：真实结果（审计副本），出处元数据原样保留
     assert "文档A" in result["content"] and "sources" in result["content"]
-    # display：前端展示版，出处元数据全部剥离
-    assert "退货政策为七天无理由。" in result["display"]
-    for forbidden in ("文档A", "doc-1", "heading_path", "bboxes", "score", "sources", "page_start"):
+    # display：前端只见调用成败——命中正文与出处元数据都不出现
+    assert result["display"] == "调用成功"
+    for forbidden in ("退货政策为七天无理由。", "文档A", "doc-1", "heading_path", "bboxes", "score", "sources", "page_start"):
         assert forbidden not in result["display"]
     # LLM 侧不受投影影响：ToolMessage 进完整检索 JSON
     tool_messages = [m for m in agent.model.prompts[1] if m.type == "tool"]
@@ -185,21 +186,21 @@ def test_support_transformer_passthrough_memory_tools():
 
 
 def test_support_transformer_digest_unit():
-    """投影单元：合法溯源 JSON 摘成纯文本；非法/空 sources 返回 None（透传）。"""
-    from app.agents.builtin.support.transformer import _frontend_digest
+    """投影单元：合法溯源 JSON 映射为纯状态文案；非法/空 sources 返回 None（透传）。"""
+    from app.agents.builtin.support.transformer import _frontend_display
 
-    assert _frontend_digest(_SEARCH_RESULT_JSON) == "1. 退货政策为七天无理由。"
-    assert _frontend_digest("知识库中未检索到相关内容") is None
-    assert _frontend_digest('{"sources": [], "notes": []}') is None
-    assert _frontend_digest("not json") is None
-    assert _frontend_digest({"a": 1}) is None
+    assert _frontend_display(_SEARCH_RESULT_JSON) == "调用成功"
+    assert _frontend_display("知识库中未检索到相关内容") is None
+    assert _frontend_display('{"sources": [], "notes": []}') is None
+    assert _frontend_display("not json") is None
+    assert _frontend_display({"a": 1}) is None
 
 
 # ---------------------------------------------------------------- 端到端
 def test_support_stream_agui_frames_have_no_provenance_payload():
-    """客服面全链路：TOOL_CALL_RESULT 的 content 为脱溯源纯文本——前端
-    knowledge-search-tool 的 parseResult 解析不出 sources，自然降级为纯文本
-    展示，无 SourceCard/PDF 抽屉。"""
+    """客服面全链路：TOOL_CALL_RESULT 的 content 为纯状态文案——前端
+    knowledge-search-tool 的 parseResult 解析不出 sources，自然降级为单行
+    状态展示，命中正文/出处与 SourceCard/PDF 抽屉都不出现。"""
     from app.application.translator.agui_translator import AgUiTranslator
 
     retrieval = StubRetrieval(result=([_hit(content="退货政策为七天无理由。")], []))
@@ -215,5 +216,4 @@ def test_support_stream_agui_frames_have_no_provenance_payload():
     kinds = [e["type"] for e in events]
     assert kinds[0] == "RUN_STARTED" and kinds[-1] == "RUN_FINISHED"
     result = next(e for e in events if e["type"] == "TOOL_CALL_RESULT")
-    assert "文档A" not in result["content"] and "sources" not in result["content"]
-    assert "退货政策为七天无理由。" in result["content"]
+    assert result["content"] == "调用成功"

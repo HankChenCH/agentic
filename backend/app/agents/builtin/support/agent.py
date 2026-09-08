@@ -1,14 +1,16 @@
-"""builtin:support 智能体：与 builtin:rag 同知识/记忆工具面、客服人设、透传脱溯源。
+"""builtin:support 智能体：与 builtin:rag 同知识/记忆工具面、客服人设、前端只报成败。
 
 在知识 + 记忆组件之外另挂转人工面：human_agent 组件查库取坐席列表，
 a2ui 组件提供 a2ui_compose 生成通道——转接卡片由 LLM 以组件树参数自主
 构造（Generative UI），工具只做校验/翻译/下发。差异有两处：① 人设——
 面向最终用户的客服口径，检索出处不外露（引用纪律属智能体人设层，见
 prompts.py；工具 description 保持中性）；② 流投影——SupportToolsTransformer
-把检索结果的透传副本摘成无出处纯文本（LLM 侧照常拿完整 JSON，作答质量
-不受影响；human_agent/a2ui 工具不在脱溯源名单内，artifact 经 ui 透传）。
-前端零组件改动：同名工具的溯源卡片因拿不到溯源 JSON 自然降级，A2UI 卡片
-走既有 CUSTOM data part 渲染。
+把检索结果的前端透传副本压成「调用成功」状态文案（LLM 侧照常拿完整
+JSON，作答质量不受影响；human_agent/a2ui 工具不在脱敏名单内，artifact
+经 ui 透传）。
+前端呈现：同名工具拿到纯文本结果即渲染为「知识库检索 · 调用成功」式
+单行状态（knowledge-search-tool 的文本形态分支，流式与历史同路径），
+A2UI 卡片走既有 CUSTOM data part 渲染。
 """
 
 from app.agents.base import BaseAgent, register_agent

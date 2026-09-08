@@ -1,5 +1,6 @@
 import { useState, type FC } from "react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
 import {
   LayoutGridIcon,
   LogOutIcon,
@@ -8,6 +9,8 @@ import {
   UserRoundIcon,
   XIcon,
 } from "lucide-react";
+
+import { useAuiEvent } from "@assistant-ui/react";
 
 import { A2uiDataUI } from "@/components/assistant-ui/a2ui-data";
 import {
@@ -48,6 +51,20 @@ export const ChatPage: FC = () => {
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const user = useAuthStore((s) => s.user);
+
+  // 附件添加失败转 toast：图片选中即上传（services/image-attachment-adapter）
+  // 后，add 阶段的失败由 runtime 原位标记附件错误态（缩略图红框浮层）并发出
+  // composer.attachmentAddError——此处补一层离开输入框仍可见的提示。scope「*」
+  // 从根客户端订阅，正文与编辑消息的 composer 失败都能收到；文件类型被拒
+  // （not-accepted）同样走这里，此前是静默失败。
+  useAuiEvent(
+    { scope: "*", event: "composer.attachmentAddError" },
+    ({ reason, message }) => {
+      toast.error(
+        reason === "adapter-error" ? `图片上传失败：${message}` : message,
+      );
+    },
+  );
 
   // 退出：清会话 + 整页跳登录（整页刷新顺带重置 runtime 与 agent.threadId，
   // 会话身份随用户切换彻底归零）

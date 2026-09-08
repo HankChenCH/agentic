@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
-import { LoaderIcon, ChevronDownIcon, SearchIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  LoaderIcon,
+  SearchIcon,
+  XCircleIcon,
+} from "lucide-react";
 import { useAssistantToolUI, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +30,11 @@ import type {
  * 后端把结果序列化为 JSON 字符串（LLM 与前端共用），经 ag-ui
  * ToolCallResultEvent.content 与历史 TOOL_RESULT 行原样透传到 tool-call
  * part 的 result——实时流与刷新后的历史回放走同一条渲染路径。
+ *
+ * 两种呈现形态：结果解析出 sources → 折叠溯源卡片（rag 等内部场景）；
+ * 结果是纯文本 → 单行状态（智能客服经后端双内容契约脱敏为「调用成功」，
+ * 未命中说明/引导话术同理），失败/取消轮次以状态图标如实标注——文本型
+ * 结果存在即工具自身已完成，状态以结果为准。
  *
  * 注册方式：``useAssistantToolUI`` 挂载即注册（仅影响渲染，不改变发给
  * 服务端的工具清单——工具由后端定义并执行）。
@@ -120,12 +130,38 @@ function makeKnowledgeToolRender({
     const pdfPreview = usePdfPreview();
     const parsed = useMemo(() => parseResult(result), [result]);
     const running = status?.type === "running";
+    const incomplete = status?.type === "incomplete";
 
     const openSource = (index: number) => {
       // 溯源走右侧抽屉（非模态）：携带整批来源，打开后可随时切换
       if (!parsed) return;
       pdfPreview.openPanel({ sources: parsed.sources, activeIndex: index });
     };
+
+    // 单行状态（无可展开的溯源内容）：文本型结果——客服智能体的「调用成功」
+    // 脱敏状态、未命中说明/引导话术；失败/取消轮次只报调用状态。文本结果
+    // 存在说明工具自身完成过，优先于轮次级 incomplete 呈现。
+    if (!running && !parsed && (typeof result === "string" || incomplete)) {
+      const failed = incomplete && typeof result !== "string";
+      const statusText =
+        typeof result === "string"
+          ? result
+          : status?.type === "incomplete" && status.reason === "cancelled"
+            ? "已取消"
+            : "调用失败";
+      return (
+        <div className="text-muted-foreground flex w-fit items-center gap-2 py-1.5 text-sm">
+          {failed ? (
+            <XCircleIcon className="size-4 shrink-0" />
+          ) : (
+            <SearchIcon className="size-4 shrink-0" />
+          )}
+          <span>
+            {plainLabel} · {statusText}
+          </span>
+        </div>
+      );
+    }
 
     const label = running
       ? runningLabel
@@ -150,7 +186,7 @@ function makeKnowledgeToolRender({
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="flex flex-col gap-2 ps-6 pt-1 pb-2">
-            {parsed ? (
+            {parsed && (
               <>
                 {parsed.sources.map((source, index) => (
                   <SourceCard
@@ -165,12 +201,7 @@ function makeKnowledgeToolRender({
                   </p>
                 ))}
               </>
-            ) : typeof result === "string" ? (
-              // 历史纯文本结果（旧格式/未检索到/引导话术）：原样展示
-              <pre className="bg-muted/50 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-                {result}
-              </pre>
-            ) : null}
+            )}
           </div>
         </CollapsibleContent>
       </Collapsible>
