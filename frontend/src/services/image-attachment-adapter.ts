@@ -3,6 +3,7 @@ import type {
   CompleteAttachment,
   PendingAttachment,
 } from "@assistant-ui/react";
+import { randomUUID } from "@ag-ui/client";
 
 import { REST_BASE } from "@/lib/config";
 import { attachmentService } from "@/services/attachment-service";
@@ -47,7 +48,10 @@ export class ServerImageAttachmentAdapter implements AttachmentAdapter {
     // 上传即刻发起（multipart 经 axios 鉴权拦截器），不等用户点发送
     const upload = attachmentService.upload(file);
     const attachment: UploadingAttachment = {
-      id: crypto.randomUUID(),
+      // 不能用原生 crypto.randomUUID：它只在安全上下文（HTTPS/localhost）存在，
+      // HTTP 域名访问时是 undefined（生产踩坑）；@ag-ui/client 的 randomUUID
+      // 走 uuid 包的 v4 实现（crypto.getRandomValues），非安全上下文同样可用
+      id: randomUUID(),
       type: "image",
       name: file.name,
       contentType: file.type || "image/png",

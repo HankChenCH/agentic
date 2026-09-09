@@ -286,7 +286,10 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   同一附件（runtime 按 id 原位替换）：选中文件立即发起 `attachmentService.upload`，
   先 yield「上传中」态（缩略图转圈），完成后再 yield「待发送」态，上传与打字
   并行；`send()` 复用挂到附件对象上的上传结果（promise 随行，无实例级缓存），
-  点发送不再等待上传。失败语义仍是「上传成功才能发消息」：add 阶段失败生成器
+  点发送不再等待上传。附件 id 用 `@ag-ui/client` 的 `randomUUID`（uuid 包 v4，
+  会话 threadId 同源）——原生 `crypto.randomUUID` 只在安全上下文（HTTPS/
+  localhost）存在，HTTP 域名访问时是 undefined（生产踩坑：图片上传失败）。
+  失败语义仍是「上传成功才能发消息」：add 阶段失败生成器
   抛错 → runtime 原位标记附件错误态 + 发 `composer.attachmentAddError` 事件
   （chat-page 以 `useAuiEvent({ scope: "*" })` 订阅转 toast，文件类型被拒的
   not-accepted 也走这里，此前是静默失败）；发送时对失败附件重试一次，再失败
