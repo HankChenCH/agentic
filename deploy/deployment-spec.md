@@ -213,9 +213,10 @@ docker compose run --rm migrate  # 兜底重跑迁移（幂等，通常 up 已�
 ### 12.2 远程部署（浏览器不在宿主机上）
 
 - `RUSTFS_PUBLIC_ENDPOINT` 必须改成浏览器可达地址（如
-  `http://<host>:9000`）。中间件宿主口当前绑 127.0.0.1，远程可达需在 compose
-  显式放开绑定或前置反代；反代 rustfs 时**必须原样透传 host+path**（SigV4
-  签名含 host，子路径改写会签名失配）。
+  `http://<host>:9000`）。rustfs 容器宿主口绑全部网卡（`"9000:9000"`），
+  远程可达只需云防火墙/安全组放行 9000；不想直曝对象存储可前置反代，反代
+  rustfs 时**必须原样透传 host+path**（SigV4 签名含 host，子路径改写会签名
+  失配）。postgres/weaviate/redis 的宿主口绑 127.0.0.1，无需远程可达。
 - `WEB_PORT`/`SERVER_PORT` 按需调整；`CORS_ORIGINS` 仅跨域直连形态需要。
 
 ### 12.3 公网 / TLS

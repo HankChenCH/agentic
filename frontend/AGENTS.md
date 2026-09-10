@@ -295,8 +295,8 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   not-accepted 也走这里，此前是静默失败）；发送时对失败附件重试一次，再失败
   才中止提交（runtime 自动还原文本）。选了又移除的图片会留下服务端孤儿对象
   （与旧口径一致，孤儿清理是后续项）。
-  适配器 send 时把后端返回的稳定相对 url 拼成「REST_BASE + 相对路径」的
-  绝对 URL 上送（浏览器 `<img>` 渲染需要绝对地址，Vite 无 dev 代理），
+  适配器 send 时把后端返回的稳定相对 url 拼成「页面 origin + 相对路径」的
+  绝对 URL 上送（**不带** /api 反代前缀：后端按 path 前缀识别本域引用），
   消息/历史里存的就是这个绝对引用（永不过期）。
   **展示必须先换预签名地址**：`<img>`/新标签页带不上 Authorization 头，
   稳定引用直渲必 401（rustfs 的 302 预签名响应无 CORS 头，fetch 跟随
@@ -305,8 +305,15 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   换签名地址再渲染，模块级缓存 + 半程 TTL 重签；后端返回 `url=null`
   （本地磁盘后端）降级为鉴权 fetch 转 blob。历史重载的还原在
   `translators/thread-message-translator.ts` 的 `toUserThreadMessage`（image
-  part → attachments 卡片）：绝对 URL 直接用，裸相对引用拼 `${REST_BASE}`，
-  最终都走同一换签 hook。后端按 path 前缀识别本域引用、服务端读对象存储
+  part → attachments 卡片）：url 引用**原样透传**（绝对 URL 与裸相对引用
+  都不拼 REST_BASE——拼上 /api 前缀后端就失配了），最终都走同一换签 hook。
+  后端按 path 前缀识别本域引用、服务端读对象存储
   转 base64 喂模型（外部 URL 才透传）。附件 UI（加号/拖拽/预览）是
   assistant-ui 模板自带的，注册适配器即激活。composer 里的语音按钮
   （Dictate）仍无适配器，点了无效。
+  **引用判域/拼址必须经 `lib/attachment-url.ts`**（isAttachmentRef /
+  toFetchableUrl，纯函数有单测）：不能 `new URL(ref, REST_BASE)`——同源反代
+  部署（一键 compose 烘焙 `VITE_API_BASE=/api`）下 REST_BASE 是相对形态，
+  URL 构造器对非法 base 直接抛 TypeError（待解析串是绝对 URL 也一样抛），
+  判域恒 false → 换签永不发生 → 稳定引用直进 `<img>` 404/401（生产踩坑：
+  历史会话图片全裂、dev 因 REST_BASE 是绝对地址从不复现）。

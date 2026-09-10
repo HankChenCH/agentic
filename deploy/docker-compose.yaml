@@ -48,7 +48,9 @@ name: agentic-stack
 
 include:
   # 中间件四件（postgres / weaviate / rustfs + rustfs-init / redis），
-  # 定义、健康检查、数据卷与 dev 栈完全同源；其端口发布仅绑 127.0.0.1。
+  # 定义、健康检查、数据卷与 dev 栈完全同源；postgres/weaviate/redis 的宿主
+  # 端口仅绑 127.0.0.1，rustfs（9000）绑全部网卡——远程部署的图片展示依赖
+  # 浏览器可达 rustfs（RUSTFS_PUBLIC_ENDPOINT + 防火墙放行 9000）。
   - ../backend/docker-compose.yaml
 
 # server 家族共享环境：容器网络内服务名互访 + 宿主机侧资源经 host.docker.internal
