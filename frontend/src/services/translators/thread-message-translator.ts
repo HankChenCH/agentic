@@ -6,7 +6,6 @@ import type {
   ToolCallMessagePart,
 } from "@assistant-ui/core";
 
-import { REST_BASE } from "@/lib/config";
 import type {
   BackendConversationTurn,
   BackendMessage,
@@ -51,8 +50,9 @@ import type {
 
 function toUserThreadMessage(m: BackendMessage): ThreadMessageLike {
   // 多模态：text parts 聚合为文本内容；image parts（稳定附件引用或 base64
-  // 内联）还原为附件卡片展示。引用 url 直接指向后端 302 路由（渲染时由
-  // 后端换发预签名地址，浏览器直拉对象存储），无需鉴权头也无需 blob 中转。
+  // 内联）还原为附件卡片展示。稳定引用不能直进 <img>（带不上鉴权头必
+  // 401），由 attachment.tsx 的 useAttachmentDisplaySrc 经后端换签接口解析
+  // 为预签名地址后渲染，本层只做形态透传。
   const text = m.content
     .filter((c): c is Extract<BackendMessageContent, { type: "text" }> => c.type === "text")
     .map((c) => c.text)
@@ -62,14 +62,15 @@ function toUserThreadMessage(m: BackendMessage): ThreadMessageLike {
     .filter((c): c is Extract<BackendMessageContent, { type: "image" }> => c.type === "image")
     .map((part, index) => {
       const mime = part.source.mimeType ?? "image/png";
-      // url source 两种形态并存：当前发送链路存「API 根 + 相对路径」的绝对
-      // URL（浏览器 <img> 渲染需要），直接用；裸相对引用拼 REST_BASE。
+      // url source 两形态并存（均原样保留）：绝对 URL（当前发送链路存
+      // 「页面 origin + 相对路径」）与裸相对引用。展示由 attachment.tsx 的
+      // 换签 hook 解析；后端消费（resolve_own_key / 多模态回放）按 path
+      // 前缀识别本域引用——不能拼 REST_BASE（同源反代形态是 /api，拼上后
+      // 后端前缀失配 404，生产踩坑）。
       const image =
         part.source.type === "data"
           ? `data:${mime};base64,${part.source.value}`
-          : /^https?:\/\//i.test(part.source.value)
-            ? part.source.value
-            : `${REST_BASE}${part.source.value}`;
+          : part.source.value;
       return {
         id: `${m.message_id}-${index}`,
         type: "image" as const,

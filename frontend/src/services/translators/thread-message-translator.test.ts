@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { REST_BASE } from "@/lib/config";
 import {
   toThreadBranchTree,
   toThreadMessages,
@@ -239,14 +238,14 @@ describe("附件解析", () => {
     expect(atts[0]?.content[0]?.image).toBe("data:image/jpeg;base64,QUJD");
   });
 
-  it("url 源：相对引用拼 REST_BASE，绝对 http(s) 原样保留", () => {
+  it("url 源：绝对 http(s) 与裸相对引用均原样保留（不拼 REST_BASE）", () => {
     const atts = attachmentsOf([
       { type: "image", source: { type: "url", value: "/agentic/attachments/a.png" } },
       { type: "image", source: { type: "url", value: "https://example.com/b.png" } },
       { type: "image", source: { type: "url", value: "HTTP://example.com/c.png" } },
     ]);
     expect(atts.map((a) => a.content[0]?.image)).toEqual([
-      `${REST_BASE}/agentic/attachments/a.png`,
+      "/agentic/attachments/a.png",
       "https://example.com/b.png",
       "HTTP://example.com/c.png",
     ]);

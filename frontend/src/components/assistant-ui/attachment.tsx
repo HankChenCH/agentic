@@ -32,7 +32,7 @@ import {
   AvatarFallback,
 } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { REST_BASE } from "@/lib/config";
+import { isAttachmentRef, toFetchableUrl } from "@/lib/attachment-url";
 import { attachmentService } from "@/services/attachment-service";
 import { getToken } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
@@ -67,15 +67,9 @@ const displayUrlCache = new Map<
 // 后端签名 TTL 600s，取半程视为过期重签，避免渲染中途签名失效
 const DISPLAY_URL_TTL_MS = 5 * 60 * 1000;
 
-// 本域附件引用判定：裸相对路径或「API 根 + 相对路径」的绝对 URL（host
-// 任意）都算，与后端 resolve_own_key 的 path 比前缀口径一致
-const isAttachmentRef = (src: string) => {
-  try {
-    return new URL(src, REST_BASE).pathname.startsWith("/agentic/attachments/");
-  } catch {
-    return false;
-  }
-};
+// 本域附件引用判定与 URL 拼接在 lib/attachment-url.ts（纯逻辑可单测）：
+// REST_BASE 为相对形态（同源反代部署）时不能走 new URL(ref, REST_BASE)，
+// 否则 URL 构造器抛错、判域恒 false、换签永不发生（生产裂图根因）。
 
 // 无签名可用（后端返回 url=null，本地磁盘后端）时的降级：鉴权 fetch 稳定
 // 引用转 blob。本地后端无 302、同 API 源无跨域问题，字节可直接读取。
@@ -84,7 +78,7 @@ const fetchAttachmentBlobUrl = async (
 ): Promise<string | undefined> => {
   try {
     const token = getToken();
-    const res = await fetch(new URL(ref, REST_BASE).toString(), {
+    const res = await fetch(toFetchableUrl(ref), {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     if (!res.ok) return undefined;
