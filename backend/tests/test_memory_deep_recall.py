@@ -57,6 +57,14 @@ def test_timeline_renders_event_fragments_and_marks_seen(engine):
     assert again == ""  # 同会话已投喂内容不重复返回（SessionInjectRegistry）
 
 
+def test_timeline_no_hit_returns_friendly_empty_state(engine):
+    # 零命中返回空态文案而非空串：空串作为工具结果落库后会被客户端原样
+    # 回放（role:tool, content:""），历史里混入空 content 消息
+    h = Harness(engine)
+    out = h.svc.timeline("查无此情节", TEST_USER_ID, uuid4())
+    assert out.startswith("（未找到")
+
+
 def test_expand_by_alias_and_vector_fallback_paths(engine):
     # 主路径：别名精确命中后输出邻域陈述
     h = Harness(engine)

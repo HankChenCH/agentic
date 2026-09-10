@@ -140,7 +140,12 @@ class MemoryRecallService:
         by_id = {ep.id: ep for ep in episodes}
         eps_scored = [(by_id[ref], score) for ref, score in fresh if ref in by_id]
         if not eps_scored:
-            return renderer.fragments_output(now, [])
+            if not hits or fresh:
+                # 纯未命中（向量无命中或命中行已不在库）：给友好空态文案而非
+                # 空串——空串作为工具结果落库后会被客户端原样回放，历史里
+                # 混入空 content 消息
+                return f"（未找到与“{query}”相关的记忆片段）"
+            return ""  # 有命中但全会话已投喂：无增量，不重复返回
 
         links = repo.links_for_episodes([ep.id for ep, _s in eps_scored])
         ent_ids = sorted({lk.entity_id for bundle in links.values() for lk in bundle})
