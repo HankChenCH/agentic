@@ -18,6 +18,10 @@ class RunMessage(BaseModel):
     # 原文（knowledge_search 的 JSON 含溯源信息，可达数十 KB）。服务端
     # 只消费 messages[-1].content（见 agentic endpoint），历史消息仅透传，
     # 上限放宽到只挡异常 payload，不约束正常工具结果。
+    # 空字符串 content 是协议合法的历史形态（工具空返回如 timeline 空命中、
+    # 只有工具调用没有文本的 assistant 消息），不得拒绝——否则该形态一旦
+    # 落库回放，整条会话的续聊/重试都会被 422 毒化。当前提问的非空闸在
+    # RunRequest 层按 messages[-1] 位置收口。
     id: str = Field(..., description="会话消息标识", min_length=1, max_length=128)
     role: str = Field(..., description="会话角色", min_length=1, max_length=30)
     # 多模态口径：字符串（纯文本，历史兼容）或 ag-ui InputContent 数组
@@ -33,8 +37,9 @@ class RunMessage(BaseModel):
     @classmethod
     def _validate_multimodal(cls, value: Union[str, List[InputContent]]):
         if isinstance(value, str):
-            if not (1 <= len(value) <= _MAX_TEXT_CHARS):
-                raise ValueError(f"content length must be within [{1}, {_MAX_TEXT_CHARS}]")
+            # 空串放行（历史回放合法形态，见类注释）；上限仍把守异常 payload
+            if len(value) > _MAX_TEXT_CHARS:
+                raise ValueError(f"content length must be within [{0}, {_MAX_TEXT_CHARS}]")
             return value
         if not value:
             raise ValueError("content array must not be empty")
@@ -79,11 +84,27 @@ class RunMessage(BaseModel):
 class RunRequest(BaseModel):
     threadId: UUID = Field(..., description="会话标识")
     runId: str = Field(..., description="会话轮次标识", min_length=1, max_length=36)
-    messages: List[RunMessage] = Field(..., description="消息列表")
+    messages: List[RunMessage] = Field(..., min_length=1, description="消息列表")
     # ag-ui 协议的透传字段（客户端 @ag-ui/client 会合并 forwardedProps 进请求体）：
     # 本项目消费 ``agentId``——前端选择 UI 指定本轮绑定的智能体，缺省沿用会话
     # 现有绑定（新建会话则用全局默认）。协议字段为 any，这里只收 dict 平铺形态。
     forwardedProps: Optional[dict] = Field(None, description="客户端透传字段（消费 agentId）")
+
+    @model_validator(mode="after")
+    def _last_message_must_carry_content(self):
+        # 历史空串放行（见 RunMessage 注释），但末条消息是本轮提问——端点只
+        # 消费 messages[-1].content，空提问只会烧一轮无意义的模型调用
+        last = self.messages[-1]
+        if isinstance(last.content, str):
+            if not last.content.strip():
+                raise ValueError("the last message (current prompt) must not be empty")
+            return self
+        if not any(
+            part.type == "image" or (part.type == "text" and (part.text or "").strip())
+            for part in last.content
+        ):
+            raise ValueError("the last message (current prompt) must not be empty")
+        return self
 
 class CancelRequest(BaseModel):
     # 显式取消按 thread 作用域：一个会话同一时刻只有一个活跃轮次，前端

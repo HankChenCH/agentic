@@ -442,7 +442,9 @@ def test_edit_latest_question_creates_sibling_attempt(service, engine):
     texts = [m.content for m in history if m.type == "ai" and isinstance(m.content, str)]
     assert "A2" not in texts and "A2-编辑" in texts
 
+    _answer(service, t4, "A3")
     # 历史展示：t2（被编辑替换的旧 COMPLETED 轮次）隐藏，活跃问答保留
+    # （进行中/作废轮次同样不下发，见 test_history_excludes_voided_turns）
     items = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)["items"]
     ids = {t["turn_id"] for t in items}
     assert t2.turn_id not in ids
@@ -475,8 +477,9 @@ def test_history_includes_tip_fan_for_offline_comparison(service, engine):
     assert {t2.turn_id, t3.turn_id} <= ids2
 
 
-def test_history_returns_active_path_plus_incomplete_turns(service, engine):
-    """历史集合：末梢扇形（新旧变体）可见可切换，失败/取消轮次保留（标注状态）。"""
+def test_history_excludes_voided_turns(service, engine):
+    """历史集合：作废轮次（失败/取消/悬挂 RUNNING）不是活跃节点，一律不下发；
+    末梢扇形只保留已完成变体。轮次行本身仍在库中（审计/分支定位不受影响）。"""
     thread_id = uuid4()
     _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
     _answer(service, t1, "A1")
@@ -485,7 +488,7 @@ def test_history_returns_active_path_plus_incomplete_turns(service, engine):
     _, t2 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r2", content=_text("Q2"))
     service.fail_turn(t2)
 
-    # Q1 重试成功 → 末梢变体扇形 = {t1, retry} 都可见可切换；t2 失败轮保留标注
+    # Q1 重试成功 → 末梢变体扇形 = {t1, retry}；t2 失败轮不下发
     _, retry = service.open_turn(
         user_id=TEST_USER_ID, thread_id=thread_id, run_id="r3",
         content=_text("Q1"), payload=_user_payload("Q1"),
@@ -495,17 +498,30 @@ def test_history_returns_active_path_plus_incomplete_turns(service, engine):
     result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
     items = result["items"]
     ids = {t["turn_id"] for t in items}
-    assert result["total"] == len(items) == 3
+    assert result["total"] == len(items) == 2
     assert result["active_turn_id"] == retry.turn_id
     assert retry.turn_id in ids          # 活跃叶子（新变体）
-    assert t1.turn_id in ids             # 末梢扇形旧变体：保留可切换
-    assert t2.turn_id in ids             # 失败轮次：保留并标注
-    by_id = {t["turn_id"]: t for t in items}
-    assert AgenticTurnStatus(by_id[t2.turn_id]["status"]) == AgenticTurnStatus.FAILED
-    assert AgenticTurnStatus(by_id[retry.turn_id]["status"]) == AgenticTurnStatus.COMPLETED
-    # 分支元数据随 model_dump 下发（前端后续可重建分支）
-    assert by_id[retry.turn_id]["parent_turn_id"] is None
-    assert by_id[retry.turn_id]["attempt_no"] == 2
+    assert t1.turn_id in ids             # 末梢扇形旧变体：已完成，保留可对比
+    assert t2.turn_id not in ids         # 失败轮次：作废，不进历史
+    # 库里仍在：审计与分支定位不受展示过滤影响
+    with Session(engine) as session:
+        row = session.exec(
+            select(AgenticConversationTurn).where(AgenticConversationTurn.turn_id == t2.turn_id)
+        ).one()
+    assert AgenticTurnStatus(row.status) == AgenticTurnStatus.FAILED
+
+
+def test_history_canceled_root_turn_yields_empty_history(service):
+    """首个提问即被取消（无任何 COMPLETED 轮次）：历史为空——作废轮次不充当
+    活跃节点，避免"悬空提问 + 已停止占位"被当作正常对话回放。"""
+    thread_id = uuid4()
+    _, t1 = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="r1", content=_text("Q1"))
+    service.cancel_turn(t1)
+
+    result = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)
+    assert result["items"] == []
+    assert result["total"] == 0
+    assert result["active_turn_id"] is None
 
 
 def test_history_paging_keeps_latest_page_semantics(service, engine):

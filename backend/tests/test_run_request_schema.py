@@ -6,8 +6,9 @@
 
 import pytest
 from pydantic import ValidationError
+from uuid import UUID
 
-from app.models.schema.request.run import RunMessage
+from app.models.schema.request.run import RunMessage, RunRequest
 
 
 def _image_url(value="/agentic/attachments/3fa85f64-5717-4562-b3fc-2c963f66afa6/pic.png", mime="image/png"):
@@ -89,3 +90,57 @@ def test_image_only_message_allowed():
     # 图示提问：无文本纯图片合法
     msg = RunMessage(id="m11", role="user", content=[_image_url()])
     assert msg.storage_content()[0]["type"] == "image"
+
+
+# ==================== 历史空 content 容忍与末条提问闸（RunRequest） ====================
+#
+# 回放历史里空字符串 content 是协议合法形态：工具空返回（如 timeline 空命中
+# 曾落库 content:""）、只有工具调用没有文本的 assistant 消息。历史上该形态
+# 被 min_length=1 拒绝后，整条会话的续聊/重试全部 422 毒化。
+
+
+def _run_request(*role_content_pairs):
+    messages = [
+        RunMessage(id=f"m{i}", role=role, content=content)
+        for i, (role, content) in enumerate(role_content_pairs)
+    ]
+    return RunRequest(
+        threadId=UUID("7a50549d-9d99-4797-bc0b-c72f9a70b48d"),
+        runId="run-1",
+        messages=messages,
+    )
+
+
+def test_empty_string_history_content_accepted():
+    msg = RunMessage(id="m12", role="tool", content="")
+    assert msg.storage_content() == [{"type": "text", "text": ""}]
+
+
+def test_run_request_accepts_empty_content_history_with_valid_prompt():
+    req = _run_request(
+        ("user", "复述：测试历史回放"),
+        ("assistant", ""),   # 纯工具调用 assistant 消息（无文本）
+        ("tool", ""),        # 工具空返回
+        ("user", "继续"),
+    )
+    assert req.messages[-1].content == "继续"
+
+
+def test_run_request_rejects_empty_last_message():
+    with pytest.raises(ValidationError, match="current prompt"):
+        _run_request(("user", "你好"), ("tool", ""), ("tool", ""))
+
+
+def test_run_request_rejects_whitespace_only_last_message():
+    with pytest.raises(ValidationError, match="current prompt"):
+        _run_request(("user", "你好"), ("user", "   "))
+
+
+def test_run_request_allows_image_only_last_message():
+    req = _run_request(("user", "你好"), ("user", [_image_url()]))
+    assert req.messages[-1].storage_content()[0]["type"] == "image"
+
+
+def test_run_request_rejects_empty_messages_list():
+    with pytest.raises(ValidationError):
+        _run_request()

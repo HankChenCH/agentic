@@ -215,6 +215,8 @@ def test_history_replaces_tool_result_with_display_content(service):
     thread_id = uuid4()
     _, turn = service.open_turn(user_id=TEST_USER_ID, thread_id=thread_id, run_id="run-h", content=_text("问"))
     service.conversation_repo.store_conversation_messages(_tool_rows(thread_id, turn.turn_id, 1))
+    # 历史集合只含 COMPLETED 轮次（作废/进行中不下发），先收口再读
+    service.complete_turn(turn)
 
     items = service.list_history_messages(user_id=TEST_USER_ID, thread_id=thread_id)["items"]
     parts = [

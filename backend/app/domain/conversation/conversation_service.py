@@ -379,13 +379,16 @@ class ConversationService:
         return self.conversation_repo.activate_turn(thread_id=thread_id, turn_id=turn_id)
 
     def list_history_messages(self, user_id: UUID, thread_id: UUID, offset: int | None = None, limit: int = 20):
-        """UI 历史回放集合：活跃路径 + 末梢扇形 + 全部非 COMPLETED 轮次。
+        """UI 历史回放集合：活跃路径 + 末梢扇形，且仅限 COMPLETED 轮次。
 
         末梢扇形 = 活跃叶子的兄弟变体（同一问答的其他尝试）——刷新后仍可
         对比与切换（激活接口只允许在末梢移动叶子）。被续聊定型的历史槽位
-        不返回；失败/取消/悬挂 RUNNING 轮次保留并按状态标注（前端渲染失败
-        占位）。响应携带 ``active_turn_id``（活跃叶子），前端据此确定树的
-        head。offset/limit 沿用"取最新一页"语义，items 旧→新排序。
+        不返回。作废轮次（失败/取消/悬挂 RUNNING）**不是活跃节点**，一律
+        不下发——前端历史是线性回放，混入作废轮次会让主干出现"无回答的
+        悬空提问"（断流/主动取消后尤甚）；轮次行本身保留在库中供审计，
+        最新问答的重试对比由会话内实时分支承担。响应携带
+        ``active_turn_id``（活跃叶子）。offset/limit 沿用"取最新一页"语义，
+        items 旧→新排序。
 
         items 是轮次的**前端展示视图**（序列化后的 dict）：TOOL_RESULT 行带
         ``display_content``（工具结果双内容契约的展示版，见 StorageTranslator）
@@ -408,11 +411,12 @@ class ConversationService:
             for t in turns
             if leaf is not None and t.parent_turn_id == tip_slot_parent and t.turn_id != leaf.turn_id
         } if leaf is not None else set()
+        # 活跃路径全由 COMPLETED 组成（指针仅完成时推进）；扇形变体同样只保留
+        # 已完成的——作废轮次（失败/取消/悬挂）在下发面整体剔除
         visible = [
             t for t in turns
-            if t.turn_id in active_ids
-            or t.turn_id in fan_ids
-            or AgenticTurnStatus(t.status) != AgenticTurnStatus.COMPLETED
+            if AgenticTurnStatus(t.status) == AgenticTurnStatus.COMPLETED
+            and (t.turn_id in active_ids or t.turn_id in fan_ids)
         ]
         total = len(visible)
         start = offset or 0
