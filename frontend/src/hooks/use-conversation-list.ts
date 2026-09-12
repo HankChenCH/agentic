@@ -197,7 +197,8 @@ export function useConversationList(
   );
 
   /** 轮次结束后的静默元数据刷新：会话内新产生的变体（重试/编辑）补进映射
-   * 与「已更新」集合。失败静默——切换时查不到映射只降级为视觉切换。 */
+   * 与「已更新」集合。失败静默——切换时查不到映射按切换失败处理
+   * （toast + 回滚，见 branch-switch.ts）。 */
   const refreshBranchMeta = useCallback(
     async (threadId: string) => {
       try {

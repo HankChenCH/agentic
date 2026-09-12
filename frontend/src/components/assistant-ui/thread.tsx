@@ -21,6 +21,7 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { isTailTurnMessage } from "@/components/assistant-ui/branch-picker-gate";
+import { BranchSwitchController } from "@/components/assistant-ui/branch-switch";
 import { Button } from "@/components/ui/button";
 import { useConversationActions } from "@/hooks/use-conversation-list";
 import { conversationService } from "@/services/conversation-service";
@@ -58,6 +59,7 @@ import {
   SparklesIcon,
   SquareIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   createContext,
   useContext,
@@ -548,15 +550,21 @@ const EditComposer: FC = () => {
   );
 };
 
-/** 变体切换单键：调用运行时切到相邻分支，并把服务端活跃叶子同步到目标
+/** 变体切换单键：本地乐观切到相邻分支，异步把服务端活跃叶子同步到目标
  * 轮次（POST activate-turn）——「切换即对比基准移动」，后续对话与多轮
- * 回放都沿所选分支。目标消息映射不到轮次（极端时序）时只做视觉切换。 */
+ * 回放都沿所选分支。同步失败（网络/业务错/映射不到轮次）→ toast 提示并
+ * 回滚到切换前分支；成功静默。编排与连点口径见 branch-switch.ts。 */
+// 模块级单例：seq 标记「最新一次切换」，须跨渲染存活——点击与迟到的失败
+// 回调之间组件已随新分支重渲染，实例化在组件内会把旧失败误判为最新。
+const branchSwitchController = new BranchSwitchController();
+
 const BranchPickButton: FC<{ direction: "previous" | "next" }> = ({
   direction,
 }) => {
   const aui = useAui();
   const { turnByMessageId, currentThreadId } = useConversationActions();
   const isRunning = useAuiState((s) => s.thread.isRunning);
+  const messageId = useAuiState((s) => s.message.id);
   const atBound = useAuiState((s) =>
     direction === "previous"
       ? s.message.branchNumber <= 1
@@ -564,19 +572,27 @@ const BranchPickButton: FC<{ direction: "previous" | "next" }> = ({
   );
 
   const switchBranch = () => {
-    aui.message.switchToBranch({ position: direction });
-    // 仓库切换是同步的，但 aui 状态快照要等 React 提交后才更新 —— 立即读
-    // 末梢会拿到切换前的旧消息，activate-turn 会映射失败。推迟到下一个
-    // 宏任务（通知已 flush）再读。
-    window.setTimeout(() => {
-      const tail = aui.thread.getState().messages.at(-1);
-      const turnId = tail ? turnByMessageId.get(tail.id) : undefined;
-      if (turnId && currentThreadId) {
-        void conversationService
-          .activateTurn(currentThreadId, turnId)
-          .catch(() => {});
-      }
-    }, 0);
+    branchSwitchController.switch(
+      {
+        // 回滚用显式 branchId 直达切换前消息：此时本组件已随新分支重渲染，
+        // 闭包里的 aui.message 仍绑定旧消息作用域，恰好是回滚的定位键。
+        switchLocal: (position) => aui.message.switchToBranch({ position }),
+        switchLocalTo: (rollbackId) =>
+          aui.message.switchToBranch({ branchId: rollbackId }),
+        activateTurn: (threadId, turnId) =>
+          conversationService.activateTurn(threadId, turnId),
+        toastError: (message) => toast.error(message),
+        defer: (fn) => window.setTimeout(fn, 0),
+      },
+      {
+        position: direction,
+        previousMessageId: messageId,
+        threadId: currentThreadId,
+        turnByMessageId,
+        getTailMessageId: () =>
+          aui.thread.getState().messages.at(-1)?.id,
+      },
+    );
   };
 
   return (
