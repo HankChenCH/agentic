@@ -278,6 +278,15 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_knowledge_agent_binding_agent_id'))
 
     op.drop_table('knowledge_agent_binding')
+    # 自引用外键的摘除同样按方言分叉（与 upgrade 的挂载分支对称）：PG 上该
+    # 约束依赖 message_id 唯一索引做支撑，不先 drop_constraint 则 DROP INDEX
+    # 报 DependentObjectsStillExist；SQLite 约束随建表内联、随 drop_table 消失。
+    if op.get_bind().dialect.name != "sqlite":
+        op.drop_constraint(
+            'fk_conversation_message_parent_message_id',
+            'agentic_conversation_message',
+            type_='foreignkey',
+        )
     with op.batch_alter_table('agentic_conversation_message', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_agentic_conversation_message_turn_id'))
         batch_op.drop_index(batch_op.f('ix_agentic_conversation_message_thread_id'))
@@ -307,3 +316,14 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f('ix_agentic_conversation_thread_id'))
 
     op.drop_table('agentic_conversation')
+    # PG 原生枚举类型不随 op.drop_table 清理（SQLite 走 VARCHAR+CHECK，无类型可摘），
+    # 不显式 DROP TYPE 则 downgrade base 后再 upgrade 撞 CREATE TYPE already exists。
+    # 此时引用方表已全部落库，按名摘除即可；IF EXISTS 兼容半途状态。
+    if op.get_bind().dialect.name != "sqlite":
+        for enum_type in (
+            'agentic_message_role',
+            'agentic_message_type',
+            'agenticturnstatus',
+            'knowledgestatus',
+        ):
+            op.execute(f"DROP TYPE IF EXISTS {enum_type}")

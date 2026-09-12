@@ -64,6 +64,9 @@ x-server-environment: &server-environment
   # ---- 可选 ----
   MINERU_API_KEY: ${MINERU_API_KEY:-} # 知识库 PDF 解析用，留空则首次解析 fail-fast
   METRICS_ENABLED: ${METRICS_ENABLED:-true}
+  # refresh 旋转宽限期（秒，缺省 60；0 = 关闭）：宽限期内重放已旋转令牌只拒绝
+  # 不连坐（多标签页并发刷新竞态），宽限期外复用判定为窃取、整族吊销
+  AUTH_REFRESH_REUSE_GRACE_SECONDS: ${AUTH_REFRESH_REUSE_GRACE_SECONDS:-60}
   # ---- 数据库：容器编排默认 postgres（migrate 服务负责建表）----
   DB_DEFAULT: postgres
   POSTGRES_HOST: postgres # 网络内服务名；端口 5432（容器内），凭据与中间件栈同一组变量

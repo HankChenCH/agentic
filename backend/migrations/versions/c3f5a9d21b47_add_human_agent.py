@@ -46,3 +46,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index('ix_human_agent_status', table_name='human_agent')
     op.drop_table('human_agent')
+    # PG 原生枚举类型不随 op.drop_table 清理（SQLite 走 VARCHAR+CHECK，无类型可摘），
+    # 不显式 DROP TYPE 则 downgrade base 后再 upgrade 撞 CREATE TYPE already exists。
+    if op.get_bind().dialect.name != "sqlite":
+        op.execute("DROP TYPE IF EXISTS humanagentstatus")

@@ -89,7 +89,7 @@
 | --- | --- | --- |
 | **必填** | `DEEPSEEK_API_KEY` | llm.yaml 无默认值；compose 用 `:?` 在解析期拦截（早于容器启动） |
 | **必填** | `AUTH_JWT_SECRET` | JWT 签名密钥（HS256，≥32 字节强随机串）；compose 用 `:?` 在解析期拦截，且应用在 `APP_ENV=prod` 装配期二次校验——检出 dev 兜底密钥或长度不足 32 字节即拒绝启动（http/worker/migrate 全入口生效）；`python3 -c "import secrets; print(secrets.token_urlsafe(48))"` 生成 |
-| 可选 | `MINERU_API_KEY`（知识库 PDF 解析必需；xlsx/docx 默认本地解析为主、失败兜底走 MinerU 时也需要）、`APP_ENV`（缺省 `prod`）、`WEB_PORT`/`SERVER_PORT`、`RUSTFS_PUBLIC_ENDPOINT`、`OLLAMA_API_URL`、中间件凭据组（`POSTGRES_*`/`RUSTFS_*`） | 缺省值与注释见 compose 与 `.env.example` |
+| 可选 | `MINERU_API_KEY`（知识库 PDF 解析必需；xlsx/docx 默认本地解析为主、失败兜底走 MinerU 时也需要）、`APP_ENV`（缺省 `prod`）、`WEB_PORT`/`SERVER_PORT`、`RUSTFS_PUBLIC_ENDPOINT`、`RUSTFS_CORS_ALLOWED_ORIGINS`（缺省 `*`，§9.6）、`OLLAMA_API_URL`、`AUTH_REFRESH_REUSE_GRACE_SECONDS`（refresh 旋转宽限期秒数，缺省 60，0 = 关闭——宽限期内重放已旋转令牌只拒绝不连坐）、中间件凭据组（`POSTGRES_*`/`RUSTFS_*`） | 缺省值与注释见 compose 与 `.env.example` |
 
 规则：
 
@@ -168,8 +168,12 @@
 5. 限流不在应用内（既定决策）：公网部署由网关层实现，nginx `limit_req`
    示例见 §12.3；请求体上限已由后端中间件与 nginx（`client_max_body_size
    64m`）双侧收口。
-6. 预签名 URL（附件 302）TTL 600s、不落库不进日志；代理形态必须原样透传
-   host+path（§12.2）。
+6. 预签名 URL（附件 302、知识库文档 `/file` 302）TTL 600s、不落库不进日志；
+   代理形态必须原样透传 host+path（§12.2）。浏览器直拉预签名对象还要求
+   rustfs 响应 CORS 头——compose 经 `RUSTFS_CORS_ALLOWED_ORIGINS` 配置
+   （缺省 `*`：预签名鉴权在 query 串、浏览器不发 credentials，与拓扑无关；
+   收紧改精确 origin 逗号列表），rustfs 缺省不返回任何 CORS 头，缺了它
+   fetch 跟随跨域 302 读不到字节（`<img>` 原生加载不受影响）。
 
 ## 10. 进程语义与扩缩容
 
@@ -217,7 +221,9 @@ docker compose run --rm migrate  # 兜底重跑迁移（幂等，通常 up 已�
   远程可达只需云防火墙/安全组放行 9000；不想直曝对象存储可前置反代，反代
   rustfs 时**必须原样透传 host+path**（SigV4 签名含 host，子路径改写会签名
   失配）。postgres/weaviate/redis 的宿主口绑 127.0.0.1，无需远程可达。
-- `WEB_PORT`/`SERVER_PORT` 按需调整；`CORS_ORIGINS` 仅跨域直连形态需要。
+- `WEB_PORT`/`SERVER_PORT` 按需调整；`CORS_ORIGINS` 仅跨域直连形态需要；
+  `RUSTFS_CORS_ALLOWED_ORIGINS` 缺省 `*` 已覆盖本形态（要收紧则登记
+  页面 origin，如 `http://<host>:8081`）。
 
 ### 12.3 公网 / TLS
 

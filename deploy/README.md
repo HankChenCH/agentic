@@ -116,6 +116,21 @@ docker compose build frontend && docker compose up -d frontend
   `cd ../server && docker compose down`；回 dev 栈前先
   `docker compose down`（本目录）。
 
+## e2e 验证（经 nginx 全栈入口）
+
+`./e2e-fullstack.sh` 在全栈拉起后跑后端 e2e 套件的「网关变体」：入口是
+前端 nginx（:8081），`/api/` 前缀剥离后转发后端。脚本先探测入口与
+`/api/health`，再以 `E2E_BASE_URL=http://127.0.0.1:8081 E2E_API_PREFIX=/api
+pytest tests_e2e/` 运行——前缀改写与 429 退避（nginx 对 `/api/auth/` 限流
+1r/s + burst 5）在 `backend/tests_e2e/helpers.py`；代理特有断言
+（限流 429 生效、SSE 禁缓冲透传、X-Request-ID 头）在
+`test_e2e_gateway.py`，仅本变体运行。直连模式（dev 服务 :8000）跑同一
+套件：`E2E_BASE_URL=http://127.0.0.1:8000 uv run pytest tests_e2e/`。
+
+**注意**：本栈 worker 与 dev 栈共用宿主 redis（127.0.0.1:6379）时，同一
+时刻只能有一个 worker 在跑——两 worker 并存会互相抢摄取任务（dev worker
+把任务打到 dev SQLite，本栈 PG 里的文档永远 pending）。
+
 ## 故障排查
 
 | 现象 | 处置 |

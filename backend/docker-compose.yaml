@@ -88,6 +88,11 @@ services:
       RUSTFS_ADDRESS: ":9000"
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "true"
+      # 浏览器直拉预签名对象（附件 <img> 与知识库 PDF fetch 跟随 302）需要
+      # 响应带 CORS 头——rustfs 默认不加任何 CORS 头。预签名鉴权在 query
+      # 串且前端不发 credentials，缺省 * 与部署拓扑无关；要收紧就配成
+      # 精确 origin 逗号列表（如 http://localhost:5173,http://127.0.0.1:5173）
+      RUSTFS_CORS_ALLOWED_ORIGINS: ${RUSTFS_CORS_ALLOWED_ORIGINS:-*}
     volumes:
       - rustfs-data:/data
     healthcheck:
