@@ -61,8 +61,19 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Pytest
-        run: uv run pytest tests/
+      - name: Pytest (with coverage)
+        run: >
+          uv run pytest tests/
+          --cov=app --cov-report=term-missing --cov-report=xml
+
+      # 覆盖率仅观测上报、不做失败门禁（阈值基线待稳定后再议）
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: error
 
   migrations:
     name: Migrations (alembic on postgres)
@@ -106,4 +117,27 @@ jobs:
       # 列级 diff 门禁：迁移后的库结构必须与 SQLModel.metadata 零差异，
       # 「模型改了但迁移没跟上」在此失败（口径同 revision --autogenerate）
       - name: Model/migration diff check
+        run: uv run python -m app.cmd.admin db check
+
+      # downgrade 冒烟：整链回退到 base，验证每个 downgrade() 可执行。
+      # drop_table 不顺带清理的对象（PG 原生枚举类型、被自引用 FK 依赖的
+      # 唯一索引等）会在下面的回退净空校验 / re-upgrade 撞
+      # DependentObjectsStillExist / CREATE TYPE already exists 时暴露。
+      - name: Alembic downgrade base (smoke)
+        run: uv run python -m app.cmd.admin db downgrade base
+
+      # 回退净空校验：public 下只应剩 alembic_version（空记录），枚举类型零残留
+      - name: Verify downgrade leaves empty schema
+        run: |
+          tables=$(psql "postgresql://agentic:agentic@127.0.0.1:5432/agentic" -tAc "select count(*) from information_schema.tables where table_schema = 'public'")
+          enums=$(psql "postgresql://agentic:agentic@127.0.0.1:5432/agentic" -tAc "select count(*) from pg_type where typtype = 'e'")
+          echo "tables remaining: ${tables}, enum types remaining: ${enums}"
+          test "${tables}" = "1" && test "${enums}" = "0"
+
+      # 圆环闭环：回退后整链再升级 + 再 diff 检查——迁移链必须可重复运行，
+      # 回退不干净（残留表/类型）会在此失败
+      - name: Alembic re-upgrade head
+        run: uv run python -m app.cmd.admin db upgrade
+
+      - name: Re-run model/migration diff check
         run: uv run python -m app.cmd.admin db check
