@@ -121,6 +121,10 @@ pragma（vitest 5，全默认 node，不引 react 插件——esbuild jsx 转换
   `isEmptySnapshot`）；
 - `components/assistant-ui/branch-picker-gate.test.ts` —— BranchPicker
   末梢锁判定（`isTailTurnMessage`）；
+- `components/assistant-ui/branch-switch.test.ts` —— 分支切换编排
+  （`BranchSwitchController`：本地乐观切换 + activate-turn 服务端同步，
+  成功静默；失败（业务错/网络错/映射不到轮次）toast + 回滚到切换前消息；
+  连点时旧切换的迟到失败按 seq 最新性抑制，不回滚不提示）；
 - `services/image-attachment-adapter.test.ts` —— 附件适配器两段生成器
   （选中即上传、send 零等待复用、失败重试一次后中止）；
 - `services/a2ui.test.ts` —— A2UI 载荷防御性解析（`parseA2uiPayload`

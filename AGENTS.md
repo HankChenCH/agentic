@@ -89,6 +89,19 @@ config in `vitest.config.ts`, node env — no jsdom): pure-logic tests for the
 thread-message translator (branch tree + attachment parsing), run-input
 injection, and the agent store.
 
+## Scope decisions（决策面）
+
+The following are settled scope boundaries — do not build or plan for them:
+
+- **暂不做坐席 HTTP 面**：no dedicated agent-facing HTTP surface (no agent
+  seat/sit-down console endpoints or UI); agents interact only through the
+  existing ag-ui run/conversation channels.
+- **不做组织级别多租户**：no org-level multi-tenancy. Auth is per-user JWT
+  only; do not add tenant/org IDs, org-scoped RBAC, or per-org data isolation.
+- **SonarQube 基线由其他运维组件提供，本项目暂不涉及**：code-quality/SonarQube
+  baseline is owned by a separate ops component — don't add SonarQube config,
+  CI steps, or gates to this repo.
+
 ## Client ⇄ Server contract = ag-ui protocol
 
 The client (`HttpAgent` from `@ag-ui/client`, wrapped by `useAgUiRuntime` from
