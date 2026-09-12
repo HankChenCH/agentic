@@ -19,9 +19,18 @@ from app.domain.knowledge import (
     KnowledgeDocumentService,
     KnowledgeSegmentService,
 )
+from app.models.domain.knowledge import KnowledgeDocument
 
 # 模块级 stdlib logger：经 InterceptHandler 桥入统一日志面（非 DI 侧小件惯例）
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DocumentFileDownload:
+    """文档读取的决策载荷：``presigned`` 可用则 302，否则降级回源字节流。"""
+
+    doc: KnowledgeDocument
+    presigned: str | None
 
 
 @injectable
@@ -79,6 +88,11 @@ class KnowledgeAppService:
 
     def describe_document(self, kb_id: UUID, user_id: UUID, doc_id: UUID):
         return self.knowledge_document_service.describe_document(kb_id, user_id, doc_id)
+
+    def resolve_document_file(self, kb_id: UUID, user_id: UUID, doc_id: UUID) -> DocumentFileDownload:
+        """文档读取决策：可见性校验 + 预签名（不可用则由调用方按 doc 回源）。"""
+        doc, presigned = self.knowledge_document_service.resolve_document_file(kb_id, user_id, doc_id)
+        return DocumentFileDownload(doc=doc, presigned=presigned)
 
     def read_document_file(self, kb_id: UUID, user_id: UUID, doc_id: UUID):
         return self.knowledge_document_service.read_document_file(kb_id, user_id, doc_id)

@@ -16,7 +16,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import Response as RawResponse
+from fastapi.responses import RedirectResponse, Response as RawResponse
 from wireup import Injected
 
 from app.api.deps import UserPrincipal, require_user
@@ -191,7 +191,19 @@ def get_knowledge_document_file(
     kb_id: UUID,
     doc_id: UUID,
 ):
-    """原始文件字节流（inline，前端预览用）——二进制响应不走信封。"""
+    """原始文件读取入口：可见性校验通过后 302 到预签名 URL。
+
+    浏览器直拉对象存储绕过后端字节中转（签名即时签发不落库不进日志，
+    TTL 只需覆盖一次加载，响应禁缓存防把过期签名存进浏览器——与会话
+    附件域同口径）。签名不可用（本地磁盘后端）降级为后端流式回源：
+    inline 字节流，mime 兜底按后缀映射（历史行可能缺失 mime_type）。
+    fetch 跟随跨域重定向读字节要求 rustfs 应答 CORS（compose 侧
+    ``RUSTFS_CORS_ALLOWED_ORIGINS``）。
+    """
+    download = app_service.resolve_document_file(kb_id, principal.user_id, doc_id)
+    if download.presigned:
+        return RedirectResponse(download.presigned, status_code=302, headers={"Cache-Control": "no-store"})
+
     doc, data = app_service.read_document_file(kb_id, principal.user_id, doc_id)
     # RFC 5987：中文名走 filename*=UTF-8''
     filename = quote(doc.name)

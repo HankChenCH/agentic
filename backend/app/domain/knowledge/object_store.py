@@ -15,6 +15,9 @@ from wireup import injectable
 from app.core.logging import LoggerFactory
 from app.domain.ports import Filesystem
 
+# 预签名 GET 的 TTL：与 conversation 附件域同口径（600s）
+PRESIGN_TTL_SECONDS = 600
+
 
 @injectable
 @dataclass
@@ -49,6 +52,14 @@ class KnowledgeObjectStore:
         return f"knowledge/{kb_id}/{doc_id}/derived/content.md"
 
     # ---------- 对象操作 ----------
+
+    def presign(self, key: str, expires_in: int = PRESIGN_TTL_SECONDS) -> str | None:
+        """预签名 GET（浏览器凭签名直拉对象存储，绕过后端字节中转）。
+
+        存储后端不具备签名能力（本地磁盘）返回 ``None``，调用方降级
+        ``read()`` 由后端回源——与会话附件域同一降级口径。
+        """
+        return self.filesystem.presign_get(key, expires_in)
 
     def read(self, key: str) -> bytes:
         return self.filesystem.read(key)

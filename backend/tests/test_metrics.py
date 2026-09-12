@@ -1,7 +1,9 @@
 """运维监控指标测试：/metrics 端点 + HTTP 请求指标中间件。
 
 纯单元级：中间件挂最小 FastAPI 应用，不经 wireup 容器；指标为全局
-REGISTRY 单例，计数断言用「先清理 samples 再请求」避免跨用例串扰。
+REGISTRY 单例，跨测试模块共享——计数断言一律用「请求前后增量」，任何
+绝对值断言都会被同进程更早跑到的集成测试（业务异常 404 同样落
+unmatched 标签）污染。
 """
 
 from fastapi import FastAPI
@@ -42,19 +44,25 @@ def test_metrics_endpoint_serves_exposition():
 
 def test_middleware_counts_route_template_and_status():
     client = TestClient(_make_app())
+    labels = {"method": "GET", "handler": "/demo/{item_id}", "status": "200"}
+    before = _count_requests(labels)
     client.get("/demo/1")
     client.get("/demo/2")
     # handler 为路由模板而非原始 path——两个请求落同一标签且状态 200
-    assert _count_requests({"method": "GET", "handler": "/demo/{item_id}", "status": "200"}) == 2
+    assert _count_requests(labels) - before == 2
 
 
 def test_middleware_records_unmatched_for_404():
     client = TestClient(_make_app())
+    labels = {"method": "GET", "handler": "unmatched", "status": "404"}
+    before = _count_requests(labels)
     client.get("/no-such-route")
-    assert _count_requests({"method": "GET", "handler": "unmatched", "status": "404"}) == 1
+    assert _count_requests(labels) - before == 1
 
 
 def test_middleware_skips_metrics_endpoint_itself():
     client = TestClient(_make_app())
+    labels = {"method": "GET", "handler": "/metrics", "status": "200"}
+    before = _count_requests(labels)
     client.get("/metrics")
-    assert _count_requests({"method": "GET", "handler": "/metrics", "status": "200"}) == 0
+    assert _count_requests(labels) == before

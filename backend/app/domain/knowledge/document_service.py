@@ -178,8 +178,21 @@ class KnowledgeDocumentService:
         require_visible_kb(self.kb_repo, kb_id, user_id)
         return require_document(self.document_repo, kb_id, doc_id)
 
+    def resolve_document_file(self, kb_id: UUID, user_id: UUID, doc_id: UUID) -> tuple[KnowledgeDocument, str | None]:
+        """文档读取决策：可见性校验 + 预签名 GET。
+
+        返回 ``(doc, presigned)``：``presigned`` 可用则浏览器直拉对象存储
+        （302），为 ``None``（本地磁盘后端）时调用方降级
+        ``read_document_file`` 由后端流式回源。不限制状态——原始文件在
+        上传时即落对象存储（先于解析流水线），pending/processing/failed
+        同样可读。
+        """
+        require_visible_kb(self.kb_repo, kb_id, user_id)
+        doc = require_document(self.document_repo, kb_id, doc_id)
+        return doc, self.object_store.presign(doc.doc_path)
+
     def read_document_file(self, kb_id: UUID, user_id: UUID, doc_id: UUID) -> tuple[KnowledgeDocument, bytes]:
-        """读回原始文件字节（前端预览用）。
+        """读回原始文件字节（预签名不可用时的降级回源通道）。
 
         不限制状态：原始文件在上传时即落对象存储（先于解析流水线），
         pending/processing/failed 同样可预览；对象缺失（如删除流程已清理）
