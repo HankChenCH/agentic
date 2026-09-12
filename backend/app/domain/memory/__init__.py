@@ -3,7 +3,7 @@
 - ``ports.MemoryGraphReader``：图快照只读端口（组件侧回填实现）；
 - ``ports.MemoryEditor``：记忆纠错写端口（组件侧回填实现）；
 - ``ports.MemoryGraphRepositoryPort``：记忆图谱数据访问端口（实现住
-  ``app/adapters/persistence/memory_graph_repository.py``）；
+  ``app/adapters/persistence/memory_graph_repository/`` 包）；
 - ``ports.MemoryMaintenancePort``：维护面专用原语（实现住
   ``app/adapters/persistence/memory_maintenance_repository.py``，全局算子视角）；
 - ``ports.MemoryVectorIndexPort``：记忆向量索引端口（实现住

@@ -11,7 +11,7 @@ invalidated_at 是系统取代时刻（transaction time），time_remark 兜住
 
 «作用域»：user_id 落在 entity/statement/episode 三表（episode_link 经
 episode 继承归属）。v1 设计为单用户全局，引入用户模块后改为用户级隔离，
-所有读写路径必须携带 user_id 过滤（见 adapters/persistence/memory_graph_repository.py）。
+所有读写路径必须携带 user_id 过滤（见 adapters/persistence/memory_graph_repository/ 包）。
 """
 
 from datetime import datetime

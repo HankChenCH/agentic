@@ -17,6 +17,9 @@ from app.exceptions import (
     KnowledgeDocumentNotFoundError,
     KnowledgeNotFoundError,
 )
+from app.api.deps import UserPrincipal
+from app.api.v1.endpoints.knowledge import get_knowledge_document_file
+from app.application.knowledge_app_service import KnowledgeAppService
 from app.adapters.filesystem import Filesystem
 from app.models.domain.knowledge import KnowledgeBase, KnowledgeStatus
 from app.adapters.persistence.knowledge_base_repository import KnowledgeBaseRepository
@@ -24,7 +27,7 @@ from app.adapters.persistence.knowledge_document_repository import (
     KnowledgeDocumentRepository,
 )
 from app.domain.knowledge.document_service import KnowledgeDocumentService
-from app.domain.knowledge.object_store import KnowledgeObjectStore
+from app.domain.knowledge.object_store import PRESIGN_TTL_SECONDS, KnowledgeObjectStore
 from tests.conftest import TEST_USER_ID
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body"
@@ -240,3 +243,120 @@ def test_create_document_rejects_unrouted_suffix(engine, service, filesystem):
             kb_id, TEST_USER_ID, filename="malware.exe", content_type=None, stream=io.BytesIO(PDF_BYTES)
         )
     assert not filesystem.objects
+
+
+# ---------- 预签名下载决策（/file 端点 302/降级） ----------
+
+
+class PresignFilesystem(MemoryFilesystem):
+    """带签名能力的内存实现：记录签发入参，返回固定签名地址。"""
+
+    def __init__(self):
+        super().__init__()
+        self.signed: list[tuple[str, int]] = []
+
+    def presign_get(self, key: str, expires_in: int) -> str | None:
+        self.signed.append((key, expires_in))
+        return f"http://rustfs.test/signed/{key}"
+
+
+@pytest.fixture()
+def presign_filesystem():
+    return PresignFilesystem()
+
+
+@pytest.fixture()
+def presign_service(engine, presign_filesystem):
+    return KnowledgeDocumentService(
+        kb_repo=KnowledgeBaseRepository(engine=engine),
+        document_repo=KnowledgeDocumentRepository(engine=engine),
+        vector_index=StubVectorIndex(),
+        object_store=KnowledgeObjectStore(
+            filesystem=presign_filesystem, logger_factory=LoggerFactory()
+        ),
+        logger_factory=LoggerFactory(),
+    )
+
+
+def test_resolve_document_file_presigns_document_key(engine, presign_service, presign_filesystem):
+    kb_id = make_kb(engine)
+    doc = presign_service.create_document(
+        kb_id, TEST_USER_ID, filename="a.pdf", content_type="application/pdf", stream=io.BytesIO(PDF_BYTES)
+    )
+
+    got_doc, presigned = presign_service.resolve_document_file(kb_id, TEST_USER_ID, doc.id)
+
+    assert got_doc.id == doc.id
+    assert presigned == f"http://rustfs.test/signed/{doc.doc_path}"
+    # 默认 TTL 即附件域同口径的 600s
+    assert presign_filesystem.signed == [(doc.doc_path, PRESIGN_TTL_SECONDS)]
+
+
+def test_resolve_document_file_without_signing_capability(engine, service):
+    """本地磁盘后端（presign 恒 None）→ 决策载荷置空，调用方降级回源。"""
+    kb_id = make_kb(engine)
+    doc = service.create_document(
+        kb_id, TEST_USER_ID, filename="a.pdf", content_type="application/pdf", stream=io.BytesIO(PDF_BYTES)
+    )
+
+    got_doc, presigned = service.resolve_document_file(kb_id, TEST_USER_ID, doc.id)
+    assert got_doc.id == doc.id
+    assert presigned is None
+
+
+def test_resolve_document_file_not_visible_to_others(presign_service):
+    """他人私有库不可见：404 不泄露存在性（与读路径同口径）。"""
+    other_user = uuid4()
+    with pytest.raises(KnowledgeNotFoundError):
+        presign_service.resolve_document_file(uuid4(), other_user, uuid4())
+
+
+# ---------- /file 端点分支：预签名 302 优先、本地盘降级流式回源 ----------
+
+
+def _principal():
+    return UserPrincipal(user_id=TEST_USER_ID, username="tester")
+
+
+def _file_app_service(doc_service) -> KnowledgeAppService:
+    """端点直测装配：真实文档服务撑门面（库/分段/派发面不参与）。"""
+    return KnowledgeAppService(
+        knowledge_base_service=None,
+        knowledge_document_service=doc_service,
+        segment_service=None,
+        ingestion_service=None,
+        dispatcher=None,
+    )
+
+
+def test_file_endpoint_302s_to_presigned_url(engine, presign_service, presign_filesystem):
+    kb_id = make_kb(engine)
+    doc = presign_service.create_document(
+        kb_id, TEST_USER_ID, filename="a.pdf", content_type="application/pdf", stream=io.BytesIO(PDF_BYTES)
+    )
+
+    resp = get_knowledge_document_file(
+        app_service=_file_app_service(presign_service), principal=_principal(), kb_id=kb_id, doc_id=doc.id,
+    )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"http://rustfs.test/signed/{doc.doc_path}"
+    # 禁缓存：签名短命，防过期地址被浏览器存住
+    assert resp.headers["cache-control"] == "no-store"
+    assert presign_filesystem.signed == [(doc.doc_path, PRESIGN_TTL_SECONDS)]
+
+
+def test_file_endpoint_streams_when_presign_unavailable(engine, service):
+    """本地磁盘后端：字节流直出（inline），mime 缺失按后缀兜底。"""
+    kb_id = make_kb(engine)
+    doc = service.create_document(
+        kb_id, TEST_USER_ID, filename="a.pdf", content_type="application/pdf", stream=io.BytesIO(PDF_BYTES)
+    )
+
+    resp = get_knowledge_document_file(
+        app_service=_file_app_service(service), principal=_principal(), kb_id=kb_id, doc_id=doc.id,
+    )
+
+    assert resp.body == PDF_BYTES
+    assert resp.media_type == "application/pdf"
+    assert "inline" in resp.headers["content-disposition"]

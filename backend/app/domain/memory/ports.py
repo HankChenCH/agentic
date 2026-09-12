@@ -240,7 +240,7 @@ class MemoryVectorIndexPort(Protocol):
 
 
 # ---------------- 记忆图谱仓储端口 ----------------
-# 实现住 ``app/adapters/persistence/memory_graph_repository.py``（SQLite 承载，
+# 实现住 ``app/adapters/persistence/memory_graph_repository/`` 包（SQLite 承载，
 # 注入共享 Engine）。组件（召回/巩固/用户节点/消歧/编辑面）与领域侧只依赖
 # 本协议面；存储与召回策略按 ``@injectable(as_type=...)`` 换绑切换，消费方无感。
 
