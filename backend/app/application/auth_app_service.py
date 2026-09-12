@@ -1,26 +1,19 @@
-"""认证用例：注册（注册即登录）/ 登录 / 当前用户 / 资料与密码维护 + 验签通道。
+"""认证用例：注册（注册即登录）/ 登录 / refresh / 登出 / 当前用户 / 资料与密码维护 + 验签通道。
 
 api 层唯一消费面（依赖箭头表禁止 api 直触 domain）；JWT 机制细节
-（签发/验签/PBKDF2）归 domain/user。``verify_access_token`` 为 api 依赖
-（require_user 无容器可注入）提供的模块级验签通道——api 只 import
-application，jwt 异常面原样透出由依赖翻译为 401。
+（签发/验签/PBKDF2）与 refresh 旋转/复用检测（登记表状态机、族吊销）
+都在 domain/user。``verify_access_token`` 为 api 依赖（require_user 无
+容器可注入）提供的模块级验签通道——api 只 import application，jwt 异常
+面原样透出由依赖翻译为 401。
 """
 
 from dataclasses import dataclass
 from uuid import UUID
 
-import jwt
 from wireup import injectable
 
-from app.exceptions import InvalidCredentialsError
 from app.domain.user import UserService
-from app.domain.user.token import (
-    TokenPayload,
-    decode_access_token,
-    decode_refresh_token,
-    encode_access_token,
-    encode_refresh_token,
-)
+from app.domain.user.token import TokenPayload, decode_access_token
 from app.domain.user.user_service import public_user
 
 
@@ -63,38 +56,13 @@ class AuthAppService:
         return self._session_payload(self.user_service.login(username, password))
 
     def refresh(self, refresh_token: str) -> AuthSessionPayload:
-        """刷新令牌换新一对令牌（旋转 refresh）；无效/过期一律 401 同口径。"""
-        auth_config = self.user_service.app_config.auth
-        try:
-            payload = decode_refresh_token(
-                refresh_token,
-                secret=auth_config.jwt_secret,
-                algorithm=auth_config.jwt_algorithm,
-            )
-        except jwt.InvalidTokenError:
-            raise InvalidCredentialsError("刷新令牌无效或已过期") from None
-        user = self.user_service.get_user(payload.user_id)
-        access = encode_access_token(
-            user_id=user.id,
-            username=user.username,
-            secret=auth_config.jwt_secret,
-            algorithm=auth_config.jwt_algorithm,
-            expires_minutes=auth_config.access_token_expire_minutes,
-        )
-        new_refresh = encode_refresh_token(
-            user_id=user.id,
-            username=user.username,
-            secret=auth_config.jwt_secret,
-            algorithm=auth_config.jwt_algorithm,
-            expires_minutes=auth_config.refresh_token_expire_minutes,
-        )
-        return AuthSessionPayload(
-            token=access.token,
-            expires_at=access.expires_at.isoformat(),
-            refresh_token=new_refresh.token,
-            refresh_expires_at=new_refresh.expires_at.isoformat(),
-            user=public_user(user),
-        )
+        """刷新令牌换新一对令牌（旋转 + 复用检测）；无效/过期/复用一律 401 同口径。"""
+        return self._session_payload(self.user_service.refresh(refresh_token))
+
+    def logout(self, refresh_token: str | None) -> dict:
+        """登出：吊销该 refresh 票所在族（幂等，无效票静默成功）。"""
+        self.user_service.logout_family(refresh_token)
+        return {"logged_out": True}
 
     def me(self, user_id: UUID) -> dict:
         return public_user(self.user_service.get_user(user_id))

@@ -7,6 +7,10 @@ payload 仅携带无状态身份（user_id/username/exp/type）——鉴权依�
 双令牌：短命 access（鉴权用）+ 长命 refresh（临期换新一对）。
 ``type`` claim 区分两者，互不可用；历史单令牌无 type claim，缺省按
 access 处理以平滑过渡。
+
+``jti`` claim（uuid4 hex）是令牌的一次性身份：随 TokenBundle/TokenPayload
+透出，供 refresh_token 登记表做旋转与复用检测（服务端按 jti 查状
+态）；access 验签路径不消费它。历史令牌可能无 jti（decode 侧为 None）。
 """
 
 from dataclasses import dataclass
@@ -24,12 +28,14 @@ REFRESH_TOKEN_TYPE = "refresh"
 class TokenPayload:
     user_id: UUID
     username: str
+    jti: str | None = None
 
 
 @dataclass(frozen=True)
 class TokenBundle:
     token: str
     expires_at: datetime
+    jti: str
 
 
 def encode_token(
@@ -44,6 +50,7 @@ def encode_token(
 ) -> TokenBundle:
     issued_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     expires_at = issued_at + timedelta(minutes=expires_minutes)
+    jti = uuid4().hex
     token = jwt.encode(
         {
             "sub": str(user_id),
@@ -51,12 +58,12 @@ def encode_token(
             "type": token_type,
             "iat": issued_at,
             "exp": expires_at,
-            "jti": uuid4().hex,  # 同秒内重复签发（如连续旋转 refresh）不产生相同令牌
+            "jti": jti,  # 同秒内重复签发（如连续旋转 refresh）不产生相同令牌
         },
         secret,
         algorithm=algorithm,
     )
-    return TokenBundle(token=token, expires_at=expires_at)
+    return TokenBundle(token=token, expires_at=expires_at, jti=jti)
 
 
 def encode_access_token(
@@ -117,6 +124,7 @@ def decode_token(
     return TokenPayload(
         user_id=UUID(str(payload["sub"])),
         username=str(payload["username"]),
+        jti=payload.get("jti"),
     )
 
 

@@ -21,6 +21,7 @@ from app.exceptions import (
 )
 from app.models.domain.user import DEFAULT_USER_ID
 from app.adapters.persistence.user_repository import UserRepository
+from app.adapters.persistence.refresh_token_repository import RefreshTokenRepository
 from app.domain.user.passwords import hash_password, verify_password
 from app.domain.user.token import (
     decode_access_token,
@@ -35,13 +36,15 @@ from conftest import StubLoggerFactory
 def make_service(engine, memory_user_node=None):
     return UserService(
         user_repo=UserRepository(engine=engine),
+        refresh_token_store=RefreshTokenRepository(engine=engine),
         memory_user_node=memory_user_node or RecordingUserNodeSync(),
         app_config=type("Cfg", (), {"auth": type(
             "Auth", (),
             {"jwt_secret": "test-secret-0123456789abcdef-0123456789abcdef",
              "jwt_algorithm": "HS256",
              "access_token_expire_minutes": 30,
-             "refresh_token_expire_minutes": 60 * 24 * 7},
+             "refresh_token_expire_minutes": 60 * 24 * 7,
+             "refresh_reuse_grace_seconds": 60},
         )()})(),
         logger_factory=StubLoggerFactory(),
     )

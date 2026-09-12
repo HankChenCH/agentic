@@ -65,3 +65,12 @@ class AuthConfig(BaseModel):
         default=60 * 24 * 7,
         ge=1,
     )
+
+    refresh_reuse_grace_seconds: int = Field(
+        description=(
+            "刷新令牌旋转宽限期（秒）：宽限期内重放已旋转令牌只拒绝不连坐"
+            "（多标签页并发刷新的良性竞态），宽限期外的复用判定为窃取、整族吊销。0 = 关闭宽限"
+        ),
+        default=60,
+        ge=0,
+    )

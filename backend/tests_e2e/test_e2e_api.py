@@ -4,138 +4,36 @@
 - 服务已启动：``uv run uvicorn app.cmd.http.main:server --port 8000``（CWD=backend/）
 - 中间件栈健康（docker compose）、Ollama 嵌入模型在线、.env 携带真实 DEEPSEEK_API_KEY
 
-运行：``E2E_BASE_URL=http://127.0.0.1:8000 uv run pytest tests_e2e/ -v``
-（与单元套件分离：``pytest tests/`` 仍是纯单元级。）
+运行（两种入口形态，见 helpers.py 与 deploy/e2e-fullstack.sh）：
+- 直连：``E2E_BASE_URL=http://127.0.0.1:8000 uv run pytest tests_e2e/ -v``
+- 经 nginx 全栈入口：``E2E_BASE_URL=http://127.0.0.1:8081 E2E_API_PREFIX=/api \\
+  uv run pytest tests_e2e/ -v``
+
+与单元套件分离：``pytest tests/`` 仍是纯单元级。
 
 口径：走公开 HTTP 面 + ag-ui SSE 协议，断言用户可感知行为（信封、事件序列、
 状态机、归属隔离），不窥探内部。每个用例独立注册用户，互不依赖。
 """
 
 import json
-import os
 import re
-import time
 import uuid
 
-import httpx
-
-BASE_URL = os.environ.get("E2E_BASE_URL", "http://127.0.0.1:8000")
-PASSWORD = "e2e-Passw0rd!123"
-RUN_TIMEOUT = 180.0
-
-
-# ---------------- 基础设施 ----------------
-
-
-def _client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=30.0)
-
-
-def _register(c: httpx.Client, tag: str) -> dict:
-    username = f"e2e_{tag}_{uuid.uuid4().hex[:8]}"
-    resp = c.post("/auth/register", json={"username": username, "password": PASSWORD})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["error_code"] == 0
-    return {"username": username, "token": body["response"]["token"], "user": body["response"]["user"]}
-
-
-def _run_sse(
-    c: httpx.Client, token: str, thread_id: str, text: str, *, run_id: str | None = None
-) -> list[dict]:
-    """发起一次 agentic run 并收集全部 ag-ui 事件（SSE data 帧解析）。"""
-    events: list[dict] = []
-    payload = {
-        "threadId": thread_id,
-        "runId": run_id or uuid.uuid4().hex,
-        "messages": [{"id": uuid.uuid4().hex, "role": "user", "content": text}],
-    }
-    with c.stream(
-        "POST",
-        "/agentic/run",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=RUN_TIMEOUT,
-    ) as resp:
-        assert resp.status_code == 200, resp.read().decode()
-        assert resp.headers["content-type"].startswith("text/event-stream")
-        for line in resp.iter_lines():
-            if line.startswith("data: "):
-                events.append(json.loads(line[len("data: "):]))
-    return events
-
-
-def _run_sse_history(
-    c: httpx.Client, token: str, thread_id: str, turns: list[tuple[str, str]]
-) -> list[dict]:
-    """按完整本地历史投影发起 run：(文本, role) 序列，末位为当前提问。"""
-    payload = {
-        "threadId": thread_id,
-        "runId": uuid.uuid4().hex,
-        "messages": [
-            {"id": uuid.uuid4().hex, "role": role, "content": text}
-            for text, role in turns
-        ],
-    }
-    events: list[dict] = []
-    with c.stream(
-        "POST",
-        "/agentic/run",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=RUN_TIMEOUT,
-    ) as resp:
-        assert resp.status_code == 200
-        for line in resp.iter_lines():
-            if line.startswith("data: "):
-                events.append(json.loads(line[len("data: "):]))
-    return events
-
-
-def _types(events: list[dict]) -> list[str]:
-    return [e.get("type", "") for e in events]
-
-
-def _text_of(events: list[dict]) -> str:
-    return "".join(e.get("delta", "") for e in events if e.get("type") == "TEXT_MESSAGE_CONTENT")
-
-
-def _history(c: httpx.Client, token: str, thread_id: str) -> dict:
-    """历史 = ``{"items": [turn...]}``：turn 携带 status 与嵌套 messages。"""
-    body = c.get(f"/agentic/conversation/{thread_id}/history", headers={"Authorization": f"Bearer {token}"}).json()
-    assert body["error_code"] == 0, body
-    return body["response"]
-
-
-def _turns(hist: dict) -> list[dict]:
-    return hist.get("items") or []
-
-
-def _all_messages(hist: dict) -> list[dict]:
-    return [m for turn in _turns(hist) for m in (turn.get("messages") or [])]
-
-
-def _wait_for(pred, timeout: float = 60.0, interval: float = 2.5) -> bool:
-    """轮询等待后台收尾（标题/记忆在流闭后的 daemon 线程里最终一致）。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pred():
-            return True
-        time.sleep(interval)
-    return False
-
-
-def _find_thread_in_list(c: httpx.Client, token: str, thread_id: str) -> dict | None:
-    body = c.get("/agentic/conversation", headers={"Authorization": f"Bearer {token}"}).json()
-    assert body["error_code"] == 0
-    page = body["response"]
-    items = page.get("items") or page.get("conversations") or []
-    want = str(uuid.UUID(thread_id))  # hex 与带连字符形态归一
-    for item in items:
-        got = item.get("thread_id") or item.get("threadId")
-        if got is not None and str(uuid.UUID(str(got))) == want:
-            return item
-    return None
+from helpers import (
+    PASSWORD,
+    RUN_TIMEOUT,
+    _all_messages,
+    _client,
+    _find_thread_in_list,
+    _history,
+    _register,
+    _run_sse,
+    _run_sse_history,
+    _text_of,
+    _turns,
+    _types,
+    _wait_for,
+)
 
 
 # ---------------- 用例 ----------------
@@ -196,6 +94,33 @@ def test_02_auth_lifecycle():
             "/auth/login", json={"username": user["username"], "password": "n3w-Secret!999"}
         )
         assert relogin.status_code == 200 and relogin.json()["error_code"] == 0
+
+        # refresh 旋转/复用检测/登出：旋转拿新对；宽限期内立即重放旧票
+        # 401 且族存活（新票可刷，多标签页良性竞态不误伤）；登出吊销族后
+        # 族内票全失效；重新登录恢复。宽限期外连坐在单测以 DB 拨行覆盖。
+        # 注意用改密后重新登录的票——改密吊销该用户全部既有族，注册时签发
+        # 的 user["refresh_token"] 已被连坐吊销（语义如此）
+        live_pair = relogin.json()["response"]["refresh_token"]
+        refresh = c.post("/auth/refresh", json={"refresh_token": live_pair})
+        assert refresh.status_code == 200 and refresh.json()["error_code"] == 0
+        new_pair = refresh.json()["response"]
+        assert new_pair["refresh_token"] != live_pair
+
+        replay = c.post("/auth/refresh", json={"refresh_token": live_pair})
+        assert replay.status_code == 401 and replay.json()["error_code"] == 5002
+        again = c.post("/auth/refresh", json={"refresh_token": new_pair["refresh_token"]})
+        assert again.status_code == 200
+        live = again.json()["response"]["refresh_token"]
+
+        logout = c.post("/auth/logout", headers=auth, json={"refresh_token": live})
+        assert logout.status_code == 200 and logout.json()["error_code"] == 0
+        after = c.post("/auth/refresh", json={"refresh_token": live})
+        assert after.status_code == 401
+
+        recover = c.post(
+            "/auth/login", json={"username": user["username"], "password": "n3w-Secret!999"}
+        )
+        assert recover.status_code == 200 and recover.json()["error_code"] == 0
 
 
 def test_03_catalogs():
@@ -307,14 +232,14 @@ def test_05_run_cancel():
         assert "RUN_STARTED" in stream_text
         assert "RUN_FINISHED" not in stream_text, stream_text[-500:]
 
-        # 轮次状态机落 canceled（历史 items 的 turn.status；半截消息不落库）
+        # 作废轮次整体不下发历史（84fc3a2 口径：失败/取消/悬挂 RUNNING 一律
+        # 剔除，半截消息不落库）——轮询历史收敛为「无 assistant 内容」
         def _canceled() -> bool:
             hist = _history(c, token, thread_id)
-            return any(turn.get("status") == "canceled" for turn in _turns(hist)) and (
-                {m.get("role") for m in _all_messages(hist)} == {"user"}
-            )
+            roles = {m.get("role") for m in _all_messages(hist)}
+            return "assistant" not in roles
 
-        assert _wait_for(_canceled, timeout=20.0, interval=1.0), "轮次未在时限内落 canceled"
+        assert _wait_for(_canceled, timeout=20.0, interval=1.0), "取消后历史仍含作废轮次"
         # 取消后同会话可继续（服务端权威回放跳过 canceled 轮）
         events_after = _run_sse(c, token, thread_id, "回复\"继续\"两个字即可。")
         assert "RUN_FINISHED" in _types(events_after), events_after
@@ -411,30 +336,11 @@ def test_09_rag_agent_grounded_answer():
     with _client() as c:
         user = _register(c, "rag")
         thread_id = uuid.uuid4().hex
-        payload = {
-            "threadId": thread_id,
-            "runId": uuid.uuid4().hex,
-            "messages": [
-                {
-                    "id": uuid.uuid4().hex,
-                    "role": "user",
-                    "content": "量子纠缠在超导体中的应用是什么？（知识库中没有相关资料时应如实说明）",
-                }
-            ],
-            "forwardedProps": {"agentId": "builtin:rag"},
-        }
-        events: list[dict] = []
-        with c.stream(
-            "POST",
-            "/agentic/run",
-            json=payload,
-            headers={"Authorization": f"Bearer {user['token']}"},
-            timeout=RUN_TIMEOUT,
-        ) as resp:
-            assert resp.status_code == 200
-            for line in resp.iter_lines():
-                if line.startswith("data: "):
-                    events.append(json.loads(line[len("data: "):]))
+        events = _run_sse(
+            c, user["token"], thread_id,
+            "量子纠缠在超导体中的应用是什么？（知识库中没有相关资料时应如实说明）",
+            agent_id="builtin:rag",
+        )
         types = _types(events)
         assert "RUN_FINISHED" in types, events
         assert "RUN_ERROR" not in types, events

@@ -5,3 +5,6 @@ jwt_secret: ${AUTH_JWT_SECRET:dev-only-secret-0123456789abcdef-change-me}
 jwt_algorithm: HS256
 access_token_expire_minutes: 30
 refresh_token_expire_minutes: 10080
+# refresh 旋转宽限期：宽限期内重放已旋转令牌只拒绝不连坐（多标签页并发刷新竞态），
+# 宽限期外复用判定为窃取、整族吊销
+refresh_reuse_grace_seconds: ${AUTH_REFRESH_REUSE_GRACE_SECONDS:60}

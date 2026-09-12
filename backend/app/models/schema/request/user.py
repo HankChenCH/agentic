@@ -25,6 +25,14 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., description="刷新令牌", min_length=1)
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = Field(
+        None,
+        description="待吊销的刷新令牌；缺省/无效时幂等成功（吊销语义在服务端按族执行）",
+        min_length=1,
+    )
+
+
 class UpdateProfileRequest(BaseModel):
     nickname: str = Field(
         ...,
