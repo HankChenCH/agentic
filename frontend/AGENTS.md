@@ -69,7 +69,10 @@ All commands run with CWD = `client/agentic-client/` (this directory).
 - Build: `yarn build` (runs `tsc -b` then `vite build`)
 - Lint: `yarn lint` (oxlint)
 - Typecheck: `yarn typecheck` (`tsc -b`，即 build 的前半步单拆，供 CI 单独跑)
-- Unit tests: `yarn test` (vitest run；最小纯逻辑集，见下「Tests」)
+- Unit tests: `yarn test` (vitest run；纯逻辑 + jsdom hooks/组件冒烟，见下「Tests」)
+- E2E（需全栈）: `yarn test:e2e` (Playwright，指向 deploy 全栈 `http://127.0.0.1:8081`，
+  需先 `docker compose up -d --build`（deploy/ 目录）；CI 由
+  `.github/workflows/e2e-frontend.yml` nightly/manual 触发)
 - CI: `.github/workflows/ci.yml`（node 24 —— react-router 8.3 的 engines
   要求 ≥22.22.0，本机 fnm 的 22.18 不满足；frozen-lockfile 安装 + lint +
   typecheck + test + build）
@@ -84,15 +87,82 @@ vite.config.ts 保持一致）。`environment: "node"`，无 jsdom：zustand per
 测试文件与源码同目录（`*.test.ts`），随 `tsc -b` 进入严格检查（显式
 `import { describe, it, expect } from "vitest"`，type-only 一律 `import type`）。
 
-覆盖三块纯逻辑：
+**策略口径：只测纯逻辑/近纯逻辑（数据变换与编排决策），不测 React 渲染**；
+需要 DOM 的测试（组件/hooks）用 per-file `// @vitest-environment jsdom`
+pragma（vitest 5，全默认 node，不引 react 插件——esbuild jsx 转换够用）。
 
-- `src/services/translators/thread-message-translator.test.ts` —— 分支树构建
+现有覆盖（全部 `yarn test` 纳入）：
+
+- `services/translators/thread-message-translator.test.ts` —— 分支树构建
   （`toThreadBranchTree`：线性/末梢扇形/激活切换/活跃叶子缺失退化/失败占位）
-  与附件解析（image part → attachments：data/相对/绝对 URL、mime 缺省、复合 id）；
-- `src/services/run-input.test.ts` —— run 请求体注入（`applyRunInputInjections`
+  与附件解析（image part → attachments：data/相对/绝对 URL、mime 缺省、复合 id）
+  + A2UI CUSTOM 行历史回放还原（custom → data part、坏 content 静默跳过）；
+- `services/run-input.test.ts` —— run 请求体注入（`applyRunInputInjections`
   纯函数：agentId 新会话门控、branchBaseMessageId 提升、runConfig 载体删除）；
-- `src/stores/agent-store.test.ts` —— 注入决策的数据面（select /
-  getSelectedAgentId / isKnownThread / setKnownThreads）。
+- `stores/agent-store.test.ts` —— 注入决策的数据面（select /
+  getSelectedAgentId / isKnownThread / setKnownThreads）；
+- `lib/attachment-url.test.ts` —— 本域附件引用判定与拼址
+  （`isAttachmentRef` 前缀判定 / `toFetchableUrl` 绝对根与相对根 `/api` 双形态，
+  doMock + 动态 import 按 case 切换 REST_BASE）；
+- `lib/attachment-display-url.test.ts` —— 预签名换址编排
+  （`resolveDisplayUrl`：TTL 半程过期重签、blob 降级不参与 TTL、失败不写缓存）；
+- `lib/token-refresh.test.ts` —— 临期判定（`shouldRefresh`）+ 单飞刷新通道
+  （`refreshSession`：并发只发一次请求、失败各分支、会话覆写）+ 临期主动
+  刷新调度（`startProactiveRefresh`：幂等、60s 轮询、登录态/过期门控）；
+- `lib/http.test.ts` —— axios 信封封装与 401 链（mock `http.defaults.adapter`
+  走完整拦截器链：Bearer 注入、`BizError` 拆包、二进制跳过信封检查、
+  401 刷新重放/`__retried` 防循环/登出、`/auth/*` 例外）；
+- `lib/format.test.ts` —— 文件大小/时间/检索页码格式化边界；
+- `stores/auth-store.test.ts` —— 会话存取（setSession snake→camel、
+  getToken/getSession 非 React 读票口径、logout 全清）；
+- `components/memory-graph/layout.test.ts` —— 图模型构建
+  （`buildGraphModel`：分型/用户居中/双环排布/事实内嵌截 3/双向关系/端点名
+  三形态/边样式，`filterSnapshot` 开关语义，`buildFocusSets` 聚焦扩散，
+  `isEmptySnapshot`）；
+- `components/assistant-ui/branch-picker-gate.test.ts` —— BranchPicker
+  末梢锁判定（`isTailTurnMessage`）；
+- `services/image-attachment-adapter.test.ts` —— 附件适配器两段生成器
+  （选中即上传、send 零等待复用、失败重试一次后中止）；
+- `services/a2ui.test.ts` —— A2UI 载荷防御性解析（`parseA2uiPayload`
+  双形态、原子性拒绝、事件名常量契约）；
+- `lib/authenticated-fetch.test.ts`（jsdom）—— SSE fetch 覆盖
+  （`agentic-runtime.tsx` 抽出的 `lib/authenticated-fetch.ts`：Bearer 实时
+  注入、401 刷新重放、登出跳 `/login?next=`、错误信封拆包与归类文案）；
+- `hooks/use-conversation-list.test.ts`（jsdom）—— 会话列表全编排
+  （token 门控首载、threads 映射与 knownThreads 回填、RUN_STARTED 刷新/
+  镜像推进、标题轮询 1.5s×5 上限、切换会话先 cancelActiveRun + 历史回放、
+  删除当前会话 switchToNewThread、分页去重与 ref 并发锁）。fake `agent`
+  （只实现 threadId + subscribe）与 fake `runtimeRef`（鸭子类型
+  threads.main/switchToNewThread）替代真实 runtime，服务层 mock、
+  zustand store 用真实的；
+- `hooks/use-knowledge-list.test.ts`（jsdom）—— 知识库/文档/详情三 hook
+  的 3s 条件轮询状态机（过渡态触发→静默刷新→落定自停）、`isTransitional`、
+  404 notFound 语义、写操作 toast 双路；
+- `hooks/use-stats-and-graph.test.ts`（jsdom）—— 用量三接口并行拉取
+  （`usageRangeParams` UTC 整日对齐、翻页/refresh 重拉）+ 记忆图谱快照
+  加载（at/limit 透传、失败 toast、静默刷新）；
+- `components/smoke.test.tsx`（jsdom）—— 组件冒烟两枚：
+  `AgentModeSwitch`（空目录 null、pills 直显与选中回写、>3 收「更多」）+
+  `UploadDocumentDialog`（dropzone accept 与后端白名单同步、串行上传
+  与描述透传、部分失败清列表保弹窗、空文件禁用）。依赖 jest-dom 匹配器
+  （`vitest.setup.ts` 全局注入；测试文件内显式 import 以获得类型增强）。
+
+**E2E（Playwright，独立于 vitest）**：`e2e/*.spec.ts` + `playwright.config.ts`，
+目标 deploy 全栈（nginx :8081，`E2E_BASE_URL` 可覆盖），runner 不负责起栈。
+场景：认证守卫/注册即登录/退出回跳、聊天主链路（发消息→流式回复→侧栏
+入列→刷新回放，LLM 断言只到「非空回复」级）、知识库建库→传文档→轮询
+ready、管理首页与记忆图谱空态渲染。CI 走 `.github/workflows/e2e-frontend.yml`
+（nightly + 手动，secrets 注入 `DEEPSEEK_API_KEY`/`AUTH_JWT_SECRET`），
+不卡 PR。e2e/ 与 playwright.config.ts 纳入 `tsc -b`（tsconfig.node.json）。
+
+**mock 约定**：网络边界 mock 到服务单例或 `http.defaults.adapter`（不要
+mock 拦截器链——那正是被测对象）；全局 fetch 用 `vi.stubGlobal`；
+`URL.createObjectURL` 在 node 不存在，blob 降级用例直接给 `URL` 挂桩函数
+（afterEach 删除）。**jsdom 用例注意**：vitest 未开 globals 时 RTL 的自动
+cleanup 不生效——`afterEach` 里必须手动 `cleanup()`（测试目录下已有先例），
+否则残留 hook 实例订阅 zustand store 跨测试串扰；fake timers 下 RTL 的
+`waitFor` 不可靠，用 `await act(async () => {})` 冲刷微任务 +
+`vi.advanceTimersByTimeAsync` 推进定时器。
 
 需要 **node ^20.19 || ≥ 22.12**（Vite 8 的 engines 要求）。node 由 **fnm** 管理
 （不是 nvm）：非交互 shell 里 `/usr/local/bin/node` 是系统 v16，fnm 的 `default`
@@ -280,6 +350,12 @@ access 剩余寿命 < 5 分钟即刷新）。use-conversation-list 的初始拉�
   过渡态时每 3s 静默轮询；`failed` 的 `error_message` 通过状态徽章 tooltip
   展示。文档上传支持 **PDF / xlsx / docx / Markdown**（后端按后缀白名单强校验并
   路由解析器回退链；dropzone `accept` 与白名单同步——`upload-document-dialog.tsx`）。
+  PDF 预览字节经 `knowledgeService.getDocumentFile`
+  （`GET /knowledge/{kbId}/document/{docId}/file`）拉取：rustfs 后端时该端点
+  **302 到预签名 URL**（浏览器直拉对象存储，签名即时签发；响应禁缓存），
+  axios 透明跟随——前提是 rustfs 应答 CORS（compose
+  `RUSTFS_CORS_ALLOWED_ORIGINS`，缺省 `*`）；本地磁盘后端 302 无签名可换，
+  降级为鉴权流式回源（同源无跨域问题），前端代码对两种形态无感知。
 - **聊天图片附件（多模态输入）**：**选中即上传（eager upload），发送零等待**，
   实现在 `services/image-attachment-adapter.ts` 的 `ServerImageAttachmentAdapter`
   （agentic-runtime 注册即激活）——适配器 `add()` 以 AsyncGenerator 两段产出

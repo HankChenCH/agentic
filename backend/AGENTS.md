@@ -85,14 +85,22 @@ backend/                         # this directory is its own git repo (the works
 │                              #   如 local 后端则降级流式回源）——分域口径见
 │                              #   domain/conversation/attachments.py;
 │                              #   api 根 deps.py（非 endpoints/）-> require_user（JWT Bearer 无状态验签依赖，UserPrincipal 注入）;
-│                              #   auth.py -> POST /auth/register|login（注册即登录，签发 access/refresh 双 JWT）
-│                              #   + POST /auth/refresh（刷新令牌旋转换新一对）+ GET /auth/me;
+│                              #   auth.py -> POST /auth/register|login（注册即登录，签发 access/refresh 双 JWT，
+│                              #   响应同构含 refresh_token/refresh_expires_at——前端 AuthSession 契约必需）
+│                              #   + POST /auth/refresh（旋转：服务端登记表条件认领 + 复用检测——宽限期外
+│                              #   复用判定窃取、按族连坐吊销）+ POST /auth/logout（吊销该票所在会话族，
+│                              #   幂等）+ GET/PATCH /auth/me;
 │                              #   认证挂载在 cmd/http/main.py 的 include_router 处按 router 声明
 │                              #   （agentic/knowledge/memory 组，/auth、/health 公开）；
 │                              knowledge.py -> /knowledge 管理侧 CRUD（multipart 上传——端点透传 UploadFile
 │                              #   底层流，用例/服务层流式转存对象存储边计数/摘要，不整读入内存，
 │                              #   文件落 rustfs；任务派发经 KnowledgeAppService 的
-│                              #   IngestionDispatcher 端口，api 不 import tasks）;
+│                              #   IngestionDispatcher 端口，api 不 import tasks）+
+│                              #   GET /knowledge/{kb}/document/{doc}/file 原始文件读取——
+│                              #   可见性校验后 302 到预签名 URL（浏览器直拉对象存储，签名即时
+│                              #   签发不落库不进日志；fetch 跟随跨域 302 要求 rustfs 应答
+│                              #   CORS——compose RUSTFS_CORS_ALLOWED_ORIGINS；presign 不可用
+│                              #   如 local 后端则降级流式回源）;
 │                              memory.py -> /memory/graph 记忆图快照（at 参数做时点回放，
 │                              经 application.MemoryAppService → domain/memory/graph_snapshot.py
 │                              #   的 ports.MemoryGraphReader 端口）
@@ -155,8 +163,10 @@ backend/                         # this directory is its own git repo (the works
 │                            #   MemoryVectorHit/vector_object_id 契约；admin_service.py +
 │                            #   graph_snapshot.py + vocab.py 规范文本唯一源——谓词基数词表/
 │                            #   fact_summary 句式/entity_content 档案文本/溯源 token 拦截）、
-│                            #   user/（ports.py = UserRepositoryPort + UserNodeSyncPort；
-│                            #   user_service.py + passwords.py + token.py）
+│                            #   user/（ports.py = UserRepositoryPort + UserNodeSyncPort +
+│                            #   RefreshTokenStorePort refresh 登记表访问——旋转/复用检测状态机；
+│                            #   user_service.py（refresh 旋转与族连坐/logout_family/change_password
+│                            #   全族吊销也在此）+ passwords.py + token.py）
 ├── adapters/                # 被驱动适配器：实现 domain 端口 + 持有机制，可整体替换
 │                            #   persistence/（ConversationRepository/UserRepository/
 │                            #   KnowledgeBaseRepository/KnowledgeDocumentRepository/
@@ -239,8 +249,10 @@ backend/                         # this directory is its own git repo (the works
 │   │                        #   唯一约束 uq_turn_thread_run——重复提交 runId 经
 │   │                        #   RepositoryConflictError 翻译为 DuplicateRunError(1014/409)，
 │   │                        #   以 RunErrorEvent 拒绝，不开新轮次）
-│   ├── domain/user/         # SQLModel table: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
-│   │                        #   迁移回填存量数据的不可登录占位用户）
+│   ├── domain/user/         # SQLModel tables: users（username 唯一、PBKDF2 password_hash；DEFAULT_USER_ID 为
+│   │                        #   迁移回填存量数据的不可登录占位用户）+ refresh_token（jti 主键 = JWT
+│   │                        #   jti claim；family_id 一次登录一个族、旋转继承；status 状态机
+│   │                        #   active/rotated/revoked 用 String 非 PG 原生枚举；expires_at 服务 purge）
 │   ├── domain/knowledge/    # SQLModel tables: knowledge_base / knowledge_base_document(+segment) /
 │                             #   KnowledgeStatus enum; segment.id doubles
 │                             #   as the Weaviate object UUID; knowledge_base 带 user_id（FK→users，属主）+
@@ -284,10 +296,12 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   entrypoint in `cmd/http/__main__.py`; config flags are bridged to
   `AGENTIC_CONFIG_DIR`/`AGENTIC_ENV_FILE` env vars).
 - Run task executor (Celery worker; needs `docker compose up -d redis` first):
-  `uv run celery -A app.adapters.tasking.celery_app worker`（canonical——
-  celery_app 实例与 conf 在 adapters/tasking）or
-  `uv run python -m app.cmd.task_executor [--pool=solo]` (extra args pass
-  through to the celery worker command). Broker/backend URLs are resolved at
+  `uv run python -m app.cmd.task_executor`（canonical——wireup
+  的 celery 任务容器装配在 cmd/task_executor/main.py）。**裸
+  `celery -A app.adapters.tasking.celery_app worker` 不可用**：缺该装配，
+  任何任务执行即抛 `WireupError: Task container ... only available during
+  a Celery task execution`（2026-09-12 e2e 实测）。extra args 透传 worker
+  命令（如 `--pool=solo`）。 Broker/backend URLs are resolved at
   startup from `app/configs/task.yaml`, whose `broker`/`backend` each hold a
   driver+key reference (`driver: redis` + `provider` naming a `redis.yaml`
   providers entry; resolved by `app.core.config.resolve_url`, fail-fast on
@@ -310,12 +324,16 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   review the script → `db upgrade` → `db check`（列级 diff 门禁：对活库以
   autogenerate 同口径比对 `SQLModel.metadata`，缺表/缺列/类型漂移非零退出
   —— CI 的 Migrations job 以 PG 空库 `db upgrade` + `db check` 把关「模型
-  改了但迁移没跟上」）. A pre-Alembic DB (created by the old
+  改了但迁移没跟上」，随后跑 downgrade 冒烟圆环：`db downgrade base` →
+  回退净空校验（public 只剩空 `alembic_version`、枚举类型零残留）→
+  re-upgrade + 再 check——每个 `downgrade()` 必须可执行且迁移链可重复跑，
+  drop_table 不顺带清理的对象（PG 原生枚举类型、FK 依赖的唯一索引）残留
+  即在此暴露）. A pre-Alembic DB (created by the old
   startup `create_all`) is adopted once via `db stamp head`. Direct
   `uv run alembic <cmd>` from `backend/` also works (same `alembic.ini`).
 - Run unit tests: `uv run pytest tests/` (pure unit level — SQLite 临时库 +
   stub 向量索引，不碰 Weaviate/MinerU/Ollama). CI 里需为 `llm.yaml` 的必填
-  占位符（`DEEPSEEK_API_KEY` 等）提供哑值，见 `.github/workflows/ci.yml`。
+  占位符（`DEEPSEEK_API_KEY` 等）提供哑值，见 `.github/workflows/ci-backend.yml`。
   其中的 `test_http_integration.py` 是首个真实 HTTP 集成测试：`create_app()`
   + TestClient 走通注册→登录→run→重试分支→activate→replay 并对全部业务路由
   做鉴权 sweep——临时 SQLite 走完整 Alembic 迁移（`upgrade_cmd("head")`），
@@ -323,16 +341,33 @@ don't source). Run `export PATH="$HOME/.local/bin:$PATH"` first, or use
   .override.set(...)`，必须在 TestClient 启动前，lifespan 即解析 AgenticService）；
   环境变量（SQLITE_DB_PATH 等）须在 app 模块导入前就位并清空配置 lru_cache，
   TestClient 的 portal 线程装不了信号处理器（lifespan 里的 signal.signal 用
-  no-op 替身顶住）。
-- Run e2e tests: 先起服务（uvicorn）+ 中间件栈 + Ollama，然后
+  no-op 替身顶住）。这套装配套路提取在 `tests/http_test_kit.py`，记忆编辑面
+  （`test_memory_admin_api.py`）/附件上传（`test_attachments_api.py`）/
+  stats 口径（`test_stats_api.py`）等集成测试模块共用；另有无 wireup 的
+  纯单元新文件：优雅关闭（`test_agentic_service_shutdown.py`）、s3 预签名
+  （`test_s3_filesystem.py`）、LLM 网关与 openai/ollama builder
+  （`test_llm_gateway.py`）、ToolsTransformer 基类
+  （`test_tools_transformer.py`）、CORS/日志配置校验
+  （`test_http_and_logging_config.py`）。
+- Run e2e tests: 先起服务（uvicorn）+ 中间件栈 + Ollama + celery worker
+  （摄取用例需要；必须经 `python -m app.cmd.task_executor` 启动——裸
+  `celery -A app.adapters.tasking.celery_app worker` 缺 wireup 任务装配，
+  一切任务即抛 WireupError），然后
   `E2E_BASE_URL=http://127.0.0.1:8000 uv run pytest tests_e2e/`——针对
   **运行中的服务**走真实全链路（DeepSeek/MinerU/Weaviate），覆盖
-  health/auth 生命周期/多轮 run/取消/归属隔离/记忆巩固/知识库 CRUD/RAG
-  溯源/401 面；与单元套件分离，不要混跑。
+  health/auth 生命周期（refresh 旋转/登出）/多轮 run/取消/归属隔离/记忆
+  巩固/知识库 CRUD/摄取全链（.md 上传→解析→嵌入→RAG 溯源，启用闸门两级：
+  文档与库都要 enable）/附件上传换签/401 面。**经 nginx 全栈入口的变体**：
+  `../deploy/e2e-fullstack.sh`（`E2E_API_PREFIX=/api` 前缀改写 + 429 退避 +
+  test_e2e_gateway.py 代理断言）。**broker 独占**：dev worker 与 deploy 栈
+  worker 共用宿主 redis（127.0.0.1:6379），同一时刻只能跑一个——两 worker
+  并存会互相抢任务，把对方的摄取任务打到自己的库里。与单元套件分离，
+  不要混跑。
 - Lint: `uv run ruff check .`（dev 依赖；规则集显式固定为 E4/E7/E9/F，见
   pyproject `[tool.ruff.lint]`，isort/pyupgrade 等风格规则未启用）。CI 同款：
-  `.github/workflows/ci.yml`（lint + pytest + migrations 三个 job；migrations
-  起 PG 服务容器跑 `db upgrade` + `db check`）。
+  `.github/workflows/ci-backend.yml`（lint + pytest + migrations 三个 job；
+  pytest 带 `--cov=app` 并上传 coverage.xml artifact（仅观测不门禁）；
+  migrations 起 PG 服务容器跑 `db upgrade` + `db check` + downgrade 冒烟圆环）。
 - **Entrypoint modules import `from app...`, so run them as modules
   (`python -m app.cmd.http`), never as scripts from a different CWD.**
 
@@ -595,7 +630,10 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   抛 `ConfigError` 拒绝启动，http/worker/migrate 全入口生效，校验口径在
   `core/config/auth.py`、接线在 AppConfig 的 model_validator）、
   `jwt_algorithm`、`access_token_expire_minutes` 默认 30 分钟（短命访问
-  令牌）与 `refresh_token_expire_minutes` 默认 7 天（长命刷新令牌））、`llm`
+  令牌）、`refresh_token_expire_minutes` 默认 7 天（长命刷新令牌）与
+  `refresh_reuse_grace_seconds` 默认 60（旋转宽限期——宽限期内重放已旋转
+  refresh 只拒绝不连坐，防多标签页并发刷新误杀；宽限期外复用按族连坐；
+  `AUTH_REFRESH_REUSE_GRACE_SECONDS` 可覆盖））、`llm`
   (`LLMConfig`: default + providers dict; each entry declares `type` —
   provider `deepseek`/`openai`/`ollama` — and `task_type` —
   `chat`/`embedding`（`rerank` 为配置预留、工厂尚未支持构建）; entry 级 `timeout`（秒，默认 120）落地为模型客户端
@@ -712,10 +750,17 @@ AST 扫描强制，含供应商红线——规则改动与 README 依赖箭头�
   占位符覆盖/空节移除/片段降级语义见 middleware 模块注释）。轮次收尾不在
   v1 能力范式内：编排层直接 DI 组件门面服务（`TurnFinalizer` 注入
   `MemoryConsolidationService`）。
-- **adapters/persistence** → 7 个仓储（conversation/user/knowledge_base/
-  knowledge_document+segment/usage/human_agent/memory_graph+memory_maintenance），
+- **adapters/persistence** → 8 个仓储（conversation/user/refresh_token/
+  knowledge_base/knowledge_document+segment/usage/human_agent/memory_graph+
+  memory_maintenance），
   `@injectable(as_type=<domain 端口>)` 绑定，
-  backed by the injected SQLAlchemy `Engine` (SQLModel sessions)。两条领域
+  backed by the injected SQLAlchemy `Engine` (SQLModel sessions)。
+  `memory_graph_repository/` 是唯一的包形态仓储（2026-09-12 由 664 行单文件
+  拆出，对外 import 路径不变）：`repository.py` 组合类持有 DI 绑定与
+  `for_user` 工厂，聚合切片 Mixin 一片一文件——`_scope`（作用域小件，公共
+  基座）/`entities`/`statements`/`episodes`/`identity`（身份纠错复合事务）/
+  `maintenance`（召回记账 + L4 危险操作）；组合类 bases 里端口垫底（抽象桩
+  让位于切片实现）、`GraphScopeMixin` 殿后（C3）。两条领域
   不变量：① 认领门闸 `claim_document` 用「读后乐观锁条件 UPDATE」收口幂等
   （详见 Gotchas「Celery 可靠性」）；② `mark_reaped` 记账写显式钉住
   `updated_at`（Core update 携带原值压掉 onupdate）——否则重投任务的认领
@@ -831,9 +876,18 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
 
 ## Gotchas
 
+- **refresh 有状态、access 无状态（2026-09-12 起）**：refresh 旋转/复用检测/
+  登出/改密吊销全部落在 `refresh_token` 登记表（jti 主键、族 = 一次登录世系；
+  时间比较一律 SQL 绑定参数，宽限期 `refresh_reuse_grace_seconds` 默认 60s），
+  而 access 保持纯验签不回库——登出/改密后旧 access 到期前（≤30 分钟）仍有效
+  是**有意语义**（e2e 有断言），别当 bug 修；要即时撤销就得给 require_user 热
+  路径加存储查询，推翻无状态设计。宽限期内重放已旋转票只 401 不连坐是防多
+  标签页并发刷新误杀（前端单飞是每标签页模块级的，localStorage 共享），不是
+  漏洞。注册/登录/refresh 响应体必须同构含 `refresh_token`（前端
+  AuthSession 契约）——0d4e60f 曾漏发导致静默刷新自始失效，教训在此。
 - **`.env` IS gitignored**（`.gitignore` 忽略 `.env`，未入库）and holds a
   real **DeepSeek API key** — don't paste the key into commits/logs. CI 为
-  `llm.yaml` 必填占位符提供哑值，见 `.github/workflows/ci.yml`。
+  `llm.yaml` 必填占位符提供哑值，见 `.github/workflows/ci-backend.yml`。
 - CORS is a whitelist (`http.yaml` `cors.origins`, default the two Vite dev-server
   loopback origins; override wholesale via `CORS_ORIGINS` comma-separated). Methods
   are pinned to GET/POST/PATCH/DELETE/OPTIONS and headers to Content-Type /
@@ -890,7 +944,7 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   `RUSTFS_PUBLIC_ENDPOINT`，签名与读写同实例；rustfs 藏反代后配置
   public endpoint，签名走专用 S3Store（SigV4 签 host+path，代理须原样
   透传 host+path——子路径形态不可剥离前缀）。已知后续项：
-  会话删除不清理附件孤儿对象、知识库 PDF 下载未迁移预签名、智能体能力
+  会话删除不清理附件孤儿对象、智能体能力
   描述接口（前端按能力屏蔽上传入口）。
 - SSE (`/agentic/run`) is **outside** the global exception handlers: once the
   200/SSE headers are committed, in-stream errors can only surface as an ag-ui
@@ -1065,7 +1119,7 @@ OpenAI-compatible gateway（当前在 `llm.yaml` 中注释未启用）; `ollama-
   （由单进程 uvicorn + 客户端不并发发 run 的部署现实兜底，非数据库保证）。③ **记忆用户级作用域（设计反转）**：memory v2 原
   锁定「单用户全局」（docs/memory-v2-design.md §3.3），现 entity/statement/
   episode 三表带 `user_id`；`MemoryGraphRepositoryPort.for_user(uid)`（实现
-  `adapters/persistence/memory_graph_repository.py`）/ 
+  `adapters/persistence/memory_graph_repository/`）/ 
   `MemoryVectorIndexPort.for_user(uid)` / `MemoryEditor·GraphReader.for_user(uid)`
   返回作用域视图（scope 过滤在 sqlite 仓储与 `_scope_rows` 内强制，id 直取
   命中他人行视为不存在；向量按用户分 collection `Memory_{uid.hex}`）；注入
