@@ -17,5 +17,7 @@ export default defineConfig({
     // 静默跳过 hydration（middleware 内部 try/catch），不影响 store 断言
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // jest-dom DOM 断言匹配器（对 node 用例无副作用）
+    setupFiles: ["./vitest.setup.ts"],
   },
 });
