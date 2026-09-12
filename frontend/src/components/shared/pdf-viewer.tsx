@@ -67,7 +67,9 @@ export type PdfViewerMode = "document" | "snippet";
  * PDF 查看器（无弹窗壳，可独立嵌入）：浏览器式连续滚动渲染。
  *
  * 文件字节经 GET /knowledge/{kbId}/document/{docId}/file 拉取（ArrayBuffer
- * 全量载入，上传上限 50MB 内可接受）。全部页等尺寸占位、视口附近（预取
+ * 全量载入，上传上限 50MB 内可接受）。rustfs 后端时端点 302 到预签名 URL
+ * 由浏览器直拉对象存储（axios 透明跟随，需 rustfs 应答 CORS——compose
+ * RUSTFS_CORS_ALLOWED_ORIGINS）；本地磁盘后端降级为鉴权流式回源。全部页等尺寸占位、视口附近（预取
  * 缓冲 ±窗口）才真正栅格化；工具栏页码跟随视口中占比最大的页；缩放保持
  * 视口阅读位置。
  *

@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { logoutRemote } from "@/lib/logout-remote";
 import { useAuthStore } from "@/stores/auth-store";
 
 /**
@@ -66,9 +67,11 @@ export const ChatPage: FC = () => {
     },
   );
 
-  // 退出：清会话 + 整页跳登录（整页刷新顺带重置 runtime 与 agent.threadId，
-  // 会话身份随用户切换彻底归零）
+  // 退出：best-effort 吊销服务端 refresh 会话族 + 清本地会话 + 整页跳登录
+  // （整页刷新顺带重置 runtime 与 agent.threadId，会话身份随用户切换彻底归零；
+  // keepalive 保证跳转不中止撤销请求，任何失败不阻塞本地登出）
   const handleLogout = () => {
+    logoutRemote();
     useAuthStore.getState().logout();
     window.location.assign("/login");
   };
